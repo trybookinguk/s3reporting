@@ -23,10 +23,10 @@ jobs:
 
       - name: Run SalesIQ Weekly Report
         env:
-          CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
-          REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
-          PORTAL_NAME: ${{ secrets.ZOHO_PORTAL_NAME }}
+          ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+          ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+          ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+          XOHO_PORTAL_NAME: ${{ secrets.ZOHO_PORTAL_NAME }}
           MAILGUN_SMTP_LOGIN: ${{ secrets.MAILGUN_SMTP_LOGIN }}
           MAILGUN_SMTP_PASSWORD: ${{ secrets.MAILGUN_SMTP_PASSWORD }}
           MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}

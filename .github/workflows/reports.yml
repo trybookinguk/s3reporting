@@ -19,7 +19,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install boto3 pandas
+        run: pip install boto3 pandas requests
 
       - name: Run SalesIQ Weekly Report
         env:

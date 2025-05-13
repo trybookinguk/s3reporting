@@ -135,10 +135,6 @@ Tagged breakdown:
 
 Chats by day:
 {day_lines}
-
-Do hope this helps.
-
-Kindest regards,
 """
 
     msg = EmailMessage()

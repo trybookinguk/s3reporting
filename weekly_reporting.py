@@ -149,7 +149,7 @@ html_b = f"""
 
 send_mail(
     to="alex@trybooking.co.uk",
-    c=="louise@trybooking.co.uk",
+    cc="louise@trybooking.co.uk",
     subject=f"TryBooking New Accounts w/c {week_start.strftime('%d %B %Y')}",
     html_body=html_b
 )

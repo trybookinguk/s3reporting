@@ -127,9 +127,7 @@ def send_email(total, tag_counts, busiest_day, day_counts):
     )
 
     subject = f"SalesIQ Weekly Chat Summary w/c {last_monday.strftime('%d %B %Y')}"
-    body = f"""Hi Jules,
-
-Total SalesIQ conversations: {total}
+    body = f"""Total SalesIQ conversations: {total}
 Busiest day: {busiest_day}
 
 Tagged breakdown:
@@ -144,7 +142,7 @@ Kindest regards,
 """
 
     msg = EmailMessage()
-    msg['From'] = f"SalesIQ Reports <reports@{MAILGUN_DOMAIN}>"
+    msg['From'] = f"TryBooking Reporting <reports@{MAILGUN_DOMAIN}>"
     msg['To'] = "jules@trybooking.co.uk"
     msg['Cc'] = "alex@trybooking.co.uk"
     msg['Subject'] = subject

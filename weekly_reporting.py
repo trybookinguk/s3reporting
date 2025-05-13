@@ -87,7 +87,7 @@ top_5_industries = filtered_industries.value_counts().head(5)
 def send_mail(to, cc, subject, html_body):
     msg = EmailMessage()
     msg['Subject'] = subject
-    msg['From'] = f"Reports <reports@{MAILGUN_DOMAIN}>"
+    msg['From'] = f"TryBooking Reporting <reports@{MAILGUN_DOMAIN}>"
     msg['To'] = to
     msg['Cc'] = cc
     msg.set_content("This is an HTML report. Please view it in an HTML-compatible client.")

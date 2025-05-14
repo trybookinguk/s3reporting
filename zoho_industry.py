@@ -75,7 +75,7 @@ def prepare_upserts(s3_df, zoho_map):
     upserts = []
 
     for _, row in s3_df.iterrows():
-        account_id = str(int(row["AccountID"])) if pd.notna(row.get("AccountID")) else None
+        account_id = str(int(row["Id"])) if pd.notna(row.get("Id")) else None
         if not account_id:
             continue
 

@@ -111,28 +111,33 @@ def prepare_upserts(s3_df, zoho_map):
             "Last_Event_Creation_Date": last_event
         }
 
-        if not existing:
-            payload.update(new_fields)
-            upserts.append(payload)
-        else:
-            changes = {}
-            for key, new_val in new_fields.items():
-                existing_val = existing.get(key, None)
-
-                if key in ["Industry", "SubIndustry"]:
-                    if new_val != existing_val:
-                        changes[key] = new_val
-                    continue
-
-                if isinstance(new_val, str):
-                    if (existing_val or "").strip() != new_val.strip():
-                        changes[key] = new_val
-                elif new_val != existing_val:
+    changes = {}
+    
+    if not existing:
+        # New account: include only non-null fields
+        for k, v in new_fields.items():
+            if v is not None:
+                changes[k] = v
+    else:
+        # Compare field-by-field
+        for key, new_val in new_fields.items():
+            existing_val = existing.get(key, None)
+    
+            if key in ["Industry", "SubIndustry"]:
+                if new_val != existing_val:
                     changes[key] = new_val
+                continue
+    
+            if isinstance(new_val, str):
+                if (existing_val or "").strip() != new_val.strip():
+                    changes[key] = new_val
+            elif new_val != existing_val:
+                changes[key] = new_val
+    
+    if changes:
+        payload.update(changes)
+        upserts.append(payload)
 
-            if changes:
-                payload.update(changes)
-                upserts.append(payload)
 
     return upserts
 
@@ -150,6 +155,9 @@ def send_upserts(token, records):
             "data": batch,
             "duplicate_check_fields": ["Account_Name"]
         }
+        # DEBUG: Print first record of batch
+        print("First record in batch:")
+        print(batch[0])
         resp = requests.post(url, headers=headers, json=payload)
         try:
             resp.raise_for_status()
@@ -164,8 +172,8 @@ def send_upserts(token, records):
                 msg = r.get("message", "No message")
                 print(f"Failed record: {acct} → {msg}")
         results.extend(resp.json().get("data", []))
+        
     return results
-
 
 # === Main ===
 def main():

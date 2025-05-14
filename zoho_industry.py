@@ -84,18 +84,18 @@ def prepare_upserts(s3_df, zoho_map):
         subindustry = str(row.get("SubIndustry")) if pd.notna(row.get("SubIndustry")) else None
         status = str(row.get("AccountStatus")) if pd.notna(row.get("AccountStatus")) else None
 
-        def as_iso(val):
+        def as_date(val):
             try:
                 if pd.notna(val):
-                    return pd.to_datetime(val, format="%Y-%m-%d %H:%M:%S").isoformat()
+                    return pd.to_datetime(val, format="%Y-%m-%d %H:%M:%S").date().isoformat()
             except:
                 pass
             return None
 
-        created = as_iso(row.get("DateTimeCreated"))
-        last_login = as_iso(row.get("LastLogIn"))
-        first_event = as_iso(row.get("FirstEventCreation"))
-        last_event = as_iso(row.get("LastEventCreation"))
+        created      = as_date(row.get("DateTimeCreated"))     # Keep full ISO
+        last_login   = as_date(row.get("LastLogIn"))           # Keep full ISO
+        first_event  = as_date(row.get("FirstEventCreation")) # Convert to date only
+        last_event   = as_date(row.get("LastEventCreation"))  # Convert to date only
 
         payload = {"Account_Name": account_id}
         existing = zoho_map.get(account_id)

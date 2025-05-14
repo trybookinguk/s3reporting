@@ -102,7 +102,7 @@ def prepare_upserts(s3_df, zoho_map):
             "Business_Name": business_name or None,
             "Industry": industry or None,
             "SubIndustry": subindustry or None,
-            "Account_Status": int(status) if pd.notna(status) else None,
+            "Account_Status": status or None,
             "DateTimeCreated": created,
             "Last_Login": last_login,
             "First_Event_Creation_Date": first_event,

@@ -11,7 +11,7 @@ AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_KEY"]
 ZOHO_CLIENT_ID = os.environ["ZOHO_CLIENT_ID"]
 ZOHO_CLIENT_SECRET = os.environ["ZOHO_CLIENT_SECRET"]
 ZOHO_REFRESH_TOKEN = os.environ["ZOHO_REFRESH_TOKEN"]
-ZOHO_DOMAIN = os.environ.get("https://www.zohoapis.com")
+ZOHO_DOMAIN = "https://www.zohoapis.com"
 
 # === Zoho Auth ===
 def get_access_token():

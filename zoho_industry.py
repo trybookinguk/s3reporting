@@ -75,16 +75,19 @@ def prepare_upserts(s3_df, zoho_map):
     upserts = []
 
     for _, row in s3_df.iterrows():
-        account_id = str(row.get("AccountID")).strip()
+        account_id = str(int(row["AccountID"])) if pd.notna(row.get("AccountID")) else None
+        if not account_id:
+            continue
+
         business_name = str(row.get("AccountName", "")).strip()
-        industry = str(row.get("Industry", "")).strip()
-        subindustry = str(row.get("SubIndustry", "")).strip()
+        industry = str(row.get("Industry")) if pd.notna(row.get("Industry")) else None
+        subindustry = str(row.get("SubIndustry")) if pd.notna(row.get("SubIndustry")) else None
         status = row.get("AccountStatus")
 
         # Parse known date columns in consistent format
         def as_iso(val):
             try:
-                if pd.notna(val) and isinstance(val, str):
+                if pd.notna(val):
                     return pd.to_datetime(val, format="%Y-%m-%d %H:%M:%S").isoformat()
             except:
                 pass
@@ -100,8 +103,8 @@ def prepare_upserts(s3_df, zoho_map):
 
         new_fields = {
             "Business_Name": business_name or None,
-            "Industry": industry or None,
-            "SubIndustry": subindustry or None,
+            "Industry": industry,
+            "SubIndustry": subindustry,
             "Account_Status": status or None,
             "DateTimeCreated": created,
             "Last_Login": last_login,

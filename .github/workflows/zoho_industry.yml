@@ -1,0 +1,32 @@
+name: Sync Zoho CRM Industries
+
+on:
+  schedule:
+    - cron: '0 1 * * *'  # 1:00 AM UTC daily
+  workflow_dispatch:
+
+jobs:
+  sync-industries:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install boto3 pandas requests
+
+      - name: Run Zoho Industry Sync
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+          ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+          ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+          ZOHO_DOMAIN: ${{ secrets.ZOHO_DOMAIN }}
+        run: python zoho_industry.py

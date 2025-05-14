@@ -6,8 +6,8 @@ import requests
 from datetime import datetime
 
 # === ENV VARS ===
-AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY_ID"]
-AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
+AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY"]
+AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_KEY"]
 ZOHO_CLIENT_ID = os.environ["ZOHO_CLIENT_ID"]
 ZOHO_CLIENT_SECRET = os.environ["ZOHO_CLIENT_SECRET"]
 ZOHO_REFRESH_TOKEN = os.environ["ZOHO_REFRESH_TOKEN"]

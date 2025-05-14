@@ -150,14 +150,22 @@ def send_upserts(token, records):
             "data": batch,
             "duplicate_check_fields": ["Account_Name"]
         }
-    resp = requests.post(url, headers=headers, json=payload)
-    try:
-        resp.raise_for_status()
+        resp = requests.post(url, headers=headers, json=payload)
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError:
+            print(f"\nBatch error {i}–{i+len(batch)}:")
+            print(f"Status {resp.status_code}: {resp.text}")
+            continue
+
+        for r in resp.json().get("data", []):
+            if r.get("status") != "success":
+                acct = r.get("details", {}).get("Account_Name", "UNKNOWN")
+                msg = r.get("message", "No message")
+                print(f"Failed record: {acct} → {msg}")
         results.extend(resp.json().get("data", []))
-    except requests.HTTPError:
-        print(f"\nError in batch {i}-{i+len(batch)}:")
-        print(resp.status_code, resp.text)
     return results
+
 
 # === Main ===
 def main():

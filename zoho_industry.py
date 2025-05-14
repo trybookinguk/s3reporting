@@ -1,6 +1,7 @@
 import os
 import boto3
 import pandas as pd
+from pandas.tseries.offsets import MonthBegin
 import requests
 from datetime import datetime
 
@@ -28,12 +29,17 @@ def get_access_token():
 
 # === S3 Download ===
 def fetch_s3_report():
-    today = datetime.utcnow()
-    year = today.strftime("%Y")
-    month = today.strftime("%m")
-    prefix = today.strftime("%Y%m")
+    report_date = pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=1)
+    
+    # Fallback if first day of month: use previous month
+    if report_date.day == 1:
+        report_date -= MonthBegin(1)
+    
+    year = report_date.strftime("%Y")
+    month = report_date.strftime("%m")
+    prefix = report_date.strftime("%Y%m")
     filename = f"{prefix}-Accounts-TBUK.csv"
-    key = f"{year}/{month}/{filename}"
+    s3_key = f"{year}/{month}/{filename}"
 
     s3 = boto3.client(
         "s3",

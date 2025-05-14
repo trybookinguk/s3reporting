@@ -46,14 +46,15 @@ def fetch_s3_report():
         aws_access_key_id=AWS_ACCESS_KEY_ID,
         aws_secret_access_key=AWS_SECRET_ACCESS_KEY
     )
-    obj = s3.get_object(Bucket="produk-rdsextracts-438255373632", Key=key)
+    obj = s3.get_object(Bucket="produk-rdsextracts-438255373632", Key=s3_key)
     return pd.read_csv(obj["Body"])
 
 # === Zoho CRM Fetch ===
 def fetch_zoho_accounts(token):
-    all_accounts = {}
+    all_accounts = []
     page = 1
     headers = {"Authorization": f"Zoho-oauthtoken {token}"}
+
     while True:
         params = {"page": page, "per_page": 200}
         resp = requests.get(f"{ZOHO_DOMAIN}/crm/v2/Accounts", headers=headers, params=params)
@@ -61,40 +62,71 @@ def fetch_zoho_accounts(token):
         data = resp.json().get("data", [])
         if not data:
             break
-        for acc in data:
-            name = acc.get("Account_Name")
-            if name:
-                all_accounts[name] = acc
+        all_accounts.extend(data)
         if not resp.json().get("info", {}).get("more_records"):
             break
         page += 1
-    return all_accounts
+
+    zoho_accounts = {acc["Account_Name"]: acc for acc in all_accounts if "Account_Name" in acc}
+    return zoho_accounts
 
 # === Compare + Prepare Upserts ===
 def prepare_upserts(s3_df, zoho_map):
     upserts = []
+
     for _, row in s3_df.iterrows():
         account_id = str(row.get("AccountID")).strip()
+        business_name = str(row.get("AccountName", "")).strip()
         industry = str(row.get("Industry", "")).strip()
         subindustry = str(row.get("SubIndustry", "")).strip()
-        existing = zoho_map.get(account_id)
+        status = row.get("AccountStatus")
+
+        # Parse known date columns in consistent format
+        def as_iso(val):
+            try:
+                if pd.notna(val) and isinstance(val, str):
+                    return pd.to_datetime(val, format="%Y-%m-%d %H:%M:%S").isoformat()
+            except:
+                pass
+            return None
+
+        created = as_iso(row.get("DateTimeCreated"))
+        last_login = as_iso(row.get("LastLogIn"))
+        first_event = as_iso(row.get("FirstEventCreation"))
+        last_event = as_iso(row.get("LastEventCreation"))
 
         payload = {"Account_Name": account_id}
+        existing = zoho_map.get(account_id)
+
+        new_fields = {
+            "Business_Name": business_name or None,
+            "Industry": industry or None,
+            "SubIndustry": subindustry or None,
+            "Account_Status": int(status) if pd.notna(status) else None,
+            "DateTimeCreated": created,
+            "Last_Login": last_login,
+            "First_Event_Creation_Date": first_event,
+            "Last_Event_Creation_Date": last_event
+        }
+
         if not existing:
-            if industry:
-                payload["Industry"] = industry
-            if subindustry:
-                payload["SubIndustry"] = subindustry
+            payload.update(new_fields)
             upserts.append(payload)
         else:
             changes = {}
-            if industry and industry != existing.get("Industry", ""):
-                changes["Industry"] = industry
-            if subindustry and subindustry != existing.get("SubIndustry", ""):
-                changes["SubIndustry"] = subindustry
+            for key, new_val in new_fields.items():
+                existing_val = existing.get(key)
+
+                if isinstance(new_val, str):
+                    if (existing_val or "").strip() != new_val.strip():
+                        changes[key] = new_val
+                elif new_val != existing_val:
+                    changes[key] = new_val
+
             if changes:
                 payload.update(changes)
                 upserts.append(payload)
+
     return upserts
 
 # === Zoho Upsert ===

@@ -169,8 +169,6 @@ def send_upserts(token, records):
                 acct = r.get("details", {}).get("Account_Name", "UNKNOWN")
                 msg = r.get("message", "No message")
                 print(f"Failed record: {acct} → {msg}")
-                print("Response content:")
-                print(resp.text)
         results.extend(resp.json().get("data", []))
         
     return results

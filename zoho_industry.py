@@ -82,9 +82,8 @@ def prepare_upserts(s3_df, zoho_map):
         business_name = str(row.get("AccountName", "")).strip()
         industry = str(row.get("Industry")) if pd.notna(row.get("Industry")) else None
         subindustry = str(row.get("SubIndustry")) if pd.notna(row.get("SubIndustry")) else None
-        status = row.get("AccountStatus")
+        status = str(row.get("AccountStatus")) if pd.notna(row.get("AccountStatus")) else None
 
-        # Parse known date columns in consistent format
         def as_iso(val):
             try:
                 if pd.notna(val):
@@ -105,7 +104,7 @@ def prepare_upserts(s3_df, zoho_map):
             "Business_Name": business_name or None,
             "Industry": industry,
             "SubIndustry": subindustry,
-            "Account_Status": status or None,
+            "Account_Status": status,
             "DateTimeCreated": created,
             "Last_Login": last_login,
             "First_Event_Creation_Date": first_event,
@@ -118,7 +117,12 @@ def prepare_upserts(s3_df, zoho_map):
         else:
             changes = {}
             for key, new_val in new_fields.items():
-                existing_val = existing.get(key)
+                existing_val = existing.get(key, None)
+
+                if key in ["Industry", "SubIndustry"]:
+                    if new_val != existing_val:
+                        changes[key] = new_val
+                    continue
 
                 if isinstance(new_val, str):
                     if (existing_val or "").strip() != new_val.strip():
@@ -146,9 +150,13 @@ def send_upserts(token, records):
             "data": batch,
             "duplicate_check_fields": ["Account_Name"]
         }
-        resp = requests.post(url, headers=headers, json=payload)
+    resp = requests.post(url, headers=headers, json=payload)
+    try:
         resp.raise_for_status()
         results.extend(resp.json().get("data", []))
+    except requests.HTTPError:
+        print(f"\nError in batch {i}-{i+len(batch)}:")
+        print(resp.status_code, resp.text)
     return results
 
 # === Main ===

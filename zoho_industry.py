@@ -111,35 +111,33 @@ def prepare_upserts(s3_df, zoho_map):
             "Last_Event_Creation_Date": last_event
         }
 
-    changes = {}
-    
-    if not existing:
-        # New account: include only non-null fields
-        for k, v in new_fields.items():
-            if v is not None:
-                changes[k] = v
-    else:
-        # Compare field-by-field
-        for key, new_val in new_fields.items():
-            existing_val = existing.get(key, None)
-    
-            if key in ["Industry", "SubIndustry"]:
-                if new_val != existing_val:
-                    changes[key] = new_val
-                continue
-    
-            if isinstance(new_val, str):
-                if (existing_val or "").strip() != new_val.strip():
-                    changes[key] = new_val
-            elif new_val != existing_val:
-                changes[key] = new_val
-    
-    if changes:
-        payload.update(changes)
-        upserts.append(payload)
+        if not existing:
+            # Always insert full record if account is new
+            payload.update({k: v for k, v in new_fields.items() if v is not None})
+            upserts.append(payload)
+        else:
+            # Only include changed fields for existing accounts
+            changes = {}
+            for key, new_val in new_fields.items():
+                existing_val = existing.get(key, None)
 
+                if key in ["Industry", "SubIndustry"]:
+                    if new_val != existing_val:
+                        changes[key] = new_val
+                    continue
+
+                if isinstance(new_val, str):
+                    if (existing_val or "").strip() != new_val.strip():
+                        changes[key] = new_val
+                elif new_val != existing_val:
+                    changes[key] = new_val
+
+            if changes:
+                payload.update(changes)
+                upserts.append(payload)
 
     return upserts
+
 
 # === Zoho Upsert ===
 def send_upserts(token, records):

@@ -3,6 +3,7 @@ import boto3
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
+from pandas.tseries.offsets import MonthBegin
 
 # === ENV VARS ===
 AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY"]
@@ -129,11 +130,18 @@ def upsert_to_zoho(token, records_df):
 
 # === MAIN ===
 def main():
-    prefix = TODAY.strftime("%Y%m")
-    year = TODAY.strftime("%Y")
-    month = TODAY.strftime("%m")
-    key_all = f"{year}/{month}/{prefix}-BookingDataAll-TBUK.csv"
-    key_month = f"{year}/{month}/{prefix}-BookingData-TBUK.csv"
+    from pandas.tseries.offsets import MonthBegin
+
+    report_date = pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=1)
+    if report_date.day == 1:
+        report_date -= MonthBegin(1)
+
+    prefix = report_date.strftime("%Y%m")
+    year = report_date.strftime("%Y")
+    month = report_date.strftime("%m")
+
+    key_all = f"{year}/{month}/{prefix}-BookingDataAll.csv"
+    key_month = f"{year}/{month}/{prefix}-BookingData.csv"
 
     df_all = fetch_s3_file(key_all)
     df_month = fetch_s3_file(key_month)
@@ -147,6 +155,7 @@ def main():
         upsert_to_zoho(token, updates)
     else:
         print("No updates required.")
+
 
 if __name__ == "__main__":
     main()

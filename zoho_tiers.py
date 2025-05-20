@@ -132,8 +132,8 @@ def main():
     prefix = TODAY.strftime("%Y%m")
     year = TODAY.strftime("%Y")
     month = TODAY.strftime("%m")
-    key_all = f"{year}/{month}/{prefix}-BookingDataAll.csv"
-    key_month = f"{year}/{month}/{prefix}-BookingData.csv"
+    key_all = f"{year}/{month}/{prefix}-BookingDataAll-TBUK.csv"
+    key_month = f"{year}/{month}/{prefix}-BookingData-TBUK.csv"
 
     df_all = fetch_s3_file(key_all)
     df_month = fetch_s3_file(key_month)

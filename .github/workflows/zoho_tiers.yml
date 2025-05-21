@@ -1,8 +1,6 @@
 name: Update Tiers and Ratings
 
 on:
-  schedule:
-    - cron: '0 1 * * *'  # Runs daily at 1am UTC
   workflow_dispatch:     # Manual trigger
 
 jobs:

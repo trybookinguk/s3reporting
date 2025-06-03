@@ -142,7 +142,7 @@ print(f"Percentage YoY change compared to the same week last year: {yoy_change:.
 print(f"Ticket Purchasers: {ticket_purchasers} ({ticket_purchaser_pct:.0f}%)")
 print("Top 5 industries (excluding Ticket Purchasers):")
 for industry, count in top_5_industries.items():
-    print(f"  • {industry}: {count} ({(count / total_accounts) * 100:.0f}%)")
+    print(f"  - {industry}: {count} ({(count / total_accounts) * 100:.0f}%)")
 print(f"% of accounts without an industry assigned: {without_industry_pct:.0f}%")
 
 print("\n" + "="*50)
@@ -162,7 +162,7 @@ print(f"% of accounts who are ticket purchasers: {ticket_purchaser_pct:.0f}%")
 print()
 print("Top 3 industries (excluding Ticket Purchasers):")
 for entry in top_3_named:
-    print(f"  • {entry}")
+    print(f"  - {entry}")
 print()
 print("Daily Breakdown:")
 print(f"{'Day':<12} {'Total':<8} {'Day (0900–1730)':<16} {'Evening':<8}")

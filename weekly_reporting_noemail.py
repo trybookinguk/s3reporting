@@ -26,19 +26,19 @@ last_year_week_end = pd.Timestamp(last_year_week_end, tz='Europe/London')
 
 print(f"Last year comparison week: {last_year_week_start.strftime('%d %B %Y')} to {last_year_week_end.strftime('%d %B %Y')}")
 
-# === S3 Fetch - Get latest file only ===
+# === S3 Fetch - Use yesterday's date for file location ===
 bucket_name = "produk-rdsextracts-438255373632"
 
-# Always get the current month's file (which contains all historical data)
-current_year = today.year
-current_month = today.month
-folder_year = str(current_year)
-folder_month = f"{current_month:02d}"
-file_prefix = f"{current_year}{current_month:02d}"
+# Reports are generated at midnight for the previous day's data
+# So we need the file that contains yesterday's data
+yesterday = today - timedelta(days=1)
+folder_year = yesterday.strftime('%Y')
+folder_month = yesterday.strftime('%m')
+file_prefix = yesterday.strftime('%Y%m')
 filename = f"{file_prefix}-Accounts-TBUK.csv"
 s3_key = f"{folder_year}/{folder_month}/{filename}"
 
-print(f"Fetching latest file: {s3_key}")
+print(f"Fetching file: {s3_key}")
 
 try:
     s3 = boto3.client(

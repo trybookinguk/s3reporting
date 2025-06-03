@@ -15,6 +15,9 @@ MAILGUN_SMTP_LOGIN = os.environ["MAILGUN_SMTP_LOGIN"]
 MAILGUN_SMTP_PASSWORD = os.environ["MAILGUN_SMTP_PASSWORD"]
 MAILGUN_DOMAIN = os.environ["MAILGUN_DOMAIN"]              
 
+# Check if running in test mode
+TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
+
 # === Tags to track ===
 TRACKED_TAGS = ["Unknown User", "Event Organiser", "Ticket Purchaser", "New Business"]
 
@@ -126,7 +129,7 @@ def send_email(total, tag_counts, busiest_day, day_counts):
         f"{day}: {day_counts.get(day, 0)}" for day in ordered_days
     )
 
-    subject = f"SalesIQ Weekly Chat Summary w/c {last_monday.strftime('%d %B %Y')}"
+    subject = f"{'[TEST] ' if TEST_MODE else ''}SalesIQ Weekly Chat Summary w/c {last_monday.strftime('%d %B %Y')}"
     body = f"""Total SalesIQ conversations: {total}
 Busiest day: {busiest_day}
 
@@ -139,8 +142,8 @@ Chats by day:
 
     msg = EmailMessage()
     msg['From'] = f"TryBooking Reporting <reports@{MAILGUN_DOMAIN}>"
-    msg['To'] = "jules@trybooking.co.uk"
-    msg['Cc'] = "alex@trybooking.co.uk"
+    msg['To'] = "alex@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk"
+    msg['Cc'] = "alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk"
     msg['Subject'] = subject
     msg.set_content(body)
 

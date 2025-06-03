@@ -13,6 +13,12 @@ MAILGUN_SMTP_LOGIN = os.environ["MAILGUN_SMTP_LOGIN"]
 MAILGUN_SMTP_PASSWORD = os.environ["MAILGUN_SMTP_PASSWORD"]
 MAILGUN_DOMAIN = os.environ["MAILGUN_DOMAIN"]
 
+# Check if running in test mode
+TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
+MAILGUN_SMTP_LOGIN = os.environ["MAILGUN_SMTP_LOGIN"]
+MAILGUN_SMTP_PASSWORD = os.environ["MAILGUN_SMTP_PASSWORD"]
+MAILGUN_DOMAIN = os.environ["MAILGUN_DOMAIN"]
+
 # === Time Windows ===
 today = datetime.today()
 last_week_date = today - timedelta(days=today.weekday() + 7)
@@ -24,11 +30,15 @@ last_year_week_end = last_year_week_start + timedelta(days=6, hours=23, minutes=
 last_year_week_start = pd.Timestamp(last_year_week_start, tz='Europe/London')
 last_year_week_end = pd.Timestamp(last_year_week_end, tz='Europe/London')
 
-# === S3 Fetch ===
+# === S3 Fetch - Use yesterday's date for file location ===
 bucket_name = "produk-rdsextracts-438255373632"
-folder_year = last_week_date.strftime('%Y')
-folder_month = last_week_date.strftime('%m')
-file_prefix = last_week_date.strftime('%Y%m')
+
+# Reports are generated at midnight for the previous day's data
+# So we need the file that contains yesterday's data
+yesterday = today - timedelta(days=1)
+folder_year = yesterday.strftime('%Y')
+folder_month = yesterday.strftime('%m')
+file_prefix = yesterday.strftime('%Y%m')
 filename = f"{file_prefix}-Accounts-TBUK.csv"
 s3_key = f"{folder_year}/{folder_month}/{filename}"
 
@@ -116,9 +126,9 @@ html_a = f"""
 """
 
 send_mail(
-    to="jules@trybooking.co.uk",
-    cc="alex@trybooking.co.uk, louise@trybooking.co.uk",
-    subject=f"New Accounts w/c {week_start.strftime('%d %B %Y')}",
+    to="alex@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk",
+    cc="alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, louise@trybooking.co.uk",
+    subject=f"{'[TEST] ' if TEST_MODE else ''}New Accounts w/c {week_start.strftime('%d %B %Y')}",
     html_body=html_a
 )
 
@@ -138,7 +148,7 @@ html_b = f"""
   <ul>{''.join(f'<li>{entry}</li>' for entry in top_3_named)}</ul>
   <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
     <thead>
-      <tr><th>Day</th><th>Total</th><th>Day (0900–1730)</th><th>Evening</th></tr>
+      <tr><th>Day</th><th>Total</th><th>Day (0900-1730)</th><th>Evening</th></tr>
     </thead>
     <tbody>{html_table_rows}</tbody>
   </table>
@@ -148,8 +158,8 @@ html_b = f"""
 """
 
 send_mail(
-    to="gareth@dgtlonline.co.uk, clients@dgtlonline.co.uk",
-    cc="alex@trybooking.co.uk, joan@trybooking.co.uk",
-    subject=f"TryBooking New Accounts w/c {week_start.strftime('%d %B %Y')}",
+    to="alex@trybooking.co.uk" if TEST_MODE else "gareth@dgtlonline.co.uk, clients@dgtlonline.co.uk",
+    cc="alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, joan@trybooking.co.uk",
+    subject=f"{'[TEST] ' if TEST_MODE else ''}TryBooking New Accounts w/c {week_start.strftime('%d %B %Y')}",
     html_body=html_b
 )

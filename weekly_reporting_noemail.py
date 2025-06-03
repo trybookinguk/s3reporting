@@ -5,8 +5,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 # === Secrets ===
-AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY_ID"]
-AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
+AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY"]
+AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_KEY"]
 
 # === Time Windows ===
 today = datetime.today()
@@ -26,61 +26,33 @@ last_year_week_end = pd.Timestamp(last_year_week_end, tz='Europe/London')
 
 print(f"Last year comparison week: {last_year_week_start.strftime('%d %B %Y')} to {last_year_week_end.strftime('%d %B %Y')}")
 
-# === S3 Fetch - Handle cross-month weeks ===
+# === S3 Fetch - Get latest file only ===
 bucket_name = "produk-rdsextracts-438255373632"
 
-def get_file_from_s3(year, month):
-    """Fetch and return dataframe for a specific year/month file"""
-    folder_year = str(year)
-    folder_month = f"{month:02d}"
-    file_prefix = f"{year}{month:02d}"
-    filename = f"{file_prefix}-Accounts-TBUK.csv"
-    s3_key = f"{folder_year}/{folder_month}/{filename}"
-    
-    print(f"Attempting to fetch: {s3_key}")
-    
-    try:
-        s3 = boto3.client(
-            's3',
-            aws_access_key_id=AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=AWS_SECRET_ACCESS_KEY
-        )
-        obj = s3.get_object(Bucket=bucket_name, Key=s3_key)
-        df = pd.read_csv(obj['Body'])
-        df['DateTimeCreated'] = pd.to_datetime(df['DateTimeCreated'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
-        print(f"Successfully loaded {len(df)} records from {s3_key}")
-        return df
-    except Exception as e:
-        print(f"Failed to fetch {s3_key}: {e}")
-        return None
+# Always get the current month's file (which contains all historical data)
+current_year = today.year
+current_month = today.month
+folder_year = str(current_year)
+folder_month = f"{current_month:02d}"
+file_prefix = f"{current_year}{current_month:02d}"
+filename = f"{file_prefix}-Accounts-TBUK.csv"
+s3_key = f"{folder_year}/{folder_month}/{filename}"
 
-# Determine which files we need
-files_needed = set()
-files_needed.add((week_start.year, week_start.month))
-files_needed.add((week_end.year, week_end.month))
-files_needed.add((last_year_week_start.year, last_year_week_start.month))
-files_needed.add((last_year_week_end.year, last_year_week_end.month))
+print(f"Fetching latest file: {s3_key}")
 
-print(f"Files needed: {files_needed}")
-
-# Fetch all required files
-all_dataframes = []
-for year, month in files_needed:
-    df = get_file_from_s3(year, month)
-    if df is not None:
-        all_dataframes.append(df)
-
-if not all_dataframes:
-    print("ERROR: No data files could be loaded!")
+try:
+    s3 = boto3.client(
+        's3',
+        aws_access_key_id=AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+    )
+    obj = s3.get_object(Bucket=bucket_name, Key=s3_key)
+    df = pd.read_csv(obj['Body'])
+    df['DateTimeCreated'] = pd.to_datetime(df['DateTimeCreated'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
+    print(f"Successfully loaded {len(df)} records from {s3_key}")
+except Exception as e:
+    print(f"Failed to fetch {s3_key}: {e}")
     exit(1)
-
-# Combine all dataframes
-df = pd.concat(all_dataframes, ignore_index=True)
-print(f"Combined dataset has {len(df)} total records")
-
-# Remove duplicates if any (in case of overlapping data)
-df = df.drop_duplicates()
-print(f"After deduplication: {len(df)} records")
 
 # === Filtering ===
 current_week = df[(df['DateTimeCreated'] >= week_start) & (df['DateTimeCreated'] <= week_end)]

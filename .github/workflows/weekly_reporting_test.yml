@@ -39,8 +39,8 @@ jobs:
         
     - name: Run weekly reporting test
       env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
+        AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
         DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
       run: |
         if [ -n "$TEST_DATE" ]; then

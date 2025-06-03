@@ -45,23 +45,8 @@ jobs:
       run: |
         if [ -n "$TEST_DATE" ]; then
           echo "Running with test date: $TEST_DATE"
-          python -c "
-import os
-from datetime import datetime
-os.environ['OVERRIDE_DATE'] = '$TEST_DATE'
-exec(open('weekly_reporting_noemail.py').read())
-"
+          export OVERRIDE_DATE="$TEST_DATE"
         else
           echo "Running with current date"
-          python weekly_reporting_noemail.py
         fi
-        
-    - name: Upload logs as artifact
-      if: always()
-      uses: actions/upload-artifact@v3
-      with:
-        name: weekly-report-test-logs
-        path: |
-          *.log
-          *.txt
-        retention-days: 7
+        python weekly_reporting_noemail.py

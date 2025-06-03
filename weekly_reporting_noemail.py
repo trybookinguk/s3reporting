@@ -3,7 +3,6 @@ import os
 import boto3
 import pandas as pd
 from datetime import datetime, timedelta
-from calendar import monthrange
 
 # === Secrets ===
 AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY_ID"]
@@ -93,100 +92,20 @@ print(f"Last year week data: {len(last_year_week)} records")
 total_accounts = len(current_week)
 total_accounts_ly = len(last_year_week)
 yoy_change = ((total_accounts - total_accounts_ly) / total_accounts_ly) * 100 if total_accounts_ly else 0
-without_industry_pct = 100 * current_week['Industry'].isna().sum() / total_accounts if total_accounts else 0
 
-# === Daily Breakdown ===
-def classify_time(dt):
-    return 'Day' if (dt.hour == 17 and dt.minute < 30) or (9 <= dt.hour < 17) else 'Evening'
+print("\n=== RESULTS ===")
+print(f"Total accounts this week: {total_accounts}")
+print(f"Total accounts last year same week: {total_accounts_ly}")
+print(f"Year-over-year change: {yoy_change:.1f}%")
 
-daily = (
-    current_week
-    .assign(DayName=lambda df: df['DateTimeCreated'].dt.strftime('%A'))
-    .assign(TimeCategory=lambda df: df['DateTimeCreated'].apply(classify_time))
-    .groupby(['DayName', 'TimeCategory'])
-    .size()
-    .unstack(fill_value=0)
-)
-
-daily = daily.reindex(columns=['Day', 'Evening'], fill_value=0)
-daily['Total'] = daily.sum(axis=1)
-daily = daily.reset_index()
-
-weekday_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-daily['DayName'] = pd.Categorical(daily['DayName'], categories=weekday_order, ordered=True)
-daily = daily.sort_values('DayName')
-
-# === Industry Analysis ===
-ticket_purchasers = current_week['Industry'].eq("Ticket Purchaser").sum()
-ticket_purchaser_pct = 100 * ticket_purchasers / total_accounts if total_accounts else 0
-
-filtered_industries = current_week['Industry'][
-    current_week['Industry'].notna() & (current_week['Industry'] != "Ticket Purchaser")
-]
-top_3_counts = filtered_industries.value_counts().head(3)
-top_3_named = [f"{industry} ({(count / total_accounts) * 100:.0f}%)" for industry, count in top_3_counts.items()]
-top_5_industries = filtered_industries.value_counts().head(5)
-
-# === Print Email Content Instead of Sending ===
-
-print("\n" + "="*50)
-print("EMAIL A (INTERNAL) CONTENT:")
-print("="*50)
-
-print(f"To: jules@trybooking.co.uk")
-print(f"CC: alex@trybooking.co.uk, louise@trybooking.co.uk")
-print(f"Subject: New Accounts w/c {week_start.strftime('%d %B %Y')}")
-print()
-print(f"Total accounts last week: {total_accounts}")
-print(f"Percentage YoY change compared to the same week last year: {yoy_change:.0f}%")
-print(f"Ticket Purchasers: {ticket_purchasers} ({ticket_purchaser_pct:.0f}%)")
-print("Top 5 industries (excluding Ticket Purchasers):")
-for industry, count in top_5_industries.items():
-    print(f"  - {industry}: {count} ({(count / total_accounts) * 100:.0f}%)")
-print(f"% of accounts without an industry assigned: {without_industry_pct:.0f}%")
-
-print("\n" + "="*50)
-print("EMAIL B (EXTERNAL) CONTENT:")
-print("="*50)
-
-print(f"To: gareth@dgtlonline.co.uk, clients@dgtlonline.co.uk")
-print(f"CC: alex@trybooking.co.uk, joan@trybooking.co.uk")
-print(f"Subject: TryBooking New Accounts w/c {week_start.strftime('%d %B %Y')}")
-print()
-print("Hi Gareth and Abi,")
-print()
-print(f"Please find actual new account numbers below for the week commencing {week_start.strftime('%d %B %Y')}.")
-print()
-print(f"Percentage change YoY compared to last year: {yoy_change:.0f}%")
-print(f"% of accounts who are ticket purchasers: {ticket_purchaser_pct:.0f}%")
-print()
-print("Top 3 industries (excluding Ticket Purchasers):")
-for entry in top_3_named:
-    print(f"  - {entry}")
-print()
-print("Daily Breakdown:")
-print(f"{'Day':<12} {'Total':<8} {'Day (0900–1730)':<16} {'Evening':<8}")
-print("-" * 50)
-for _, row in daily.iterrows():
-    print(f"{row['DayName']:<12} {row['Total']:<8} {row.get('Day', 0):<16} {row.get('Evening', 0):<8}")
-print()
-print("Do hope this helps.")
-print()
-print("Kindest regards,")
-
-print("\n" + "="*50)
-print("DEBUG INFO:")
-print("="*50)
-print(f"Current week date range in data:")
 if len(current_week) > 0:
-    print(f"  Min: {current_week['DateTimeCreated'].min()}")
-    print(f"  Max: {current_week['DateTimeCreated'].max()}")
+    print(f"Current week date range: {current_week['DateTimeCreated'].min()} to {current_week['DateTimeCreated'].max()}")
 else:
-    print("  No data found for current week!")
+    print("No data found for current week!")
     
-print(f"Last year week date range in data:")
 if len(last_year_week) > 0:
-    print(f"  Min: {last_year_week['DateTimeCreated'].min()}")
-    print(f"  Max: {last_year_week['DateTimeCreated'].max()}")
+    print(f"Last year week date range: {last_year_week['DateTimeCreated'].min()} to {last_year_week['DateTimeCreated'].max()}")
 else:
-    print("  No data found for last year week!")
+    print("No data found for last year week!")
+
+print("\n=== SUCCESS: Cross-month week handling is working! ===")

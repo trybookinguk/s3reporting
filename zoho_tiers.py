@@ -245,7 +245,7 @@ def calculate_metrics_from_aggregated(account_metrics):
             'years_loyalty_prev': years_loyalty_prev,
             'lifetime_revenue_prev': float(revenue_prev),
             'avg_revenue_prev': float(avg_rev_prev),
-            'has_activity': (tickets_current > 0 or revenue_current > 0)
+            'has_activity': tickets_current >= 10
         })
         
         processed += 1
@@ -299,7 +299,7 @@ def calculate_metrics_from_aggregated(account_metrics):
             row['years_loyalty_prev'],
             row['lifetime_revenue_prev_pct'],
             row['avg_revenue_prev_pct'],
-            row['tickets_prev'] > 0 or row['revenue_prev'] > 0
+            row['tickets_prev'] >= 10
         )
         
         results.append({

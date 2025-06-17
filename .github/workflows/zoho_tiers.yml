@@ -39,3 +39,11 @@ jobs:
           ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
           TEST_MODE: ${{ github.event.inputs.test_mode }}
         run: python zoho_tiers.py
+      
+      - name: Upload Tier Report CSV
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: tier-report
+          path: tier_updates_*.csv
+          retention-days: 30

@@ -41,7 +41,7 @@ jobs:
         run: python zoho_tiers.py
       
       - name: Upload Tier Report CSV
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: tier-report

@@ -2,6 +2,15 @@ name: Update Tiers and Ratings
 
 on:
   workflow_dispatch:     # Manual trigger
+    inputs:
+      test_mode:
+        description: 'Run in test mode (no Zoho updates)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 jobs:
   update-tiers:
@@ -23,9 +32,10 @@ jobs:
 
       - name: Run Tier Update Script
         env:
-          AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
-          AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_KEY }}
           ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
           ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
           ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+          TEST_MODE: ${{ github.event.inputs.test_mode }}
         run: python zoho_tiers.py

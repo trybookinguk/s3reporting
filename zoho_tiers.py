@@ -63,7 +63,7 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
     
     # Define data types to reduce memory usage
     dtypes = {
-        'BookingTransactionID': 'int64',
+        'BookingTransactionId': 'int64',
         'AccountId': 'int32',
         'TicketQuantity': 'int16',
         'BookingFee': 'float32',

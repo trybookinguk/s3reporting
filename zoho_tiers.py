@@ -91,7 +91,7 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
             chunk['Year'] = chunk['TransactionDate'].dt.year
             
             # Drop duplicates within chunk
-            chunk = chunk.drop_duplicates(subset='BookingTransactionID')
+            chunk = chunk.drop_duplicates(subset='BookingTransactionId')
             
             # Aggregate by account
             for account_id, group in chunk.groupby('AccountId'):
@@ -102,13 +102,13 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
                     }
                 
                 # Filter out already seen transactions
-                new_transactions = group[~group['BookingTransactionID'].isin(account_metrics[account_id]['seen_tx_ids'])]
+                new_transactions = group[~group['BookingTransactionId'].isin(account_metrics[account_id]['seen_tx_ids'])]
                 
                 if len(new_transactions) > 0:
                     # Store only essential columns to save memory
-                    essential_data = new_transactions[['TransactionDate', 'Revenue', 'TicketQuantity', 'Year', 'BookingTransactionID']].copy()
+                    essential_data = new_transactions[['TransactionDate', 'Revenue', 'TicketQuantity', 'Year', 'BookingTransactionId']].copy()
                     account_metrics[account_id]['transactions'].append(essential_data)
-                    account_metrics[account_id]['seen_tx_ids'].update(new_transactions['BookingTransactionID'].tolist())
+                    account_metrics[account_id]['seen_tx_ids'].update(new_transactions['BookingTransactionId'].tolist())
             
             total_rows += len(chunk)
             if chunk_num % 10 == 0:

@@ -1,6 +1,8 @@
 name: Update Tiers and Ratings
 
 on:
+  schedule:
+    - cron: '0 4 * * 1'  # Every Monday at 4:00 AM UTC
   workflow_dispatch:     # Manual trigger
     inputs:
       test_mode:
@@ -37,7 +39,7 @@ jobs:
           ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
           ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
           ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
-          TEST_MODE: ${{ github.event.inputs.test_mode }}
+          TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
         run: python zoho_tiers.py
       
       - name: Upload Tier Report CSV

@@ -333,8 +333,10 @@ def upsert_to_zoho(token, records_df):
     batch_size = 200
     for i in range(0, len(records_df), batch_size):
         batch = records_df.iloc[i:i+batch_size]
+        # Exclude Last_Year_Ticket_Quantity from Zoho upload
+        batch_for_zoho = batch.drop(columns=['Last_Year_Ticket_Quantity'])
         payload = {
-            "data": batch.to_dict(orient="records"),
+            "data": batch_for_zoho.to_dict(orient="records"),
             "duplicate_check_fields": ["Account_Name"]
         }
         

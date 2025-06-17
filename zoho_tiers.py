@@ -352,8 +352,8 @@ def main():
     print(f"Processing data for: {report_date.strftime('%Y-%m-%d')}")
     
     # S3 keys
-    key_all = f"{year}/{month}/{prefix}-BookingDataAll.csv"
-    key_month = f"{year}/{month}/{prefix}-BookingData.csv"
+    key_all = f"{year}/{month}/{prefix}-BookingDataAll-TBUK.csv"
+    key_month = f"{year}/{month}/{prefix}-BookingData-TBUK.csv"
     
     try:
         # Initialize S3 client

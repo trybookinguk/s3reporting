@@ -329,8 +329,8 @@ def upsert_to_zoho(token, records_df):
         print(f"\nTotal accounts to update: {len(records_df)}")
         return
     
-    # Process in batches of 200 (Zoho max)
-    batch_size = 200
+    # Process in batches of 100 (Zoho max)
+    batch_size = 100
     for i in range(0, len(records_df), batch_size):
         batch = records_df.iloc[i:i+batch_size]
         # Exclude Last_Year_Ticket_Quantity from Zoho upload

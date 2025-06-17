@@ -83,8 +83,22 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
         
         obj = s3_client.get_object(Bucket=BUCKET, Key=key)
         
+        # First, peek at the columns to verify structure
+        first_chunk = pd.read_csv(obj['Body'], nrows=5)
+        available_columns = list(first_chunk.columns)
+        print(f"  Sample columns: {available_columns[:10]}...")  # Show first 10 columns
+        print(f"  Total columns: {len(available_columns)}")
+        
+        # Only use dtypes for columns that exist
+        actual_dtypes = {col: dtype for col, dtype in dtypes.items() if col in available_columns}
+        print(f"  Using dtypes for: {list(actual_dtypes.keys())}")
+        
+        # Re-fetch the object for actual processing
+        obj = s3_client.get_object(Bucket=BUCKET, Key=key)
+        
         total_rows = 0
-        for chunk_num, chunk in enumerate(pd.read_csv(obj['Body'], chunksize=chunk_size, dtype=dtypes, parse_dates=['TransactionDate'])):
+        # Add low_memory=False to handle mixed types warning
+        for chunk_num, chunk in enumerate(pd.read_csv(obj['Body'], chunksize=chunk_size, dtype=actual_dtypes, parse_dates=['TransactionDate'], low_memory=False)):
             # Add timezone info
             chunk['TransactionDate'] = pd.to_datetime(chunk['TransactionDate'], utc=True).dt.tz_convert(UK_TZ)
             chunk['Revenue'] = chunk['BookingFee'] + chunk['CardFee'] + chunk['ProcessingFee'] + chunk['TicketFee']

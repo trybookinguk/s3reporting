@@ -813,7 +813,7 @@ def generate_upcoming_annual_events_report(results_df):
                     'Reach_Out_By': outreach_date.strftime('%d/%m/%Y'),
                     'Last_Year_Tickets': int(account['Last_Year_Ticket_Quantity']),
                     'Last_Year_Revenue': f"£{last_revenue:.2f}",
-                    'Status': account['Activity_Rating']
+                    'Status': account['Rating']
                 })
     
     return pd.DataFrame(upcoming).sort_values('Reach_Out_By') if upcoming else pd.DataFrame()

@@ -338,7 +338,7 @@ def upsert_to_zoho(token, records_df):
     test_mode = os.environ.get("TEST_MODE", "false").lower() == "true"
     if test_mode:
         print("TEST MODE: Would update the following accounts:")
-        print(records_df[['Account_Name', 'Current_Tier', 'Previous_Tier', 'Ticket_Quantity']].head(20))
+        print(records_df[['Account_Name', 'Current_Tier', 'Previous_Tier', 'Ticket_Quantity', 'Last_Year_Ticket_Quantity']].head(20))
         print(f"\nTotal accounts to update: {len(records_df)}")
         return
     
@@ -346,11 +346,9 @@ def upsert_to_zoho(token, records_df):
     batch_size = 100
     for i in range(0, len(records_df), batch_size):
         batch = records_df.iloc[i:i+batch_size]
-        # Exclude Last_Year_Ticket_Quantity from Zoho upload
-        batch_for_zoho = batch.drop(columns=['Last_Year_Ticket_Quantity'])
         
         # Ensure all Account_Name values are strings
-        records = batch_for_zoho.to_dict(orient="records")
+        records = batch.to_dict(orient="records")
         for record in records:
             record['Account_Name'] = str(record['Account_Name'])
         

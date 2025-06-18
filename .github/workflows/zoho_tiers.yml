@@ -1,4 +1,4 @@
-name: Update Tiers and Ratings
+name: Update Tiers, Ratings & Annual Events
 
 on:
   schedule:
@@ -39,6 +39,9 @@ jobs:
           ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
           ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
           ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+          MAILGUN_SMTP_LOGIN: ${{ secrets.MAILGUN_SMTP_LOGIN }}
+          MAILGUN_SMTP_PASSWORD: ${{ secrets.MAILGUN_PASSWORD }}
+          MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
           TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
         run: python zoho_tiers.py
       
@@ -48,4 +51,12 @@ jobs:
         with:
           name: tier-report
           path: tier_updates_*.csv
+          retention-days: 30
+      
+      - name: Upload Annual Events Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: annual-events-report
+          path: upcoming_annual_events_*.csv
           retention-days: 30

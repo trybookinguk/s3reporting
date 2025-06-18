@@ -6,6 +6,8 @@ import requests
 from datetime import datetime, timedelta
 import pytz
 from pandas.tseries.offsets import MonthBegin
+import smtplib
+from email.message import EmailMessage
 
 # === ENV VARS ===
 # Support both naming conventions for AWS credentials
@@ -20,6 +22,14 @@ ZOHO_CLIENT_SECRET = os.environ["ZOHO_CLIENT_SECRET"]
 ZOHO_REFRESH_TOKEN = os.environ["ZOHO_REFRESH_TOKEN"]
 ZOHO_DOMAIN = "https://www.zohoapis.com"
 BUCKET = "produk-rdsextracts-438255373632"
+
+# Mailgun credentials
+MAILGUN_SMTP_LOGIN = os.environ["MAILGUN_SMTP_LOGIN"]
+MAILGUN_SMTP_PASSWORD = os.environ["MAILGUN_SMTP_PASSWORD"]
+MAILGUN_DOMAIN = os.environ["MAILGUN_DOMAIN"]
+
+# Check if running in test mode
+TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
 
 # === DATE WINDOWS ===
 UK_TZ = pytz.timezone('Europe/London')
@@ -65,6 +75,7 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
     dtypes = {
         'BookingTransactionId': 'int64',
         'AccountId': 'int32',
+        'EventID': 'int64',  # Added for event tracking
         'TicketQuantity': 'int16',
         'BookingFee': 'float32',
         'CardFee': 'float32',
@@ -112,7 +123,11 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
                 if account_id not in account_metrics:
                     account_metrics[account_id] = {
                         'transactions': [],
-                        'seen_tx_ids': set()
+                        'seen_tx_ids': set(),
+                        'event_ids_current': set(),
+                        'event_ids_previous': set(),
+                        'event_creation_info': {},
+                        'last_booking_date': None
                     }
                 
                 # Filter out already seen transactions
@@ -120,9 +135,43 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
                 
                 if len(new_transactions) > 0:
                     # Store only essential columns to save memory
-                    essential_data = new_transactions[['TransactionDate', 'Revenue', 'TicketQuantity', 'Year', 'BookingTransactionId']].copy()
+                    essential_cols = ['TransactionDate', 'Revenue', 'TicketQuantity', 'Year', 'BookingTransactionId']
+                    if 'EventID' in new_transactions.columns:
+                        essential_cols.append('EventID')
+                    if 'EventDate' in new_transactions.columns:
+                        essential_cols.append('EventDate')
+                    
+                    essential_data = new_transactions[essential_cols].copy()
                     account_metrics[account_id]['transactions'].append(essential_data)
                     account_metrics[account_id]['seen_tx_ids'].update(new_transactions['BookingTransactionId'].tolist())
+                    
+                    # Track event information
+                    for _, trans in new_transactions.iterrows():
+                        trans_date = trans['TransactionDate']
+                        
+                        # Track last booking date
+                        if account_metrics[account_id]['last_booking_date'] is None or trans_date > account_metrics[account_id]['last_booking_date']:
+                            account_metrics[account_id]['last_booking_date'] = trans_date
+                        
+                        if 'EventID' in trans and pd.notna(trans['EventID']):
+                            event_id = int(trans['EventID'])
+                            
+                            # Track which period the event belongs to
+                            if trans_date.date() >= CUTOFF_365:
+                                account_metrics[account_id]['event_ids_current'].add(event_id)
+                            elif trans_date.date() >= CUTOFF_730:
+                                account_metrics[account_id]['event_ids_previous'].add(event_id)
+                            
+                            # Track first booking per event (proxy for creation)
+                            if event_id not in account_metrics[account_id]['event_creation_info']:
+                                event_date = trans.get('EventDate')
+                                if pd.notna(event_date):
+                                    lead_days = (pd.to_datetime(event_date).date() - trans_date.date()).days
+                                    account_metrics[account_id]['event_creation_info'][event_id] = {
+                                        'first_booking': trans_date,
+                                        'event_date': pd.to_datetime(event_date),
+                                        'lead_days': max(lead_days, 0)
+                                    }
             
             total_rows += len(chunk)
             if chunk_num % 10 == 0:
@@ -193,6 +242,40 @@ def determine_tier_from_percentiles(a_pct, b_pct, c_years, d_pct, e_pct, has_act
                 break
     
     return best_tier
+
+# === HELPER FUNCTIONS FOR NEW METRICS ===
+def classify_event_frequency(event_count):
+    """Convert event count to pattern classification"""
+    if event_count == 0:
+        return "Inactive"
+    elif event_count == 1:
+        return "Annual"
+    elif event_count <= 3:
+        return "Occasional"
+    else:  # 4+
+        return "Regular"
+
+def determine_activity_rating(current_freq, previous_freq, days_since_last, has_historical):
+    """Determine activity rating based on event patterns"""
+    if current_freq != "Inactive":
+        return "Active"
+    
+    if previous_freq == "Inactive" and not has_historical:
+        return "New" if days_since_last < 365 else "Inactive"
+    
+    if current_freq != "Inactive" and previous_freq == "Inactive" and has_historical:
+        return "Returned"
+    
+    # At Risk logic accounting for event patterns
+    if days_since_last < 365 and days_since_last > 90:
+        if previous_freq == "Annual" and days_since_last < 275:  # More grace for annual
+            return "Active"
+        return "At Risk"
+    
+    if previous_freq != "Inactive" and current_freq == "Inactive":
+        return "Churned"
+    
+    return "Inactive"
 
 # === METRICS CALC ===
 def calculate_metrics_from_aggregated(account_metrics):
@@ -314,6 +397,36 @@ def calculate_metrics_from_aggregated(account_metrics):
             # Skip this record if conversion fails
             print(f"Warning: Skipping account with invalid Account_Name: {row['Account_Name']}")
             continue
+        
+        # Calculate new metrics
+        account_id = int(row['Account_Name'])
+        
+        # Get event counts
+        event_count_current = len(account_metrics[account_id].get('event_ids_current', set()))
+        event_count_previous = len(account_metrics[account_id].get('event_ids_previous', set()))
+        event_creation_info = account_metrics[account_id].get('event_creation_info', {})
+        has_historical = len(event_creation_info) > event_count_current + event_count_previous
+        
+        # Calculate event frequency
+        event_freq_current = classify_event_frequency(event_count_current)
+        event_freq_previous = classify_event_frequency(event_count_previous)
+        
+        # Calculate lead times
+        lead_times = [info['lead_days'] for info in event_creation_info.values() if info['lead_days'] > 0]
+        avg_lead_days = int(sum(lead_times) / len(lead_times)) if lead_times else 60
+        
+        # Calculate days since last activity
+        last_booking = account_metrics[account_id].get('last_booking_date')
+        days_since_last = (TODAY - last_booking.date()).days if last_booking else 999
+        
+        # Determine activity rating
+        activity_rating = determine_activity_rating(
+            event_freq_current, event_freq_previous, days_since_last, has_historical
+        )
+        
+        # Get last event date
+        event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]
+        last_event_date = max(event_dates).date() if event_dates else None
             
         results.append({
             "Account_Name": account_name,
@@ -321,7 +434,14 @@ def calculate_metrics_from_aggregated(account_metrics):
             "Previous_Tier": tier_prev,
             "Ticket_Quantity": int(row['tickets_current']),
             "Last_Year_Ticket_Quantity": int(row['tickets_prev']),
-            "Years_Loyalty": row['years_loyalty']
+            "Years_Loyalty": row['years_loyalty'],
+            "Event_Frequency_Current": event_freq_current,
+            "Event_Frequency_Previous": event_freq_previous,
+            "Activity_Rating": activity_rating,
+            # Hidden fields for report generation (prefix with _)
+            "_avg_lead_days": avg_lead_days,
+            "_last_event_date": last_event_date,
+            "_event_count_current": event_count_current
         })
     
     return pd.DataFrame(results)
@@ -335,8 +455,7 @@ def upsert_to_zoho(token, records_df):
     url = f"{ZOHO_DOMAIN}/crm/v2/Accounts/upsert"
     
     # Check test mode
-    test_mode = os.environ.get("TEST_MODE", "false").lower() == "true"
-    if test_mode:
+    if TEST_MODE:
         print("TEST MODE: Would update the following accounts:")
         print(records_df[['Account_Name', 'Current_Tier', 'Previous_Tier', 'Ticket_Quantity', 'Last_Year_Ticket_Quantity']].head(20))
         print(f"\nTotal accounts to update: {len(records_df)}")
@@ -365,6 +484,106 @@ def upsert_to_zoho(token, records_df):
                 print(f"Batch {i//batch_size + 1} success ({len(batch)} records)")
         except Exception as e:
             print(f"Batch {i//batch_size + 1} error: {str(e)}")
+
+# === ANNUAL EVENTS REPORT ===
+def generate_upcoming_annual_events_report(results_df):
+    """Generate report for annual events needing outreach"""
+    
+    # Filter for annual pattern accounts
+    annual_accounts = results_df[
+        (results_df['Event_Frequency_Current'] == 'Annual') | 
+        (results_df['Event_Frequency_Previous'] == 'Annual')
+    ].copy()
+    
+    upcoming = []
+    for _, account in annual_accounts.iterrows():
+        if pd.notna(account.get('_last_event_date')):
+            # Predict next event (365 days from last)
+            last_event = pd.to_datetime(account['_last_event_date'])
+            predicted_event_date = last_event + pd.Timedelta(days=365)
+            
+            # Calculate when they'll likely create it
+            lead_days = account.get('_avg_lead_days', 60)
+            predicted_creation_date = predicted_event_date - pd.Timedelta(days=lead_days)
+            
+            # We want to reach out 30 days before creation
+            outreach_date = predicted_creation_date - pd.Timedelta(days=30)
+            days_until_outreach = (outreach_date - pd.Timestamp.now()).days
+            
+            # Include if outreach needed in next 30 days
+            if 0 <= days_until_outreach <= 30:
+                upcoming.append({
+                    'Account_Name': account['Account_Name'],
+                    'Tier': account['Current_Tier'],
+                    'Last_Event_Date': last_event.strftime('%d/%m/%Y'),
+                    'Expected_Event_Date': predicted_event_date.strftime('%d/%m/%Y'),
+                    'Typical_Creation_Lead_Days': lead_days,
+                    'Reach_Out_By': outreach_date.strftime('%d/%m/%Y'),
+                    'Last_Year_Tickets': int(account['Last_Year_Ticket_Quantity']),
+                    'Status': account['Activity_Rating']
+                })
+    
+    return pd.DataFrame(upcoming).sort_values('Reach_Out_By') if upcoming else pd.DataFrame()
+
+def email_upcoming_events_report(report_df, filename):
+    """Email the upcoming annual events report"""
+    
+    # Prepare email body
+    body_plain = f"""Hi Alex,
+
+Please find attached the upcoming annual events report.
+
+This report identifies annual event organisers who typically create their events soon, 
+allowing proactive outreach approximately 1 month before they usually set up their event.
+
+Summary:
+- Total accounts requiring outreach: {len(report_df)}
+- Outreach needed within 7 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By']) <= pd.Timestamp.now() + pd.Timedelta(days=7)])}
+- Outreach needed within 14 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By']) <= pd.Timestamp.now() + pd.Timedelta(days=14)])}
+
+Best regards,
+TryBooking Reporting System
+"""
+    
+    # HTML version of the body
+    body_html = f"""<div style="font-family: Arial, sans-serif; font-size: 11pt;">
+<p>Hi Alex,</p>
+<p>Please find attached the upcoming annual events report.</p>
+<p>This report identifies annual event organisers who typically create their events soon, 
+allowing proactive outreach approximately 1 month before they usually set up their event.</p>
+<p><strong>Summary:</strong></p>
+<ul>
+<li>Total accounts requiring outreach: {len(report_df)}</li>
+<li>Outreach needed within 7 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By']) <= pd.Timestamp.now() + pd.Timedelta(days=7)])}</li>
+<li>Outreach needed within 14 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By']) <= pd.Timestamp.now() + pd.Timedelta(days=14)])}</li>
+</ul>
+<p>Best regards,<br>TryBooking Reporting System</p>
+</div>"""
+    
+    # Create email message
+    msg = EmailMessage()
+    msg['Subject'] = f'{"[TEST] " if TEST_MODE else ""}Upcoming Annual Events - {datetime.now().strftime("%B %Y")}'
+    msg['From'] = f"TryBooking Reporting <reports@{MAILGUN_DOMAIN}>"
+    msg['To'] = "alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk"
+    msg['Cc'] = "" if TEST_MODE else "louise@trybooking.co.uk"
+    
+    # Set content
+    msg.set_content(body_plain)
+    msg.add_alternative(body_html, subtype='html')
+    
+    # Attach CSV file
+    with open(filename, 'rb') as f:
+        csv_data = f.read()
+        msg.add_attachment(csv_data, maintype='text', subtype='csv', filename=filename)
+    
+    # Send email via Mailgun
+    with smtplib.SMTP("smtp.mailgun.org", 587) as smtp:
+        smtp.starttls()
+        smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
+        smtp.send_message(msg)
+    
+    recipients = "alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, louise@trybooking.co.uk"
+    print(f"Email sent to {recipients} with {len(report_df)} upcoming annual events")
 
 # === MAIN ===
 def main():
@@ -429,14 +648,31 @@ def main():
         for _, row in tier_changes.head(5).iterrows():
             print(f"  Account {row['Account_Name']}: {row['Previous_Tier']} → {row['Current_Tier']}")
     
-    if not updates.empty:
+    # Generate and email annual events report
+    annual_report = generate_upcoming_annual_events_report(updates)
+    if not annual_report.empty:
+        report_filename = f"upcoming_annual_events_{datetime.now(UK_TZ).strftime('%Y%m%d')}.csv"
+        annual_report.to_csv(report_filename, index=False)
+        
+        try:
+            email_upcoming_events_report(annual_report, report_filename)
+            print(f"\n📧 Emailed upcoming annual events report: {len(annual_report)} accounts")
+        except Exception as e:
+            print(f"WARNING: Failed to email annual events report: {str(e)}")
+    else:
+        print("\nNo upcoming annual events requiring outreach.")
+    
+    # Clean up hidden fields before Zoho upload
+    zoho_updates = updates.drop(columns=[col for col in updates.columns if col.startswith('_')], errors='ignore')
+    
+    if not zoho_updates.empty:
         # Get Zoho token and update
         try:
             print("\nAuthenticating with Zoho...")
             token = get_access_token()
             
             print("Updating Zoho CRM...")
-            upsert_to_zoho(token, updates)
+            upsert_to_zoho(token, zoho_updates)
             
         except Exception as e:
             print(f"ERROR: Zoho update failed: {str(e)}")

@@ -302,8 +302,21 @@ def calculate_metrics_from_aggregated(account_metrics):
             row['tickets_prev'] >= 10
         )
         
+        # Handle Account_Name conversion safely
+        try:
+            # Check if Account_Name is valid and numeric
+            if pd.notna(row['Account_Name']) and str(row['Account_Name']).strip():
+                account_name = str(int(float(row['Account_Name'])))
+            else:
+                # Skip this record if Account_Name is invalid
+                continue
+        except (ValueError, TypeError):
+            # Skip this record if conversion fails
+            print(f"Warning: Skipping account with invalid Account_Name: {row['Account_Name']}")
+            continue
+            
         results.append({
-            "Account_Name": int(row['Account_Name']),
+            "Account_Name": account_name,
             "Current_Tier": tier_current,
             "Previous_Tier": tier_prev,
             "Ticket_Quantity": int(row['tickets_current']),
@@ -335,8 +348,14 @@ def upsert_to_zoho(token, records_df):
         batch = records_df.iloc[i:i+batch_size]
         # Exclude Last_Year_Ticket_Quantity from Zoho upload
         batch_for_zoho = batch.drop(columns=['Last_Year_Ticket_Quantity'])
+        
+        # Ensure all Account_Name values are strings
+        records = batch_for_zoho.to_dict(orient="records")
+        for record in records:
+            record['Account_Name'] = str(record['Account_Name'])
+        
         payload = {
-            "data": batch_for_zoho.to_dict(orient="records"),
+            "data": records,
             "duplicate_check_fields": ["Account_Name"]
         }
         

@@ -145,30 +145,38 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
                     account_metrics[account_id]['transactions'].append(essential_data)
                     account_metrics[account_id]['seen_tx_ids'].update(new_transactions['BookingTransactionId'].tolist())
                     
-                    # Track event information
-                    for _, trans in new_transactions.iterrows():
-                        trans_date = trans['TransactionDate']
+                    # Track event information (vectorized approach)
+                    # Update last booking date
+                    if len(new_transactions) > 0:
+                        last_booking = new_transactions['TransactionDate'].max()
+                        if account_metrics[account_id]['last_booking_date'] is None or last_booking > account_metrics[account_id]['last_booking_date']:
+                            account_metrics[account_id]['last_booking_date'] = last_booking
+                    
+                    # Process events if EventID column exists
+                    if 'EventID' in new_transactions.columns and 'EventDate' in new_transactions.columns:
+                        event_data = new_transactions[['EventID', 'TransactionDate', 'EventDate']].copy()
+                        event_data = event_data[pd.notna(event_data['EventID'])]
                         
-                        # Track last booking date
-                        if account_metrics[account_id]['last_booking_date'] is None or trans_date > account_metrics[account_id]['last_booking_date']:
-                            account_metrics[account_id]['last_booking_date'] = trans_date
-                        
-                        if 'EventID' in trans and pd.notna(trans['EventID']):
-                            event_id = int(trans['EventID'])
+                        if len(event_data) > 0:
+                            # Vectorized period classification
+                            event_data['EventID'] = event_data['EventID'].astype(int)
+                            current_mask = event_data['TransactionDate'].dt.date >= CUTOFF_365
+                            previous_mask = (event_data['TransactionDate'].dt.date >= CUTOFF_730) & (~current_mask)
                             
-                            # Track which period the event belongs to
-                            if trans_date.date() >= CUTOFF_365:
-                                account_metrics[account_id]['event_ids_current'].add(event_id)
-                            elif trans_date.date() >= CUTOFF_730:
-                                account_metrics[account_id]['event_ids_previous'].add(event_id)
+                            # Update event sets
+                            account_metrics[account_id]['event_ids_current'].update(event_data[current_mask]['EventID'].unique())
+                            account_metrics[account_id]['event_ids_previous'].update(event_data[previous_mask]['EventID'].unique())
                             
-                            # Track first booking per event (proxy for creation)
-                            if event_id not in account_metrics[account_id]['event_creation_info']:
-                                event_date = trans.get('EventDate')
-                                if pd.notna(event_date):
-                                    lead_days = (pd.to_datetime(event_date).date() - trans_date.date()).days
+                            # Group by EventID to find first booking per event
+                            event_groups = event_data[pd.notna(event_data['EventDate'])].groupby('EventID')
+                            
+                            for event_id, group in event_groups:
+                                if event_id not in account_metrics[account_id]['event_creation_info']:
+                                    first_booking = group['TransactionDate'].min()
+                                    event_date = group['EventDate'].iloc[0]
+                                    lead_days = (pd.to_datetime(event_date).date() - first_booking.date()).days
                                     account_metrics[account_id]['event_creation_info'][event_id] = {
-                                        'first_booking': trans_date,
+                                        'first_booking': first_booking,
                                         'event_date': pd.to_datetime(event_date),
                                         'lead_days': max(lead_days, 0)
                                     }
@@ -316,6 +324,14 @@ def calculate_metrics_from_aggregated(account_metrics):
         tickets_prev = previous_period['TicketQuantity'].sum()
         revenue_window_prev = previous_period['Revenue'].sum()
         
+        # Include event tracking data
+        event_data = {
+            'event_ids_current': data.get('event_ids_current', set()),
+            'event_ids_previous': data.get('event_ids_previous', set()),
+            'event_creation_info': data.get('event_creation_info', {}),
+            'last_booking_date': data.get('last_booking_date')
+        }
+        
         all_metrics.append({
             'Account_Name': account_id,
             'tickets_current': float(tickets_current),
@@ -328,7 +344,8 @@ def calculate_metrics_from_aggregated(account_metrics):
             'years_loyalty_prev': years_loyalty_prev,
             'lifetime_revenue_prev': float(revenue_prev),
             'avg_revenue_prev': float(avg_rev_prev),
-            'has_activity': tickets_current >= 10
+            'has_activity': tickets_current >= 10,
+            '_event_data': event_data  # Store for later use
         })
         
         processed += 1
@@ -364,8 +381,21 @@ def calculate_metrics_from_aggregated(account_metrics):
         metrics_df.loc[~mask, pct_col] = 0
     
     # Apply tier logic
-    print("\nAssigning tiers...")
+    print("\nAssigning tiers and calculating new metrics...")
+    print(f"Total accounts to process: {len(metrics_df)}")
+    
+    # Debug: Check if event data is present
+    sample_row = metrics_df.iloc[0] if len(metrics_df) > 0 else None
+    if sample_row is not None:
+        print(f"Sample row has _event_data: {'_event_data' in sample_row}")
+        if '_event_data' in sample_row:
+            event_data_sample = sample_row['_event_data']
+            print(f"  Event IDs current: {len(event_data_sample.get('event_ids_current', set()))}")
+            print(f"  Event IDs previous: {len(event_data_sample.get('event_ids_previous', set()))}")
+    
     results = []
+    event_freq_summary = {'Regular': 0, 'Occasional': 0, 'Annual': 0, 'Inactive': 0}
+    
     for _, row in metrics_df.iterrows():
         tier_current = determine_tier_from_percentiles(
             row['tickets_current_pct'],
@@ -398,25 +428,26 @@ def calculate_metrics_from_aggregated(account_metrics):
             print(f"Warning: Skipping account with invalid Account_Name: {row['Account_Name']}")
             continue
         
-        # Calculate new metrics
-        account_id = int(row['Account_Name'])
+        # Calculate new metrics from stored event data
+        event_data = row.get('_event_data', {})
         
         # Get event counts
-        event_count_current = len(account_metrics[account_id].get('event_ids_current', set()))
-        event_count_previous = len(account_metrics[account_id].get('event_ids_previous', set()))
-        event_creation_info = account_metrics[account_id].get('event_creation_info', {})
+        event_count_current = len(event_data.get('event_ids_current', set()))
+        event_count_previous = len(event_data.get('event_ids_previous', set()))
+        event_creation_info = event_data.get('event_creation_info', {})
         has_historical = len(event_creation_info) > event_count_current + event_count_previous
         
         # Calculate event frequency
         event_freq_current = classify_event_frequency(event_count_current)
         event_freq_previous = classify_event_frequency(event_count_previous)
+        event_freq_summary[event_freq_current] += 1
         
         # Calculate lead times
         lead_times = [info['lead_days'] for info in event_creation_info.values() if info['lead_days'] > 0]
         avg_lead_days = int(sum(lead_times) / len(lead_times)) if lead_times else 60
         
         # Calculate days since last activity
-        last_booking = account_metrics[account_id].get('last_booking_date')
+        last_booking = event_data.get('last_booking_date')
         days_since_last = (TODAY - last_booking.date()).days if last_booking else 999
         
         # Determine activity rating
@@ -443,6 +474,11 @@ def calculate_metrics_from_aggregated(account_metrics):
             "_last_event_date": last_event_date,
             "_event_count_current": event_count_current
         })
+    
+    # Print event frequency summary
+    print("\nEvent Frequency Summary:")
+    for freq_type, count in event_freq_summary.items():
+        print(f"  {freq_type}: {count:,} accounts")
     
     return pd.DataFrame(results)
 
@@ -662,8 +698,10 @@ def main():
     else:
         print("\nNo upcoming annual events requiring outreach.")
     
-    # Clean up hidden fields before Zoho upload
-    zoho_updates = updates.drop(columns=[col for col in updates.columns if col.startswith('_')], errors='ignore')
+    # Clean up hidden fields before Zoho upload (including _event_data from metrics_df)
+    hidden_cols = [col for col in updates.columns if col.startswith('_')]
+    zoho_updates = updates.drop(columns=hidden_cols, errors='ignore')
+    print(f"\nRemoving {len(hidden_cols)} hidden columns before Zoho upload")
     
     if not zoho_updates.empty:
         # Get Zoho token and update

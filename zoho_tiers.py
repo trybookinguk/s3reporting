@@ -36,6 +36,7 @@ UK_TZ = pytz.timezone('Europe/London')
 TODAY = datetime.now(UK_TZ).date()
 CUTOFF_365 = TODAY - timedelta(days=365)
 CUTOFF_730 = CUTOFF_365 - timedelta(days=365)
+TEST_RECIPIENT = 'alex@trybooking.co.uk'  # Email recipient for reports
 
 # === AUTH ===
 def get_access_token():
@@ -276,6 +277,62 @@ def classify_event_frequency(event_count):
     else:  # 4+
         return "Regular"
 
+def calculate_churn_probability(current_events, previous_events, revenue_current, revenue_previous,
+                               days_since_last, event_pattern, avg_lead_days=60, last_event_date=None):
+    """
+    Calculate churn probability score (0-100)
+    Higher score = higher risk of churn
+    """
+    factors = {}
+    
+    # 1. Event Frequency Decline (weight: 30%)
+    if previous_events > 0:
+        event_decline = max(0, (previous_events - current_events) / previous_events)
+        factors['event_decline'] = event_decline * 30
+    else:
+        factors['event_decline'] = 0
+    
+    # 2. Revenue Decline (weight: 25%)
+    if revenue_previous > 0:
+        revenue_decline = max(0, (revenue_previous - revenue_current) / revenue_previous)
+        factors['revenue_decline'] = revenue_decline * 25
+    else:
+        factors['revenue_decline'] = 0
+    
+    # 3. Time Since Last Activity (weight: 25%)
+    if event_pattern == "Regular":
+        # Regular events should have activity within 90 days
+        inactivity_score = min(days_since_last / 90, 1.0) * 25
+    elif event_pattern == "Occasional":
+        # Occasional events: 180 days
+        inactivity_score = min(days_since_last / 180, 1.0) * 25
+    elif event_pattern == "Annual" and last_event_date:
+        # Annual events: check if past expected creation
+        expected_next = last_event_date + pd.Timedelta(days=365)
+        expected_creation = expected_next - pd.Timedelta(days=avg_lead_days)
+        days_past_expected = (pd.Timestamp.now().date() - expected_creation).days
+        inactivity_score = min(max(0, days_past_expected) / 90, 1.0) * 25
+    else:
+        inactivity_score = min(days_since_last / 365, 1.0) * 25
+    factors['inactivity'] = inactivity_score
+    
+    # 4. Complete Drop-off Signal (weight: 20%)
+    if current_events == 0 and previous_events > 0:
+        factors['complete_dropoff'] = 20
+    else:
+        factors['complete_dropoff'] = 0
+    
+    # Calculate total score
+    total_score = sum(factors.values())
+    
+    # Apply pattern-specific adjustments
+    if event_pattern == "Annual" and current_events == 0:
+        # Annual events get a grace period adjustment
+        if days_since_last < 400:  # ~13 months
+            total_score *= 0.8  # Reduce score by 20%
+    
+    return min(100, max(0, total_score))  # Ensure 0-100 range
+
 def determine_activity_rating(current_freq, previous_freq, days_since_last, has_historical, avg_lead_days=60, last_event_date=None):
     """Determine activity rating based on event patterns and creation lead times"""
     if current_freq != "Inactive":
@@ -487,6 +544,14 @@ def calculate_metrics_from_aggregated(account_metrics):
             event_freq_current, event_freq_previous, days_since_last, has_historical,
             avg_lead_days=avg_lead_days, last_event_date=last_event_date
         )
+        
+        # Calculate churn probability
+        churn_prob = calculate_churn_probability(
+            event_count_current, event_count_previous,
+            row.get('revenue_current', 0), row.get('revenue_prev', 0),
+            days_since_last, event_freq_current,
+            avg_lead_days=avg_lead_days, last_event_date=last_event_date
+        )
             
         results.append({
             "Account_Name": account_name,
@@ -498,10 +563,14 @@ def calculate_metrics_from_aggregated(account_metrics):
             "Event_Frequency_Current": event_freq_current,
             "Event_Frequency_Previous": event_freq_previous,
             "Rating": activity_rating,  # Changed from Activity_Rating to match Zoho field name
+            "Churn_Risk": int(churn_prob),  # 0-100 score
             # Hidden fields for report generation (prefix with _)
             "_avg_lead_days": avg_lead_days,
             "_last_event_date": last_event_date,
-            "_event_count_current": event_count_current
+            "_event_count_current": event_count_current,
+            "_event_count_previous": event_count_previous,
+            "_revenue_current": row.get('revenue_current', 0),
+            "_revenue_previous": row.get('revenue_prev', 0)
         })
     
     # Print event frequency summary
@@ -517,6 +586,20 @@ def calculate_metrics_from_aggregated(account_metrics):
         for rating in ['Active', 'At Risk', 'Churned', 'Returned', 'New', 'Inactive']:
             count = rating_counts.get(rating, 0)
             print(f"  {rating}: {count:,} accounts")
+        
+        # Churn risk analysis
+        print("\nChurn Risk Analysis:")
+        risk_bands = {
+            'Low (0-25)': results_df[results_df['Churn_Risk'] <= 25],
+            'Medium (26-50)': results_df[(results_df['Churn_Risk'] > 25) & (results_df['Churn_Risk'] <= 50)],
+            'High (51-75)': results_df[(results_df['Churn_Risk'] > 50) & (results_df['Churn_Risk'] <= 75)],
+            'Critical (76-100)': results_df[results_df['Churn_Risk'] > 75]
+        }
+        
+        for band, accounts in risk_bands.items():
+            count = len(accounts)
+            revenue_at_risk = accounts['_revenue_current'].sum() if '_revenue_current' in accounts else 0
+            print(f"  {band}: {count:,} accounts (£{revenue_at_risk:,.0f} revenue)")
     
     return results_df
 
@@ -533,7 +616,7 @@ def upsert_to_zoho(token, records_df):
         print("TEST MODE: Would update the following accounts:")
         # Show all the fields including new ones
         display_cols = ['Account_Name', 'Current_Tier', 'Previous_Tier', 'Event_Frequency_Current', 
-                       'Event_Frequency_Previous', 'Rating', 'Ticket_Quantity']
+                       'Event_Frequency_Previous', 'Rating', 'Churn_Risk', 'Ticket_Quantity']
         print(records_df[display_cols].head(10))
         print(f"\nTotal accounts to update: {len(records_df)}")
         print(f"Columns being sent to Zoho: {list(records_df.columns)}")
@@ -562,6 +645,130 @@ def upsert_to_zoho(token, records_df):
                 print(f"Batch {i//batch_size + 1} success ({len(batch)} records)")
         except Exception as e:
             print(f"Batch {i//batch_size + 1} error: {str(e)}")
+
+# === HIGH RISK ACCOUNTS REPORT ===
+def generate_high_risk_accounts_report(results_df):
+    """Generate report for high churn risk accounts needing immediate attention"""
+    
+    # Filter for high risk accounts (>50 churn risk) with meaningful revenue
+    MIN_REVENUE = 50  # £50 minimum to focus on valuable accounts
+    
+    high_risk_accounts = results_df[
+        (results_df['Churn_Risk'] > 50) &
+        ((results_df.get('_revenue_current', 0) >= MIN_REVENUE) | 
+         (results_df.get('_revenue_previous', 0) >= MIN_REVENUE))
+    ].copy()
+    
+    # Sort by risk score descending, then by revenue
+    high_risk_accounts['total_revenue'] = high_risk_accounts['_revenue_current'] + high_risk_accounts['_revenue_previous']
+    high_risk_accounts = high_risk_accounts.sort_values(['Churn_Risk', 'total_revenue'], ascending=[False, False])
+    
+    # Prepare report data
+    report_data = []
+    for _, account in high_risk_accounts.iterrows():
+        report_data.append({
+            'Account_Name': account['Account_Name'],
+            'Churn_Risk_Score': account['Churn_Risk'],
+            'Risk_Level': 'Critical' if account['Churn_Risk'] > 75 else 'High',
+            'Rating': account['Rating'],
+            'Event_Pattern': account['Event_Frequency_Current'],
+            'Current_Tier': account['Current_Tier'],
+            'Last_Year_Revenue': f"£{account.get('_revenue_previous', 0):.2f}",
+            'Current_Revenue': f"£{account.get('_revenue_current', 0):.2f}",
+            'Revenue_Change': f"{((account.get('_revenue_current', 0) - account.get('_revenue_previous', 0)) / account.get('_revenue_previous', 1) * 100):.0f}%" if account.get('_revenue_previous', 0) > 0 else "N/A",
+            'Last_Year_Events': int(account.get('Event_Frequency_Previous', 'Inactive') != 'Inactive') * account.get('_event_count_previous', 1),
+            'Current_Events': account.get('_event_count_current', 0),
+            'Recommended_Action': get_risk_action(account)
+        })
+    
+    return pd.DataFrame(report_data)
+
+def get_risk_action(account):
+    """Determine recommended action based on risk factors"""
+    if account['Rating'] == 'At Risk':
+        if account['Event_Frequency_Current'] == 'Annual':
+            return "Urgent: Annual event overdue - immediate outreach needed"
+        else:
+            return "Proactive check-in - activity declining"
+    elif account['Rating'] == 'Churned':
+        return "Win-back campaign - high value lost account"
+    elif account['Churn_Risk'] > 75:
+        return "Critical: Immediate intervention required"
+    else:
+        return "Monitor closely - showing risk signals"
+
+def email_high_risk_report(report_df, filename):
+    """Email the high risk accounts report"""
+    
+    # Email setup
+    msg = EmailMessage()
+    msg['Subject'] = f'{"[TEST] " if TEST_MODE else ""}⚠️ High Risk Accounts Alert - {datetime.now().strftime("%B %Y")}'
+    msg['From'] = f'TryBooking Reporting <reports@{MAILGUN_DOMAIN}>'
+    msg['To'] = TEST_RECIPIENT if TEST_MODE else 'alex@trybooking.co.uk'
+    
+    # Calculate summary stats
+    critical_count = len(report_df[report_df['Risk_Level'] == 'Critical'])
+    total_revenue_at_risk = sum(float(str(rev).replace('£', '').replace(',', '')) 
+                                for rev in report_df['Current_Revenue'])
+    
+    # Plain text body
+    body = f"""Hi Alex,
+
+⚠️ URGENT: {len(report_df)} accounts have been identified as high churn risk.
+
+Summary:
+- Critical Risk (76-100): {critical_count} accounts
+- High Risk (51-75): {len(report_df) - critical_count} accounts
+- Total Revenue at Risk: £{total_revenue_at_risk:,.2f}
+
+Top 5 Highest Risk Accounts:
+{report_df.head()[['Account_Name', 'Churn_Risk_Score', 'Current_Revenue', 'Recommended_Action']].to_string(index=False)}
+
+Please review the attached CSV for the complete list and recommended actions.
+
+Best regards,
+TryBooking Reporting System
+"""
+    
+    # HTML version
+    body_html = f"""<div style="font-family: Arial, sans-serif; font-size: 11pt;">
+<p>Hi Alex,</p>
+<p><strong style="color: #d9534f;">⚠️ URGENT: {len(report_df)} accounts have been identified as high churn risk.</strong></p>
+
+<h3>Summary:</h3>
+<ul>
+<li><strong>Critical Risk (76-100):</strong> {critical_count} accounts</li>
+<li><strong>High Risk (51-75):</strong> {len(report_df) - critical_count} accounts</li>
+<li><strong>Total Revenue at Risk:</strong> £{total_revenue_at_risk:,.2f}</li>
+</ul>
+
+<h3>Immediate Action Required:</h3>
+<p>Please review the attached CSV for the complete list. Each account includes:</p>
+<ul>
+<li>Churn risk score and rating</li>
+<li>Revenue comparison (last year vs current)</li>
+<li>Event frequency changes</li>
+<li>Specific recommended actions</li>
+</ul>
+
+<p>Best regards,<br>TryBooking Reporting System</p>
+</div>"""
+    
+    msg.set_content(body)
+    msg.add_alternative(body_html, subtype='html')
+    
+    # Attach CSV
+    with open(filename, 'rb') as f:
+        file_data = f.read()
+        msg.add_attachment(file_data, maintype='text', subtype='csv', filename=filename)
+    
+    # Send email
+    with smtplib.SMTP('smtp.mailgun.org', 587) as server:
+        server.starttls()
+        server.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
+        server.send_message(msg)
+    
+    print(f"High risk alert sent to {'TEST recipient' if TEST_MODE else 'alex@trybooking.co.uk'} with {len(report_df)} accounts")
 
 # === ANNUAL EVENTS REPORT ===
 def generate_upcoming_annual_events_report(results_df):
@@ -764,6 +971,28 @@ def main():
             print(f"WARNING: Failed to email annual events report: {str(e)}")
     else:
         print("No upcoming annual events requiring outreach in next 30 days")
+    
+    # Generate and email high risk accounts report
+    print("\n=== High Risk Accounts Report ===")
+    high_risk_report = generate_high_risk_accounts_report(updates)
+    if not high_risk_report.empty:
+        risk_filename = f"high_risk_accounts_{datetime.now(UK_TZ).strftime('%Y%m%d')}.csv"
+        high_risk_report.to_csv(risk_filename, index=False)
+        print(f"High risk accounts identified: {len(high_risk_report)}")
+        
+        # Show risk breakdown
+        critical = len(high_risk_report[high_risk_report['Risk_Level'] == 'Critical'])
+        high = len(high_risk_report[high_risk_report['Risk_Level'] == 'High'])
+        print(f"  Critical risk (76-100): {critical} accounts")
+        print(f"  High risk (51-75): {high} accounts")
+        
+        try:
+            email_high_risk_report(high_risk_report, risk_filename)
+            print(f"📧 Emailed high risk accounts alert")
+        except Exception as e:
+            print(f"WARNING: Failed to email high risk report: {str(e)}")
+    else:
+        print("No high risk accounts identified")
     
     # Clean up hidden fields before Zoho upload (including _event_data from metrics_df)
     hidden_cols = [col for col in updates.columns if col.startswith('_')]

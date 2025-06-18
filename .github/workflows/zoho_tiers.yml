@@ -60,3 +60,11 @@ jobs:
           name: annual-events-report
           path: upcoming_annual_events_*.csv
           retention-days: 30
+      
+      - name: Upload High Risk Accounts Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: high-risk-accounts-report
+          path: high_risk_accounts_*.csv
+          retention-days: 30

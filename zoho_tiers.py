@@ -695,6 +695,9 @@ def generate_at_risk_accounts_report(results_df):
 def email_at_risk_report(report_df, filename):
     """Email the at risk accounts report"""
     
+    print(f"Preparing to email at risk report with {len(report_df)} accounts")
+    print(f"Attachment filename: {filename}")
+    
     # Email setup
     msg = EmailMessage()
     msg['Subject'] = f'{"[TEST] " if TEST_MODE else ""}⚠️ At Risk Accounts Alert - {datetime.now().strftime("%B %Y")}'
@@ -751,15 +754,23 @@ TryBooking Reporting System
     msg.add_alternative(body_html, subtype='html')
     
     # Attach CSV
-    with open(filename, 'rb') as f:
-        file_data = f.read()
-        msg.add_attachment(file_data, maintype='text', subtype='csv', filename=filename)
+    try:
+        with open(filename, 'rb') as f:
+            file_data = f.read()
+            msg.add_attachment(file_data, maintype='text', subtype='csv', filename=os.path.basename(filename))
+    except Exception as e:
+        print(f"Error reading attachment file: {e}")
+        raise
     
     # Send email
-    with smtplib.SMTP("smtp.mailgun.org", 587) as smtp:
-        smtp.starttls()
-        smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-        smtp.send_message(msg)
+    try:
+        with smtplib.SMTP("smtp.mailgun.org", 587) as smtp:
+            smtp.starttls()
+            smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
+            smtp.send_message(msg)
+    except Exception as e:
+        print(f"SMTP Error details: {type(e).__name__}: {str(e)}")
+        raise
     
     print(f"At risk alert sent to {'TEST recipient' if TEST_MODE else 'alex@trybooking.co.uk'} with {len(report_df)} accounts")
 
@@ -863,10 +874,14 @@ allowing proactive outreach approximately 1 month before they usually set up the
         msg.add_attachment(csv_data, maintype='text', subtype='csv', filename=filename)
     
     # Send email
-    with smtplib.SMTP("smtp.mailgun.org", 587) as smtp:
-        smtp.starttls()
-        smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-        smtp.send_message(msg)
+    try:
+        with smtplib.SMTP("smtp.mailgun.org", 587) as smtp:
+            smtp.starttls()
+            smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
+            smtp.send_message(msg)
+    except Exception as e:
+        print(f"SMTP Error details: {type(e).__name__}: {str(e)}")
+        raise
     
     recipients = "alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, louise@trybooking.co.uk"
     print(f"Email sent to {recipients} with {len(report_df)} upcoming annual events")

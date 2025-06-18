@@ -587,8 +587,8 @@ allowing proactive outreach approximately 1 month before they usually set up the
 
 Summary:
 - Total accounts requiring outreach: {len(report_df)}
-- Outreach needed within 7 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By']) <= pd.Timestamp.now() + pd.Timedelta(days=7)])}
-- Outreach needed within 14 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By']) <= pd.Timestamp.now() + pd.Timedelta(days=14)])}
+- Outreach needed within 7 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By'], format='%d/%m/%Y') <= pd.Timestamp.now() + pd.Timedelta(days=7)])}
+- Outreach needed within 14 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By'], format='%d/%m/%Y') <= pd.Timestamp.now() + pd.Timedelta(days=14)])}
 
 Best regards,
 TryBooking Reporting System
@@ -603,8 +603,8 @@ allowing proactive outreach approximately 1 month before they usually set up the
 <p><strong>Summary:</strong></p>
 <ul>
 <li>Total accounts requiring outreach: {len(report_df)}</li>
-<li>Outreach needed within 7 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By']) <= pd.Timestamp.now() + pd.Timedelta(days=7)])}</li>
-<li>Outreach needed within 14 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By']) <= pd.Timestamp.now() + pd.Timedelta(days=14)])}</li>
+<li>Outreach needed within 7 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By'], format='%d/%m/%Y') <= pd.Timestamp.now() + pd.Timedelta(days=7)])}</li>
+<li>Outreach needed within 14 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By'], format='%d/%m/%Y') <= pd.Timestamp.now() + pd.Timedelta(days=14)])}</li>
 </ul>
 <p>Best regards,<br>TryBooking Reporting System</p>
 </div>"""

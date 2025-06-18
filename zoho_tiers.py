@@ -75,7 +75,7 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
     dtypes = {
         'BookingTransactionId': 'int64',
         'AccountId': 'int32',
-        'EventID': 'int64',  # Added for event tracking
+        'EventId': 'int64',  # Added for event tracking (note: lowercase 'd')
         'TicketQuantity': 'int16',
         'BookingFee': 'float32',
         'CardFee': 'float32',
@@ -136,8 +136,8 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
                 if len(new_transactions) > 0:
                     # Store only essential columns to save memory
                     essential_cols = ['TransactionDate', 'Revenue', 'TicketQuantity', 'Year', 'BookingTransactionId']
-                    if 'EventID' in new_transactions.columns:
-                        essential_cols.append('EventID')
+                    if 'EventId' in new_transactions.columns:
+                        essential_cols.append('EventId')
                     if 'EventDate' in new_transactions.columns:
                         essential_cols.append('EventDate')
                     
@@ -152,23 +152,23 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
                         if account_metrics[account_id]['last_booking_date'] is None or last_booking > account_metrics[account_id]['last_booking_date']:
                             account_metrics[account_id]['last_booking_date'] = last_booking
                     
-                    # Process events if EventID column exists
-                    if 'EventID' in new_transactions.columns and 'EventDate' in new_transactions.columns:
-                        event_data = new_transactions[['EventID', 'TransactionDate', 'EventDate']].copy()
-                        event_data = event_data[pd.notna(event_data['EventID'])]
+                    # Process events if EventId column exists
+                    if 'EventId' in new_transactions.columns and 'EventDate' in new_transactions.columns:
+                        event_data = new_transactions[['EventId', 'TransactionDate', 'EventDate']].copy()
+                        event_data = event_data[pd.notna(event_data['EventId'])]
                         
                         if len(event_data) > 0:
                             # Vectorized period classification
-                            event_data['EventID'] = event_data['EventID'].astype(int)
+                            event_data['EventId'] = event_data['EventId'].astype(int)
                             current_mask = event_data['TransactionDate'].dt.date >= CUTOFF_365
                             previous_mask = (event_data['TransactionDate'].dt.date >= CUTOFF_730) & (~current_mask)
                             
                             # Update event sets
-                            account_metrics[account_id]['event_ids_current'].update(event_data[current_mask]['EventID'].unique())
-                            account_metrics[account_id]['event_ids_previous'].update(event_data[previous_mask]['EventID'].unique())
+                            account_metrics[account_id]['event_ids_current'].update(event_data[current_mask]['EventId'].unique())
+                            account_metrics[account_id]['event_ids_previous'].update(event_data[previous_mask]['EventId'].unique())
                             
-                            # Group by EventID to find first booking per event
-                            event_groups = event_data[pd.notna(event_data['EventDate'])].groupby('EventID')
+                            # Group by EventId to find first booking per event
+                            event_groups = event_data[pd.notna(event_data['EventDate'])].groupby('EventId')
                             
                             for event_id, group in event_groups:
                                 if event_id not in account_metrics[account_id]['event_creation_info']:
@@ -186,6 +186,15 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
                 print(f"  Processed {total_rows:,} rows...")
         
         print(f"  Total rows processed: {total_rows:,}")
+        
+        # Debug: sample event tracking
+        if len(account_metrics) > 0:
+            sample_accounts = list(account_metrics.keys())[:3]
+            print("\n  Sample event tracking:")
+            for acc_id in sample_accounts:
+                curr_events = len(account_metrics[acc_id].get('event_ids_current', set()))
+                prev_events = len(account_metrics[acc_id].get('event_ids_previous', set()))
+                print(f"    Account {acc_id}: {curr_events} current events, {prev_events} previous events")
     
     return account_metrics
 

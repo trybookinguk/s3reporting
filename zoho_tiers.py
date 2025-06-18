@@ -780,8 +780,8 @@ def generate_upcoming_annual_events_report(results_df):
     annual_accounts = results_df[
         ((results_df['Event_Frequency_Current'] == 'Annual') | 
          (results_df['Event_Frequency_Previous'] == 'Annual')) &
-        ((results_df['revenue_current'] >= MIN_REVENUE) | 
-         (results_df['revenue_prev'] >= MIN_REVENUE))
+        ((results_df['_revenue_current'] >= MIN_REVENUE) | 
+         (results_df['_revenue_previous'] >= MIN_REVENUE))
     ].copy()
     
     upcoming = []
@@ -802,7 +802,7 @@ def generate_upcoming_annual_events_report(results_df):
             # Include if outreach needed in next 30 days
             if 0 <= days_until_outreach <= 30:
                 # Get revenue for context
-                last_revenue = account.get('revenue_prev', 0) if account['Event_Frequency_Previous'] == 'Annual' else account.get('revenue_current', 0)
+                last_revenue = account.get('_revenue_previous', 0) if account['Event_Frequency_Previous'] == 'Annual' else account.get('_revenue_current', 0)
                 
                 upcoming.append({
                     'Account_Name': account['Account_Name'],
@@ -953,8 +953,8 @@ def main():
     annual_with_revenue = len(updates[
         ((updates['Event_Frequency_Current'] == 'Annual') | 
          (updates['Event_Frequency_Previous'] == 'Annual')) &
-        ((updates.get('revenue_current', 0) >= 100) | 
-         (updates.get('revenue_prev', 0) >= 100))
+        ((updates['_revenue_current'] >= 100) | 
+         (updates['_revenue_previous'] >= 100))
     ])
     print(f"Annual accounts with £100+ revenue: {annual_with_revenue}")
     

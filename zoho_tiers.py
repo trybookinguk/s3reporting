@@ -335,18 +335,21 @@ def calculate_churn_probability(current_events, previous_events, revenue_current
 
 def determine_activity_rating(current_freq, previous_freq, days_since_last, has_historical, avg_lead_days=60, last_event_date=None):
     """Determine activity rating based on event patterns and creation lead times"""
+    # Active if any current activity
     if current_freq != "Inactive":
         return "Active"
     
+    # New account (no previous activity ever)
     if previous_freq == "Inactive" and not has_historical:
-        return "New" if days_since_last < 365 else "Inactive"
+        return "New"
     
+    # Returned (was inactive in previous period but now active)
     if current_freq != "Inactive" and previous_freq == "Inactive" and has_historical:
         return "Returned"
     
-    # At Risk logic using creation lead times
-    if previous_freq != "Inactive" and current_freq == "Inactive":
-        # For annual/occasional events, check if we're past expected creation time
+    # No current activity - determine if At Risk, Churned, or New
+    if current_freq == "Inactive":
+        # For annual/occasional events, use creation lead time logic
         if previous_freq in ["Annual", "Occasional"] and last_event_date:
             # Calculate when they should have created their next event
             expected_next_event = last_event_date + pd.Timedelta(days=365)
@@ -362,13 +365,19 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
                 # Not yet time to create next event
                 return "Active"
         
-        # For regular events or if no date info, use simpler logic
-        if days_since_last < 180:
-            return "At Risk"
+        # For regular events or if no previous activity
+        if previous_freq != "Inactive":
+            # Had activity before, now inactive
+            if days_since_last < 180:
+                return "At Risk"
+            else:
+                return "Churned"
         else:
-            return "Churned"
+            # No activity in current or previous periods
+            return "New"
     
-    return "Inactive"
+    # Default - should never reach here but return New to avoid "Inactive"
+    return "New"
 
 # === METRICS CALC ===
 def calculate_metrics_from_aggregated(account_metrics):
@@ -583,7 +592,7 @@ def calculate_metrics_from_aggregated(account_metrics):
     if not results_df.empty:
         rating_counts = results_df['Rating'].value_counts()
         print("\nActivity Rating Summary:")
-        for rating in ['Active', 'At Risk', 'Churned', 'Returned', 'New', 'Inactive']:
+        for rating in ['Active', 'At Risk', 'Churned', 'Returned', 'New']:
             count = rating_counts.get(rating, 0)
             print(f"  {rating}: {count:,} accounts")
         
@@ -646,9 +655,9 @@ def upsert_to_zoho(token, records_df):
         except Exception as e:
             print(f"Batch {i//batch_size + 1} error: {str(e)}")
 
-# === HIGH RISK ACCOUNTS REPORT ===
-def generate_high_risk_accounts_report(results_df):
-    """Generate report for high churn risk accounts needing immediate attention"""
+# === AT RISK ACCOUNTS REPORT ===
+def generate_at_risk_accounts_report(results_df):
+    """Generate report for at risk accounts needing immediate attention"""
     
     # Filter for high risk accounts (>50 churn risk) with meaningful revenue
     MIN_REVENUE = 50  # £50 minimum to focus on valuable accounts
@@ -673,43 +682,28 @@ def generate_high_risk_accounts_report(results_df):
             'Rating': account['Rating'],
             'Event_Pattern': account['Event_Frequency_Current'],
             'Current_Tier': account['Current_Tier'],
-            'Last_Year_Revenue': f"£{account.get('_revenue_previous', 0):.2f}",
-            'Current_Revenue': f"£{account.get('_revenue_current', 0):.2f}",
-            'Revenue_Change': f"{((account.get('_revenue_current', 0) - account.get('_revenue_previous', 0)) / account.get('_revenue_previous', 1) * 100):.0f}%" if account.get('_revenue_previous', 0) > 0 else "N/A",
-            'Last_Year_Events': int(account.get('Event_Frequency_Previous', 'Inactive') != 'Inactive') * account.get('_event_count_previous', 1),
-            'Current_Events': account.get('_event_count_current', 0),
-            'Recommended_Action': get_risk_action(account)
+            'Last_Year_Revenue': round(account.get('_revenue_previous', 0), 2),
+            'Current_Revenue': round(account.get('_revenue_current', 0), 2),
+            'Revenue_Change': round(((account.get('_revenue_current', 0) - account.get('_revenue_previous', 0)) / account.get('_revenue_previous', 0) * 100), 0) if account.get('_revenue_previous', 0) > 0 else 0,
+            'Last_Year_Events': account.get('_event_count_previous', 0),
+            'Current_Events': account.get('_event_count_current', 0)
         })
     
     return pd.DataFrame(report_data)
 
-def get_risk_action(account):
-    """Determine recommended action based on risk factors"""
-    if account['Rating'] == 'At Risk':
-        if account['Event_Frequency_Current'] == 'Annual':
-            return "Urgent: Annual event overdue - immediate outreach needed"
-        else:
-            return "Proactive check-in - activity declining"
-    elif account['Rating'] == 'Churned':
-        return "Win-back campaign - high value lost account"
-    elif account['Churn_Risk'] > 75:
-        return "Critical: Immediate intervention required"
-    else:
-        return "Monitor closely - showing risk signals"
 
-def email_high_risk_report(report_df, filename):
-    """Email the high risk accounts report"""
+def email_at_risk_report(report_df, filename):
+    """Email the at risk accounts report"""
     
     # Email setup
     msg = EmailMessage()
-    msg['Subject'] = f'{"[TEST] " if TEST_MODE else ""}⚠️ High Risk Accounts Alert - {datetime.now().strftime("%B %Y")}'
+    msg['Subject'] = f'{"[TEST] " if TEST_MODE else ""}⚠️ At Risk Accounts Alert - {datetime.now().strftime("%B %Y")}'
     msg['From'] = f'TryBooking Reporting <reports@{MAILGUN_DOMAIN}>'
     msg['To'] = TEST_RECIPIENT if TEST_MODE else 'alex@trybooking.co.uk'
     
     # Calculate summary stats
     critical_count = len(report_df[report_df['Risk_Level'] == 'Critical'])
-    total_revenue_at_risk = sum(float(str(rev).replace('£', '').replace(',', '')) 
-                                for rev in report_df['Current_Revenue'])
+    total_revenue_at_risk = report_df['Current_Revenue'].sum()
     
     # Plain text body
     body = f"""Hi Alex,
@@ -722,9 +716,9 @@ Summary:
 - Total Revenue at Risk: £{total_revenue_at_risk:,.2f}
 
 Top 5 Highest Risk Accounts:
-{report_df.head()[['Account_Name', 'Churn_Risk_Score', 'Current_Revenue', 'Recommended_Action']].to_string(index=False)}
+{report_df.head()[['Account_Name', 'Churn_Risk_Score', 'Current_Revenue', 'Rating']].to_string(index=False)}
 
-Please review the attached CSV for the complete list and recommended actions.
+Please review the attached CSV for the complete list.
 
 Best regards,
 TryBooking Reporting System
@@ -748,7 +742,6 @@ TryBooking Reporting System
 <li>Churn risk score and rating</li>
 <li>Revenue comparison (last year vs current)</li>
 <li>Event frequency changes</li>
-<li>Specific recommended actions</li>
 </ul>
 
 <p>Best regards,<br>TryBooking Reporting System</p>
@@ -762,13 +755,25 @@ TryBooking Reporting System
         file_data = f.read()
         msg.add_attachment(file_data, maintype='text', subtype='csv', filename=filename)
     
-    # Send email
-    with smtplib.SMTP('smtp.mailgun.org', 587) as server:
-        server.starttls()
-        server.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-        server.send_message(msg)
+    # Send email with timeout and error handling
+    try:
+        smtp = smtplib.SMTP('smtp.mailgun.org', 587, timeout=30)
+        smtp.starttls()
+        smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
+        smtp.send_message(msg)
+        smtp.quit()
+    except smtplib.SMTPException as e:
+        # Try once more with a fresh connection
+        try:
+            smtp = smtplib.SMTP('smtp.mailgun.org', 587, timeout=30)
+            smtp.starttls()
+            smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
+            smtp.send_message(msg)
+            smtp.quit()
+        except Exception as retry_e:
+            raise Exception(f"Failed to send email after retry: {str(retry_e)}") from retry_e
     
-    print(f"High risk alert sent to {'TEST recipient' if TEST_MODE else 'alex@trybooking.co.uk'} with {len(report_df)} accounts")
+    print(f"At risk alert sent to {'TEST recipient' if TEST_MODE else 'alex@trybooking.co.uk'} with {len(report_df)} accounts")
 
 # === ANNUAL EVENTS REPORT ===
 def generate_upcoming_annual_events_report(results_df):
@@ -869,11 +874,23 @@ allowing proactive outreach approximately 1 month before they usually set up the
         csv_data = f.read()
         msg.add_attachment(csv_data, maintype='text', subtype='csv', filename=filename)
     
-    # Send email via Mailgun
-    with smtplib.SMTP("smtp.mailgun.org", 587) as smtp:
+    # Send email with timeout and error handling
+    try:
+        smtp = smtplib.SMTP('smtp.mailgun.org', 587, timeout=30)
         smtp.starttls()
         smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
         smtp.send_message(msg)
+        smtp.quit()
+    except smtplib.SMTPException as e:
+        # Try once more with a fresh connection
+        try:
+            smtp = smtplib.SMTP('smtp.mailgun.org', 587, timeout=30)
+            smtp.starttls()
+            smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
+            smtp.send_message(msg)
+            smtp.quit()
+        except Exception as retry_e:
+            raise Exception(f"Failed to send email after retry: {str(retry_e)}") from retry_e
     
     recipients = "alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, louise@trybooking.co.uk"
     print(f"Email sent to {recipients} with {len(report_df)} upcoming annual events")
@@ -972,27 +989,27 @@ def main():
     else:
         print("No upcoming annual events requiring outreach in next 30 days")
     
-    # Generate and email high risk accounts report
-    print("\n=== High Risk Accounts Report ===")
-    high_risk_report = generate_high_risk_accounts_report(updates)
-    if not high_risk_report.empty:
-        risk_filename = f"high_risk_accounts_{datetime.now(UK_TZ).strftime('%Y%m%d')}.csv"
-        high_risk_report.to_csv(risk_filename, index=False)
-        print(f"High risk accounts identified: {len(high_risk_report)}")
+    # Generate and email at risk accounts report
+    print("\n=== At Risk Accounts Report ===")
+    at_risk_report = generate_at_risk_accounts_report(updates)
+    if not at_risk_report.empty:
+        risk_filename = f"at_risk_accounts_{datetime.now(UK_TZ).strftime('%Y%m%d')}.csv"
+        at_risk_report.to_csv(risk_filename, index=False)
+        print(f"At risk accounts identified: {len(at_risk_report)}")
         
         # Show risk breakdown
-        critical = len(high_risk_report[high_risk_report['Risk_Level'] == 'Critical'])
-        high = len(high_risk_report[high_risk_report['Risk_Level'] == 'High'])
+        critical = len(at_risk_report[at_risk_report['Risk_Level'] == 'Critical'])
+        high = len(at_risk_report[at_risk_report['Risk_Level'] == 'High'])
         print(f"  Critical risk (76-100): {critical} accounts")
         print(f"  High risk (51-75): {high} accounts")
         
         try:
-            email_high_risk_report(high_risk_report, risk_filename)
-            print(f"📧 Emailed high risk accounts alert")
+            email_at_risk_report(at_risk_report, risk_filename)
+            print(f"📧 Emailed at risk accounts alert")
         except Exception as e:
-            print(f"WARNING: Failed to email high risk report: {str(e)}")
+            print(f"WARNING: Failed to email at risk report: {str(e)}")
     else:
-        print("No high risk accounts identified")
+        print("No at risk accounts identified")
     
     # Clean up hidden fields before Zoho upload (including _event_data from metrics_df)
     hidden_cols = [col for col in updates.columns if col.startswith('_')]

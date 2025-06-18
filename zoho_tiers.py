@@ -538,10 +538,14 @@ def upsert_to_zoho(token, records_df):
 def generate_upcoming_annual_events_report(results_df):
     """Generate report for annual events needing outreach"""
     
-    # Filter for annual pattern accounts
+    # Filter for annual pattern accounts with minimum revenue
+    MIN_REVENUE = 100  # £100 minimum revenue threshold
+    
     annual_accounts = results_df[
-        (results_df['Event_Frequency_Current'] == 'Annual') | 
-        (results_df['Event_Frequency_Previous'] == 'Annual')
+        ((results_df['Event_Frequency_Current'] == 'Annual') | 
+         (results_df['Event_Frequency_Previous'] == 'Annual')) &
+        ((results_df['revenue_current'] >= MIN_REVENUE) | 
+         (results_df['revenue_prev'] >= MIN_REVENUE))
     ].copy()
     
     upcoming = []
@@ -561,6 +565,9 @@ def generate_upcoming_annual_events_report(results_df):
             
             # Include if outreach needed in next 30 days
             if 0 <= days_until_outreach <= 30:
+                # Get revenue for context
+                last_revenue = account.get('revenue_prev', 0) if account['Event_Frequency_Previous'] == 'Annual' else account.get('revenue_current', 0)
+                
                 upcoming.append({
                     'Account_Name': account['Account_Name'],
                     'Tier': account['Current_Tier'],
@@ -569,6 +576,7 @@ def generate_upcoming_annual_events_report(results_df):
                     'Typical_Creation_Lead_Days': lead_days,
                     'Reach_Out_By': outreach_date.strftime('%d/%m/%Y'),
                     'Last_Year_Tickets': int(account['Last_Year_Ticket_Quantity']),
+                    'Last_Year_Revenue': f"£{last_revenue:.2f}",
                     'Status': account['Activity_Rating']
                 })
     
@@ -698,18 +706,35 @@ def main():
             print(f"  Account {row['Account_Name']}: {row['Previous_Tier']} → {row['Current_Tier']}")
     
     # Generate and email annual events report
+    print("\n=== Annual Events Report ===")
+    # First show how many annual accounts we have
+    annual_count = len(updates[updates['Event_Frequency_Current'] == 'Annual'])
+    annual_prev_count = len(updates[updates['Event_Frequency_Previous'] == 'Annual'])
+    print(f"Annual accounts (current): {annual_count}")
+    print(f"Annual accounts (previous): {annual_prev_count}")
+    
+    # Show revenue filter impact
+    annual_with_revenue = len(updates[
+        ((updates['Event_Frequency_Current'] == 'Annual') | 
+         (updates['Event_Frequency_Previous'] == 'Annual')) &
+        ((updates.get('revenue_current', 0) >= 100) | 
+         (updates.get('revenue_prev', 0) >= 100))
+    ])
+    print(f"Annual accounts with £100+ revenue: {annual_with_revenue}")
+    
     annual_report = generate_upcoming_annual_events_report(updates)
     if not annual_report.empty:
         report_filename = f"upcoming_annual_events_{datetime.now(UK_TZ).strftime('%Y%m%d')}.csv"
         annual_report.to_csv(report_filename, index=False)
+        print(f"Upcoming annual events needing outreach: {len(annual_report)}")
         
         try:
             email_upcoming_events_report(annual_report, report_filename)
-            print(f"\n📧 Emailed upcoming annual events report: {len(annual_report)} accounts")
+            print(f"📧 Emailed upcoming annual events report")
         except Exception as e:
             print(f"WARNING: Failed to email annual events report: {str(e)}")
     else:
-        print("\nNo upcoming annual events requiring outreach.")
+        print("No upcoming annual events requiring outreach in next 30 days")
     
     # Clean up hidden fields before Zoho upload (including _event_data from metrics_df)
     hidden_cols = [col for col in updates.columns if col.startswith('_')]

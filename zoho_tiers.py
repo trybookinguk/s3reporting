@@ -276,8 +276,8 @@ def classify_event_frequency(event_count):
     else:  # 4+
         return "Regular"
 
-def determine_activity_rating(current_freq, previous_freq, days_since_last, has_historical):
-    """Determine activity rating based on event patterns"""
+def determine_activity_rating(current_freq, previous_freq, days_since_last, has_historical, avg_lead_days=60, last_event_date=None):
+    """Determine activity rating based on event patterns and creation lead times"""
     if current_freq != "Inactive":
         return "Active"
     
@@ -287,14 +287,29 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
     if current_freq != "Inactive" and previous_freq == "Inactive" and has_historical:
         return "Returned"
     
-    # At Risk logic accounting for event patterns
-    if days_since_last < 365 and days_since_last > 90:
-        if previous_freq == "Annual" and days_since_last < 275:  # More grace for annual
-            return "Active"
-        return "At Risk"
-    
+    # At Risk logic using creation lead times
     if previous_freq != "Inactive" and current_freq == "Inactive":
-        return "Churned"
+        # For annual/occasional events, check if we're past expected creation time
+        if previous_freq in ["Annual", "Occasional"] and last_event_date:
+            # Calculate when they should have created their next event
+            expected_next_event = last_event_date + pd.Timedelta(days=365)
+            expected_creation_date = expected_next_event - pd.Timedelta(days=avg_lead_days)
+            days_past_expected_creation = (pd.Timestamp.now().date() - expected_creation_date).days
+            
+            # At Risk if past expected creation but not too far past
+            if 0 < days_past_expected_creation <= 90:
+                return "At Risk"
+            elif days_past_expected_creation > 90:
+                return "Churned"
+            else:
+                # Not yet time to create next event
+                return "Active"
+        
+        # For regular events or if no date info, use simpler logic
+        if days_since_last < 180:
+            return "At Risk"
+        else:
+            return "Churned"
     
     return "Inactive"
 
@@ -463,14 +478,15 @@ def calculate_metrics_from_aggregated(account_metrics):
         last_booking = event_data.get('last_booking_date')
         days_since_last = (TODAY - last_booking.date()).days if last_booking else 999
         
-        # Determine activity rating
-        activity_rating = determine_activity_rating(
-            event_freq_current, event_freq_previous, days_since_last, has_historical
-        )
-        
         # Get last event date
         event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]
         last_event_date = max(event_dates).date() if event_dates else None
+        
+        # Determine activity rating with lead time consideration
+        activity_rating = determine_activity_rating(
+            event_freq_current, event_freq_previous, days_since_last, has_historical,
+            avg_lead_days=avg_lead_days, last_event_date=last_event_date
+        )
             
         results.append({
             "Account_Name": account_name,
@@ -493,7 +509,16 @@ def calculate_metrics_from_aggregated(account_metrics):
     for freq_type, count in event_freq_summary.items():
         print(f"  {freq_type}: {count:,} accounts")
     
-    return pd.DataFrame(results)
+    # Activity rating summary
+    results_df = pd.DataFrame(results)
+    if not results_df.empty:
+        rating_counts = results_df['Rating'].value_counts()
+        print("\nActivity Rating Summary:")
+        for rating in ['Active', 'At Risk', 'Churned', 'Returned', 'New', 'Inactive']:
+            count = rating_counts.get(rating, 0)
+            print(f"  {rating}: {count:,} accounts")
+    
+    return results_df
 
 # === ZOHO UPSERT ===
 def upsert_to_zoho(token, records_df):

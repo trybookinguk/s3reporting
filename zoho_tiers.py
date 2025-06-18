@@ -805,7 +805,7 @@ def generate_upcoming_annual_events_report(results_df):
                     'Typical_Creation_Lead_Days': lead_days,
                     'Reach_Out_By': outreach_date.strftime('%d/%m/%Y'),
                     'Last_Year_Tickets': int(account['Last_Year_Ticket_Quantity']),
-                    'Last_Year_Revenue': f"£{last_revenue:.2f}",
+                    'Last_Year_Revenue': round(last_revenue, 2),
                     'Status': account['Rating']
                 })
     

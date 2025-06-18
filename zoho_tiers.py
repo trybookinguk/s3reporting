@@ -75,7 +75,7 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
     dtypes = {
         'BookingTransactionId': 'int64',
         'AccountId': 'int32',
-        'EventId': 'int64',  # Added for event tracking (note: lowercase 'd')
+        'EventId': 'Int64',  # Nullable integer type for EventId (note capital 'I')
         'TicketQuantity': 'int16',
         'BookingFee': 'float32',
         'CardFee': 'float32',
@@ -158,24 +158,28 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
                         event_data = event_data[pd.notna(event_data['EventId'])]
                         
                         if len(event_data) > 0:
-                            # Vectorized period classification
-                            event_data['EventId'] = event_data['EventId'].astype(int)
+                            # Vectorized period classification (EventId is already Int64 nullable type)
+                            # No need to convert, as Int64 handles nulls properly
                             current_mask = event_data['TransactionDate'].dt.date >= CUTOFF_365
                             previous_mask = (event_data['TransactionDate'].dt.date >= CUTOFF_730) & (~current_mask)
                             
-                            # Update event sets
-                            account_metrics[account_id]['event_ids_current'].update(event_data[current_mask]['EventId'].unique())
-                            account_metrics[account_id]['event_ids_previous'].update(event_data[previous_mask]['EventId'].unique())
+                            # Update event sets (convert nullable Int64 to regular int)
+                            current_events = event_data[current_mask]['EventId'].dropna().astype(int).unique()
+                            previous_events = event_data[previous_mask]['EventId'].dropna().astype(int).unique()
+                            account_metrics[account_id]['event_ids_current'].update(current_events)
+                            account_metrics[account_id]['event_ids_previous'].update(previous_events)
                             
                             # Group by EventId to find first booking per event
                             event_groups = event_data[pd.notna(event_data['EventDate'])].groupby('EventId')
                             
                             for event_id, group in event_groups:
-                                if event_id not in account_metrics[account_id]['event_creation_info']:
+                                # Convert nullable Int64 to regular int for dictionary key
+                                event_id_key = int(event_id) if pd.notna(event_id) else None
+                                if event_id_key and event_id_key not in account_metrics[account_id]['event_creation_info']:
                                     first_booking = group['TransactionDate'].min()
                                     event_date = group['EventDate'].iloc[0]
                                     lead_days = (pd.to_datetime(event_date).date() - first_booking.date()).days
-                                    account_metrics[account_id]['event_creation_info'][event_id] = {
+                                    account_metrics[account_id]['event_creation_info'][event_id_key] = {
                                         'first_booking': first_booking,
                                         'event_date': pd.to_datetime(event_date),
                                         'lead_days': max(lead_days, 0)

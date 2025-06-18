@@ -220,7 +220,7 @@ def determine_tier_from_percentiles(a_pct, b_pct, c_years, d_pct, e_pct, has_act
     tier_thresholds = {
         "Key Account": 99,    # Top 1%
         "High Value": 95,     # Top 5%
-        "Tier 4": 80,         # Top 20%
+        "Tier 4": 75,         # Top 25%
         "Tier 3": 50,         # Top 50%
         "Tier 2": 25,         # Top 75%
     }

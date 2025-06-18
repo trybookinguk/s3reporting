@@ -755,23 +755,11 @@ TryBooking Reporting System
         file_data = f.read()
         msg.add_attachment(file_data, maintype='text', subtype='csv', filename=filename)
     
-    # Send email with timeout and error handling
-    try:
-        smtp = smtplib.SMTP('smtp.mailgun.org', 587, timeout=30)
+    # Send email
+    with smtplib.SMTP("smtp.mailgun.org", 587) as smtp:
         smtp.starttls()
         smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
         smtp.send_message(msg)
-        smtp.quit()
-    except smtplib.SMTPException as e:
-        # Try once more with a fresh connection
-        try:
-            smtp = smtplib.SMTP('smtp.mailgun.org', 587, timeout=30)
-            smtp.starttls()
-            smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-            smtp.send_message(msg)
-            smtp.quit()
-        except Exception as retry_e:
-            raise Exception(f"Failed to send email after retry: {str(retry_e)}") from retry_e
     
     print(f"At risk alert sent to {'TEST recipient' if TEST_MODE else 'alex@trybooking.co.uk'} with {len(report_df)} accounts")
 
@@ -874,23 +862,11 @@ allowing proactive outreach approximately 1 month before they usually set up the
         csv_data = f.read()
         msg.add_attachment(csv_data, maintype='text', subtype='csv', filename=filename)
     
-    # Send email with timeout and error handling
-    try:
-        smtp = smtplib.SMTP('smtp.mailgun.org', 587, timeout=30)
+    # Send email
+    with smtplib.SMTP("smtp.mailgun.org", 587) as smtp:
         smtp.starttls()
         smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
         smtp.send_message(msg)
-        smtp.quit()
-    except smtplib.SMTPException as e:
-        # Try once more with a fresh connection
-        try:
-            smtp = smtplib.SMTP('smtp.mailgun.org', 587, timeout=30)
-            smtp.starttls()
-            smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-            smtp.send_message(msg)
-            smtp.quit()
-        except Exception as retry_e:
-            raise Exception(f"Failed to send email after retry: {str(retry_e)}") from retry_e
     
     recipients = "alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, louise@trybooking.co.uk"
     print(f"Email sent to {recipients} with {len(report_df)} upcoming annual events")

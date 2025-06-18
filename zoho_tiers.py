@@ -481,7 +481,7 @@ def calculate_metrics_from_aggregated(account_metrics):
             "Years_Loyalty": row['years_loyalty'],
             "Event_Frequency_Current": event_freq_current,
             "Event_Frequency_Previous": event_freq_previous,
-            "Activity_Rating": activity_rating,
+            "Rating": activity_rating,  # Changed from Activity_Rating to match Zoho field name
             # Hidden fields for report generation (prefix with _)
             "_avg_lead_days": avg_lead_days,
             "_last_event_date": last_event_date,
@@ -506,8 +506,12 @@ def upsert_to_zoho(token, records_df):
     # Check test mode
     if TEST_MODE:
         print("TEST MODE: Would update the following accounts:")
-        print(records_df[['Account_Name', 'Current_Tier', 'Previous_Tier', 'Ticket_Quantity', 'Last_Year_Ticket_Quantity']].head(20))
+        # Show all the fields including new ones
+        display_cols = ['Account_Name', 'Current_Tier', 'Previous_Tier', 'Event_Frequency_Current', 
+                       'Event_Frequency_Previous', 'Rating', 'Ticket_Quantity']
+        print(records_df[display_cols].head(10))
         print(f"\nTotal accounts to update: {len(records_df)}")
+        print(f"Columns being sent to Zoho: {list(records_df.columns)}")
         return
     
     # Process in batches of 100 (Zoho max)

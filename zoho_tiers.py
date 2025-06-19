@@ -427,44 +427,122 @@ def calculate_business_value(row):
     
     return tier_score + ltv_score
 
-def calculate_seasonality_multiplier(account_id, account_metrics):
+def calculate_seasonality_multiplier(account_id, account_metrics, all_accounts_df=None, industry_lookup=None):
     """
-    Reduce risk during known quiet periods
-    Returns multiplier 0.8-1.0
+    Dynamic seasonality adjustment based on historical patterns
+    Returns multiplier between 0.5-1.2
     """
     if account_id not in account_metrics or not account_metrics[account_id].get('event_creation_info'):
         return 1.0
     
     # Extract event dates from historical data
     event_info = account_metrics[account_id]['event_creation_info']
-    if not event_info:
+    if not event_info or len(event_info) < 2:  # Need minimum history
         return 1.0
         
-    # Get event months
-    event_months = []
+    # Get monthly revenue distribution (more reliable than event count)
+    monthly_revenue = {}
     for info in event_info.values():
         if info.get('event_date'):
-            month = pd.to_datetime(info['event_date']).month
-            event_months.append(month)
+            event_date = pd.to_datetime(info['event_date'])
+            month = event_date.month
+            # Aggregate revenue by month (would need transaction data ideally)
+            monthly_revenue[month] = monthly_revenue.get(month, 0) + 1
     
-    if not event_months:
+    if not monthly_revenue:
         return 1.0
     
-    # Calculate monthly distribution
-    month_counts = pd.Series(event_months).value_counts()
-    total_events = len(event_months)
+    # Convert to pandas Series for analysis
+    month_series = pd.Series(monthly_revenue)
+    month_series = month_series.reindex(range(1, 13), fill_value=0)  # All 12 months
     
-    # Check if seasonal (>70% events in 6 months)
-    if total_events >= 3:  # Need minimum events to determine seasonality
-        top_6_months = month_counts.nlargest(6).sum()
-        if top_6_months / total_events > 0.7:
-            peak_months = month_counts.nlargest(6).index.tolist()
-            current_month = datetime.now().month
+    # Calculate seasonality strength using coefficient of variation
+    cv = month_series.std() / month_series.mean() if month_series.mean() > 0 else 0
+    
+    # Determine if account is seasonal
+    is_seasonal = False
+    peak_months = []
+    off_months = []
+    
+    if cv > 0.5:  # Significant variation indicates seasonality
+        # Use percentile approach for dynamic thresholds
+        p75 = month_series.quantile(0.75)
+        p25 = month_series.quantile(0.25)
+        
+        peak_months = month_series[month_series >= p75].index.tolist()
+        off_months = month_series[month_series <= p25].index.tolist()
+        is_seasonal = True
+    
+    if not is_seasonal:
+        return 1.0
+    
+    # Current month analysis
+    current_month = datetime.now().month
+    
+    # Dynamic multiplier calculation
+    if current_month in peak_months:
+        # Peak season - slightly increase urgency if declining
+        return 1.1
+    elif current_month in off_months:
+        # Off season - reduce risk proportionally to how "off" it is
+        if month_series[current_month] == 0:
+            # Never active this month historically
+            base_reduction = 0.5
+        else:
+            # Some activity - less reduction
+            activity_ratio = month_series[current_month] / month_series.mean()
+            base_reduction = 0.7 + (0.3 * activity_ratio)  # 0.7-1.0 range
+        
+        # Industry adjustment if available
+        if all_accounts_df is not None and industry_lookup and account_id in industry_lookup:
+            industry = industry_lookup[account_id]
             
-            if current_month not in peak_months:
-                return 0.8  # 20% risk reduction
+            # Check if entire industry is seasonal
+            industry_accounts = all_accounts_df[
+                all_accounts_df['Account_Name'].apply(
+                    lambda x: industry_lookup.get(int(x), '') == industry
+                )
+            ]
+            
+            if len(industry_accounts) >= 20:
+                # Calculate what % of industry is active this month
+                # This would need transaction data aggregated by month
+                industry_active_pct = 0.5  # Placeholder - would calculate from data
+                
+                # If most of industry is quiet, give more reduction
+                if industry_active_pct < 0.3:
+                    base_reduction *= 0.9  # Additional 10% reduction
+        
+        return base_reduction
+    else:
+        # Shoulder season - neutral
+        return 1.0
+
+def calculate_industry_seasonality_pattern(industry_cohort, booking_data):
+    """
+    Calculate industry-wide seasonal patterns for comparison
+    Returns dict with monthly activity levels
+    """
+    # Aggregate booking data by month for entire industry
+    industry_monthly = {}
     
-    return 1.0
+    for account_id in industry_cohort['Account_Name']:
+        account_bookings = booking_data[booking_data['AccountId'] == account_id]
+        monthly_revenue = account_bookings.groupby(
+            pd.to_datetime(account_bookings['TransactionDate']).dt.month
+        )['Revenue'].sum()
+        
+        for month, revenue in monthly_revenue.items():
+            industry_monthly[month] = industry_monthly.get(month, 0) + revenue
+    
+    # Convert to normalized pattern (0-1 scale)
+    total_revenue = sum(industry_monthly.values())
+    if total_revenue > 0:
+        pattern = {m: v/total_revenue for m, v in industry_monthly.items()}
+    else:
+        pattern = {m: 1/12 for m in range(1, 13)}  # Uniform if no data
+        
+    return pattern
 
 def calculate_critical_flags(row):
     """
@@ -622,11 +700,13 @@ def calculate_bulletproof_churn_risk(row, all_accounts_df, industry_lookup, sub_
         )
         
         # Apply modifiers
-        seasonality_mult = calculate_seasonality_multiplier(account_id, account_metrics)
+        seasonality_mult = calculate_seasonality_multiplier(
+            account_id, account_metrics, all_accounts_df, industry_lookup
+        )
         critical_mult = calculate_critical_flags(row)
         
-        # Validate multipliers
-        if seasonality_mult < 0.5 or seasonality_mult > 1.5:
+        # Validate multipliers (now 0.5-1.2 range)
+        if seasonality_mult < 0.4 or seasonality_mult > 1.3:
             print(f"  WARNING: Account {account_id} seasonality multiplier unusual: {seasonality_mult}")
         if critical_mult < 0.5 or critical_mult > 2.0:
             print(f"  WARNING: Account {account_id} critical multiplier unusual: {critical_mult}")

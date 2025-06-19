@@ -767,8 +767,8 @@ def calculate_event_frequency_v2(account_row, booking_data, first_event_created_
                     return {
                         'pattern': pattern,
                         'clusters_per_year': clusters_per_year,
-                        'months_active': len(pd.DatetimeIndex(event_dates).to_period('M').unique()),
-                        'typical_months': pd.DatetimeIndex(event_dates).month.value_counts().head(3).index.tolist(),
+                        'months_active': len(pd.DatetimeIndex(event_dates).tz_localize(None).to_period('M').unique()),
+                        'typical_months': pd.DatetimeIndex(event_dates).tz_localize(None).month.value_counts().head(3).index.tolist(),
                         'days_since_created': 999,  # Unknown
                         'days_since_visible': (datetime.now(UK_TZ) - event_dates.max()).days
                     }
@@ -824,7 +824,7 @@ def calculate_event_frequency_v2(account_row, booking_data, first_event_created_
         'pattern': pattern,
         'clusters_per_year': clusters_per_year,
         'months_active': months_with_events,
-        'typical_months': pd.DatetimeIndex(event_dates).month.value_counts().head(3).index.tolist(),
+        'typical_months': pd.DatetimeIndex(event_dates).tz_localize(None).month.value_counts().head(3).index.tolist(),
         'days_since_created': (datetime.now(UK_TZ) - last_created).days,
         'days_since_visible': (datetime.now(UK_TZ) - event_dates.max()).days if len(event_dates) > 0 else 999
     }
@@ -1872,9 +1872,22 @@ def main():
             industry_lookup = dict(zip(accounts_df['Id'].astype(int), accounts_df['Industry'].fillna('Unknown')))
             sub_industry_lookup = dict(zip(accounts_df['Id'].astype(int), accounts_df['SubIndustry'].fillna('Unknown')))
             
-            # Add creation date lookups
-            first_event_created_lookup = dict(zip(accounts_df['Id'].astype(int), pd.to_datetime(accounts_df['FirstEventCreated'], errors='coerce')))
-            last_event_created_lookup = dict(zip(accounts_df['Id'].astype(int), pd.to_datetime(accounts_df['LastEventCreated'], errors='coerce')))
+            # Add creation date lookups with proper timezone handling
+            # Parse dates and localize to UK timezone
+            first_dates = pd.to_datetime(accounts_df['FirstEventCreated'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+            last_dates = pd.to_datetime(accounts_df['LastEventCreated'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+            
+            # Localize to UK timezone if not already timezone-aware
+            try:
+                if not first_dates.empty and first_dates.dt.tz is None:
+                    first_dates = first_dates.dt.tz_localize(UK_TZ)
+                if not last_dates.empty and last_dates.dt.tz is None:
+                    last_dates = last_dates.dt.tz_localize(UK_TZ)
+            except Exception as e:
+                print(f"  Warning: Could not localize dates: {e}")
+                
+            first_event_created_lookup = dict(zip(accounts_df['Id'].astype(int), first_dates))
+            last_event_created_lookup = dict(zip(accounts_df['Id'].astype(int), last_dates))
             
             # Debug: Show industry distribution
             industry_counts = accounts_df['Industry'].value_counts().head(10)
@@ -1888,7 +1901,16 @@ def main():
             for acc_id in test_accounts:
                 first = first_event_created_lookup.get(acc_id, 'Not found')
                 last = last_event_created_lookup.get(acc_id, 'Not found')
-                print(f"    Account {acc_id}: First={first}, Last={last}")
+                if pd.notna(last) and last != 'Not found':
+                    days_since = (datetime.now(UK_TZ) - last).days
+                    print(f"    Account {acc_id}: Last={last}, Days since={days_since}")
+                else:
+                    print(f"    Account {acc_id}: First={first}, Last={last}")
+            
+            # Check overall parsing success
+            valid_first = sum(1 for v in first_event_created_lookup.values() if pd.notna(v))
+            valid_last = sum(1 for v in last_event_created_lookup.values() if pd.notna(v))
+            print(f"\n  Date parsing success: First={valid_first}/{len(accounts_df)}, Last={valid_last}/{len(accounts_df)}")
                 
         except Exception as e:
             print(f"WARNING: Could not load Accounts data: {e}")

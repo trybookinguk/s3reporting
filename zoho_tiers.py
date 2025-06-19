@@ -691,12 +691,9 @@ def calculate_bulletproof_churn_risk(row, all_accounts_df, industry_lookup, sub_
     try:
         account_id = int(row['Account_Name'])
         
-        # Debug first few accounts
-        if str(account_id) in ['3', '4', '7', '36', '41']:
-            print(f"\n  DEBUG Account {account_id}:")
-            print(f"    Row keys: {list(row.keys())[:10]}...")  # Show first 10 keys
-            print(f"    revenue_current_pct: {row.get('revenue_current_pct', 'MISSING')}")
-            print(f"    revenue_prev_pct: {row.get('revenue_prev_pct', 'MISSING')}")
+        # Debug sample accounts for score distribution
+        if account_id in [100, 500, 1000, 5000]:
+            print(f"  Account {account_id}: Tier={row.get('Current_Tier')}, Rev%={row.get('revenue_current_pct', 0):.1f}")
         
         # Validate data quality
         is_valid, error_msg = validate_row_data(row)
@@ -773,12 +770,13 @@ def calculate_bulletproof_churn_risk(row, all_accounts_df, industry_lookup, sub_
         
     except Exception as e:
         account_name = row.get('Account_Name', 'Unknown')
-        print(f"  ERROR calculating churn risk for account {account_name}: {type(e).__name__}: {str(e)}")
-        import traceback
-        # Show first few errors in detail
-        if account_name in ['3', '4', '7', '36', '41'] or account_name == 'Unknown':
-            print(f"  Full traceback for account {account_name}:")
+        # Only show first error in detail to avoid spam
+        if not hasattr(calculate_bulletproof_churn_risk, '_error_shown'):
+            print(f"\n  ERROR calculating churn risk: {type(e).__name__}: {str(e)}")
+            print(f"  First error was for account {account_name}")
+            import traceback
             traceback.print_exc()
+            calculate_bulletproof_churn_risk._error_shown = True
         return 50  # Default middle risk on error
 
 def determine_activity_rating(current_freq, previous_freq, days_since_last, has_historical, avg_lead_days=60, last_event_date=None):
@@ -1011,10 +1009,12 @@ def calculate_metrics_from_aggregated(account_metrics, industry_lookup=None, sub
         last_booking = event_data.get('last_booking_date')
         days_since_last = (TODAY - last_booking.date()).days if last_booking else 999
         
-        # Add days_since_last to row for bulletproof model
+        # Add required fields to row for bulletproof model
         row['_days_since_last'] = days_since_last
         row['Event_Frequency_Current'] = event_freq_current
         row['Event_Frequency_Previous'] = event_freq_previous
+        row['Current_Tier'] = tier_current
+        row['Previous_Tier'] = tier_prev
         
         # Get last event date
         event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]

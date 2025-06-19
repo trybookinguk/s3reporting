@@ -1862,10 +1862,17 @@ def main():
             
             # Debug: Check available columns
             print(f"  Account columns: {', '.join(accounts_df.columns[:20])}")
-            if 'FirstEventCreated' in accounts_df.columns:
-                print(f"  FirstEventCreated found, non-null: {accounts_df['FirstEventCreated'].notna().sum()}")
-            if 'LastEventCreated' in accounts_df.columns:
-                print(f"  LastEventCreated found, non-null: {accounts_df['LastEventCreated'].notna().sum()}")
+            
+            # The columns are FirstEventCreation and LastEventCreation (no 'd')
+            has_first = 'FirstEventCreation' in accounts_df.columns
+            has_last = 'LastEventCreation' in accounts_df.columns
+            print(f"  FirstEventCreation in columns: {has_first}")
+            print(f"  LastEventCreation in columns: {has_last}")
+            
+            if has_first:
+                print(f"  FirstEventCreation non-null: {accounts_df['FirstEventCreation'].notna().sum()}")
+            if has_last:
+                print(f"  LastEventCreation non-null: {accounts_df['LastEventCreation'].notna().sum()}")
             
             # Create lookup dictionaries for O(1) access
             # The Accounts report uses 'Id' not 'AccountId'
@@ -1873,9 +1880,23 @@ def main():
             sub_industry_lookup = dict(zip(accounts_df['Id'].astype(int), accounts_df['SubIndustry'].fillna('Unknown')))
             
             # Add creation date lookups with proper timezone handling
-            # Parse dates and localize to UK timezone
-            first_dates = pd.to_datetime(accounts_df['FirstEventCreated'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
-            last_dates = pd.to_datetime(accounts_df['LastEventCreated'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+            # The columns are FirstEventCreation and LastEventCreation (no 'd' at the end)
+            print("\n  Parsing event creation dates...")
+            
+            # Parse dates - they are in the format YYYY-MM-DD HH:MM:SS
+            if 'FirstEventCreation' in accounts_df.columns:
+                first_dates = pd.to_datetime(accounts_df['FirstEventCreation'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+                print(f"    Parsed {first_dates.notna().sum()} FirstEventCreation dates")
+            else:
+                first_dates = pd.Series([pd.NaT] * len(accounts_df))
+                print("    No FirstEventCreation column found")
+            
+            if 'LastEventCreation' in accounts_df.columns:
+                last_dates = pd.to_datetime(accounts_df['LastEventCreation'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+                print(f"    Parsed {last_dates.notna().sum()} LastEventCreation dates")
+            else:
+                last_dates = pd.Series([pd.NaT] * len(accounts_df))
+                print("    No LastEventCreation column found")
             
             # Localize to UK timezone if not already timezone-aware
             try:
@@ -1914,6 +1935,9 @@ def main():
                 
         except Exception as e:
             print(f"WARNING: Could not load Accounts data: {e}")
+            print(f"  Error details: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
             print("  Continuing without industry segmentation...")
             industry_lookup = {}
             sub_industry_lookup = {}

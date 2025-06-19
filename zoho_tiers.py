@@ -1000,6 +1000,8 @@ def calculate_metrics_from_aggregated(account_metrics, industry_lookup=None, sub
         
         # Add days_since_last to row for bulletproof model
         row['_days_since_last'] = days_since_last
+        row['Event_Frequency_Current'] = event_freq_current
+        row['Event_Frequency_Previous'] = event_freq_previous
         
         # Get last event date
         event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]
@@ -1423,8 +1425,9 @@ def main():
             print(f"  Loaded {len(accounts_df)} accounts with industry data")
             
             # Create lookup dictionaries for O(1) access
-            industry_lookup = dict(zip(accounts_df['AccountId'].astype(int), accounts_df['Industry'].fillna('Unknown')))
-            sub_industry_lookup = dict(zip(accounts_df['AccountId'].astype(int), accounts_df['SubIndustry'].fillna('Unknown')))
+            # The Accounts report uses 'Id' not 'AccountId'
+            industry_lookup = dict(zip(accounts_df['Id'].astype(int), accounts_df['Industry'].fillna('Unknown')))
+            sub_industry_lookup = dict(zip(accounts_df['Id'].astype(int), accounts_df['SubIndustry'].fillna('Unknown')))
             
             # Debug: Show industry distribution
             industry_counts = accounts_df['Industry'].value_counts().head(10)

@@ -429,94 +429,137 @@ def calculate_business_value(row):
 
 def calculate_seasonality_multiplier(account_id, account_metrics, all_accounts_df=None, industry_lookup=None):
     """
-    Dynamic seasonality adjustment based on historical patterns
-    Returns multiplier between 0.5-1.2
+    Smart seasonality adjustment based on event creation patterns
+    Returns multiplier between 0.7-1.5
+    
+    Key insight: We care about when events are CREATED, not when they happen
     """
     if account_id not in account_metrics or not account_metrics[account_id].get('event_creation_info'):
         return 1.0
     
-    # Extract event dates from historical data
     event_info = account_metrics[account_id]['event_creation_info']
     if not event_info or len(event_info) < 2:  # Need minimum history
         return 1.0
-        
-    # Get monthly revenue distribution (more reliable than event count)
-    monthly_revenue = {}
-    for info in event_info.values():
-        if info.get('event_date'):
+    
+    # Build creation pattern: When are events typically created for each month?
+    creation_patterns = {}  # {event_month: [creation_months]}
+    lead_times_by_month = {}  # {event_month: [lead_days]}
+    
+    for event_id, info in event_info.items():
+        if info.get('event_date') and info.get('first_booking'):
             event_date = pd.to_datetime(info['event_date'])
-            month = event_date.month
-            # Aggregate revenue by month (would need transaction data ideally)
-            monthly_revenue[month] = monthly_revenue.get(month, 0) + 1
+            first_booking = pd.to_datetime(info['first_booking'])
+            lead_days = info.get('lead_days', 0)
+            
+            event_month = event_date.month
+            creation_month = first_booking.month
+            
+            if event_month not in creation_patterns:
+                creation_patterns[event_month] = []
+                lead_times_by_month[event_month] = []
+            
+            creation_patterns[event_month].append(creation_month)
+            lead_times_by_month[event_month].append(lead_days)
     
-    if not monthly_revenue:
+    if not creation_patterns:
         return 1.0
     
-    # Convert to pandas Series for analysis
-    month_series = pd.Series(monthly_revenue)
-    month_series = month_series.reindex(range(1, 13), fill_value=0)  # All 12 months
+    # Current date analysis
+    today = datetime.now(UK_TZ)
+    current_month = today.month
+    current_day = today.day
     
-    # Calculate seasonality strength using coefficient of variation
-    cv = month_series.std() / month_series.mean() if month_series.mean() > 0 else 0
+    # Determine if we're in a critical creation window
+    multiplier = 1.0
     
-    # Determine if account is seasonal
-    is_seasonal = False
-    peak_months = []
-    off_months = []
-    
-    if cv > 0.5:  # Significant variation indicates seasonality
-        # Use percentile approach for dynamic thresholds
-        p75 = month_series.quantile(0.75)
-        p25 = month_series.quantile(0.25)
+    # Check each future month to see if we should be creating events now
+    for months_ahead in range(0, 6):  # Look 6 months ahead
+        future_date = today + timedelta(days=months_ahead * 30)
+        future_month = future_date.month
         
-        peak_months = month_series[month_series >= p75].index.tolist()
-        off_months = month_series[month_series <= p25].index.tolist()
-        is_seasonal = True
-    
-    if not is_seasonal:
-        return 1.0
-    
-    # Current month analysis
-    current_month = datetime.now().month
-    
-    # Dynamic multiplier calculation
-    if current_month in peak_months:
-        # Peak season - slightly increase urgency if declining
-        return 1.1
-    elif current_month in off_months:
-        # Off season - reduce risk proportionally to how "off" it is
-        if month_series[current_month] == 0:
-            # Never active this month historically
-            base_reduction = 0.5
-        else:
-            # Some activity - less reduction
-            activity_ratio = month_series[current_month] / month_series.mean()
-            base_reduction = 0.7 + (0.3 * activity_ratio)  # 0.7-1.0 range
-        
-        # Industry adjustment if available
-        if all_accounts_df is not None and industry_lookup and account_id in industry_lookup:
-            industry = industry_lookup[account_id]
+        if future_month in creation_patterns:
+            # When do they typically create events for this month?
+            typical_creation_months = creation_patterns[future_month]
+            typical_lead_days = lead_times_by_month[future_month]
             
-            # Check if entire industry is seasonal
-            industry_accounts = all_accounts_df[
-                all_accounts_df['Account_Name'].apply(
-                    lambda x: industry_lookup.get(int(x), '') == industry
-                )
-            ]
-            
-            if len(industry_accounts) >= 20:
-                # Calculate what % of industry is active this month
-                # This would need transaction data aggregated by month
-                industry_active_pct = 0.5  # Placeholder - would calculate from data
+            if not typical_lead_days:
+                continue
                 
-                # If most of industry is quiet, give more reduction
-                if industry_active_pct < 0.3:
-                    base_reduction *= 0.9  # Additional 10% reduction
-        
-        return base_reduction
-    else:
-        # Shoulder season - neutral
-        return 1.0
+            # Calculate when they should be creating this event
+            avg_lead = sum(typical_lead_days) / len(typical_lead_days)
+            expected_creation_date = future_date - timedelta(days=avg_lead)
+            
+            # Are we in the creation window?
+            days_until_creation = (expected_creation_date - today).days
+            
+            if -14 <= days_until_creation <= 30:  # Within creation window (+/- buffer)
+                # CHECK: Do they have an event for this period?
+                has_current_event = False
+                
+                # Look for events in current period for this month
+                # Handle year boundary (e.g., checking December events in January)
+                target_year = future_date.year
+                current_year_events = [
+                    info for info in event_info.values()
+                    if info.get('event_date') 
+                    and pd.to_datetime(info['event_date']).year == target_year
+                    and pd.to_datetime(info['event_date']).month == future_month
+                ]
+                
+                has_current_event = len(current_year_events) > 0
+                
+                if not has_current_event:
+                    # They should be creating but haven't!
+                    if days_until_creation < 0:  # Past expected date
+                        overdue_days = abs(days_until_creation)
+                        if overdue_days > 30:
+                            multiplier = max(multiplier, 1.5)  # Very late
+                        elif overdue_days > 14:
+                            multiplier = max(multiplier, 1.3)  # Late
+                        else:
+                            multiplier = max(multiplier, 1.1)  # Slightly late
+                    else:
+                        # Approaching creation window
+                        multiplier = max(multiplier, 1.05)
+    
+    # Check if we're in a genuine quiet period
+    # This is when no events are typically created OR held
+    creation_months_set = set()
+    event_months_set = set()
+    
+    for event_month, creation_months in creation_patterns.items():
+        event_months_set.add(event_month)
+        creation_months_set.update(creation_months)
+    
+    # If this month typically has no creation or event activity
+    if current_month not in creation_months_set and current_month not in event_months_set:
+        # But only reduce if they're not overdue for any events
+        if multiplier == 1.0:  # No overdue events
+            # Calculate how "quiet" this month typically is
+            total_activity = len(creation_patterns)
+            if total_activity > 12:  # Active account
+                multiplier = 0.9  # Small reduction
+            else:
+                multiplier = 0.8  # Larger reduction for less active accounts
+    
+    # Industry seasonality check
+    if all_accounts_df is not None and industry_lookup and multiplier < 1.0:
+        industry = industry_lookup.get(account_id)
+        if industry and industry != 'Unknown':
+            # Simple check: Is the whole industry quiet?
+            industry_mask = all_accounts_df['Account_Name'].apply(
+                lambda x: industry_lookup.get(int(x), '') == industry
+            )
+            industry_cohort = all_accounts_df[industry_mask]
+            
+            if len(industry_cohort) >= 20:
+                # What % of industry has current activity?
+                active_pct = (industry_cohort['Event_Count_Current'] > 0).mean()
+                
+                if active_pct < 0.2:  # Less than 20% of industry active
+                    multiplier *= 0.9  # Additional reduction
+    
+    return round(multiplier, 2)
 
 def calculate_industry_seasonality_pattern(industry_cohort, booking_data):
     """
@@ -705,9 +748,13 @@ def calculate_bulletproof_churn_risk(row, all_accounts_df, industry_lookup, sub_
         )
         critical_mult = calculate_critical_flags(row)
         
-        # Validate multipliers (now 0.5-1.2 range)
-        if seasonality_mult < 0.4 or seasonality_mult > 1.3:
+        # Validate multipliers (now 0.7-1.5 range)
+        if seasonality_mult < 0.6 or seasonality_mult > 1.6:
             print(f"  WARNING: Account {account_id} seasonality multiplier unusual: {seasonality_mult}")
+        
+        # Debug seasonality for samples
+        if account_id % 5000 == 1:  # Sample debug
+            print(f"  Account {account_id}: Seasonality multiplier = {seasonality_mult}")
         if critical_mult < 0.5 or critical_mult > 2.0:
             print(f"  WARNING: Account {account_id} critical multiplier unusual: {critical_mult}")
         

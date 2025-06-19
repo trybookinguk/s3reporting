@@ -69,6 +69,39 @@ def fetch_s3_file_info(s3_client, key):
     except:
         return 0
 
+def load_booking_data_for_analysis(s3_client, key_month):
+    """Load booking data for churn risk analysis"""
+    print("\nLoading current month booking data for enhanced analysis...")
+    try:
+        obj = s3_client.get_object(Bucket=BUCKET, Key=key_month)
+        
+        # Define dtypes for columns we need
+        dtypes = {
+            'BookingTransactionId': 'int64',
+            'AccountId': 'int32',
+            'EventId': 'Int64',
+            'TicketQuantity': 'int16',
+            'BookingFee': 'float32',
+            'CardFee': 'float32',
+            'ProcessingFee': 'float32',
+            'TicketFee': 'float32'
+        }
+        
+        # Load with specific columns and dtypes
+        booking_df = pd.read_csv(obj['Body'], dtype=dtypes, parse_dates=['TransactionDate', 'EventDate'], low_memory=False)
+        
+        # Add timezone info
+        booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], utc=True).dt.tz_convert(UK_TZ)
+        if 'EventDate' in booking_df.columns:
+            booking_df['EventDate'] = pd.to_datetime(booking_df['EventDate'], utc=True).dt.tz_convert(UK_TZ)
+            
+        print(f"  Loaded {len(booking_df):,} transactions for {booking_df['AccountId'].nunique():,} accounts")
+        return booking_df
+        
+    except Exception as e:
+        print(f"  WARNING: Could not load booking data for analysis: {e}")
+        return pd.DataFrame()
+
 def process_booking_data_optimized(s3_client, key_all, key_month):
     """Process booking data using chunked reading and optimized memory usage"""
     print("\nOptimized processing for large files...")
@@ -667,6 +700,95 @@ def calculate_new_account_risk(row):
     
     return min(50, risk)  # Cap at 50 for new accounts
 
+def identify_temporal_clusters(event_dates, gap_days=30):
+    """
+    Group event dates into clusters where events within gap_days are considered part of same cluster
+    """
+    if len(event_dates) == 0:
+        return []
+    
+    # Sort dates
+    sorted_dates = sorted(event_dates)
+    
+    clusters = []
+    current_cluster = [sorted_dates[0]]
+    
+    for date in sorted_dates[1:]:
+        if (date - current_cluster[-1]).days <= gap_days:
+            current_cluster.append(date)
+        else:
+            clusters.append(current_cluster)
+            current_cluster = [date]
+    
+    clusters.append(current_cluster)
+    return clusters
+
+def calculate_event_frequency_v2(account_row, booking_data):
+    """
+    Enhanced event frequency calculation using creation dates and visible sales
+    """
+    account_id = account_row['Account_Name']
+    first_created = account_row.get('FirstEventCreated')
+    last_created = account_row.get('LastEventCreated')
+    
+    if pd.isna(first_created) or pd.isna(last_created):
+        # No creation data available
+        return {
+            'pattern': 'Unknown',
+            'clusters_per_year': 0,
+            'months_active': 0,
+            'typical_months': [],
+            'days_since_created': 999,
+            'days_since_visible': 999
+        }
+    
+    account_age_days = (last_created - first_created).days
+    
+    # Get visible events (with sales)
+    visible_events = booking_data[booking_data['AccountId'] == int(account_id)] if len(booking_data) > 0 else pd.DataFrame()
+    
+    if len(visible_events) == 0:
+        # They create events but sell nothing
+        return {
+            'pattern': 'Struggling',
+            'visible_clusters': 0,
+            'creation_active': (datetime.now(UK_TZ) - last_created).days < 90,
+            'days_since_created': (datetime.now(UK_TZ) - last_created).days,
+            'days_since_visible': 999
+        }
+    
+    # Identify event clusters from sales data
+    if 'EventDate' in visible_events.columns:
+        event_dates = pd.to_datetime(visible_events['EventDate'].dropna()).unique()
+        clusters = identify_temporal_clusters(event_dates, gap_days=30)
+    else:
+        # Fallback to transaction dates
+        event_dates = pd.to_datetime(visible_events['TransactionDate'].dropna()).unique()
+        clusters = identify_temporal_clusters(event_dates, gap_days=30)
+    
+    # Calculate patterns
+    clusters_per_year = len(clusters) / max(account_age_days / 365, 1)
+    months_with_events = len(pd.DatetimeIndex(event_dates).to_period('M').unique())
+    
+    # Pattern classification
+    if clusters_per_year <= 1.5:
+        pattern = 'Annual'
+    elif clusters_per_year <= 4 and months_with_events <= 6:
+        pattern = 'Seasonal'  
+    elif clusters_per_year >= 6:
+        pattern = 'Regular'
+    else:
+        pattern = 'Occasional'
+    
+    return {
+        'pattern': pattern,
+        'clusters_per_year': clusters_per_year,
+        'months_active': months_with_events,
+        'typical_months': pd.DatetimeIndex(event_dates).month.value_counts().head(3).index.tolist(),
+        'days_since_created': (datetime.now(UK_TZ) - last_created).days,
+        'days_since_visible': (datetime.now(UK_TZ) - event_dates.max()).days if len(event_dates) > 0 else 999
+    }
+
 def validate_row_data(row):
     """
     Ensure data is valid before scoring
@@ -690,101 +812,176 @@ def validate_row_data(row):
     
     return True, "Valid"
 
-def calculate_bulletproof_churn_risk(row, all_accounts_df, industry_lookup, sub_industry_lookup, account_metrics):
+def calculate_churn_risk_final(account_row, booking_data, all_accounts_df):
     """
-    Robust churn risk calculation with all edge cases handled
-    Returns 0-100
+    Revenue-focused churn risk with creation insights
+    Returns dict with score and details
     """
     try:
-        account_id = int(row['Account_Name'])
+        account_id = account_row['Account_Name']
         
-        # Debug sample accounts for score distribution
-        if account_id in [100, 500, 1000, 5000]:
-            print(f"  Account {account_id}: Tier={row.get('Current_Tier')}, Rev%={row.get('revenue_current_pct', 0):.1f}")
+        # Get pattern analysis
+        pattern_info = calculate_event_frequency_v2(account_row, booking_data)
         
-        # Validate data quality
-        is_valid, error_msg = validate_row_data(row)
-        if not is_valid:
-            print(f"  WARNING: Account {account_id} has invalid data: {error_msg}")
-            return 50  # Default middle risk for invalid data
+        # Initialize risk components
+        risk_score = 0
+        risk_factors = []
         
-        # Handle edge cases upfront
-        if row.get('revenue_prev', 0) == 0:
-            # New account - special handling
-            return calculate_new_account_risk(row)
+        # TIER 1: Creation Activity (40 points max)
+        # This is the strongest signal - have they stopped creating events?
         
-        # Get comparison cohort
-        cohort, cohort_level = get_comparison_cohort(
-            account_id, all_accounts_df, industry_lookup, sub_industry_lookup
-        )
+        days_since_created = pattern_info['days_since_created']
+        pattern = pattern_info['pattern']
         
-        # Debug cohort info for samples
-        if account_id % 1000 == 0:  # Sample debug output
-            print(f"  Account {account_id}: Using {cohort_level} cohort ({len(cohort)} accounts)")
-        
-        # Calculate primary components with error handling
-        absolute_decline = calculate_absolute_decline(row)  # 0-30
-        position_risk = calculate_position_risk(row, cohort)  # 0-25
-        activity_risk = calculate_activity_risk(row, cohort)  # 0-15
-        
-        # Calculate secondary components
-        momentum = calculate_momentum(row)  # 0-15
-        business_value = calculate_business_value(row)  # 0-15
-        
-        # Validate component ranges
-        components = {
-            'absolute_decline': (absolute_decline, 30),
-            'position_risk': (position_risk, 25),
-            'activity_risk': (activity_risk, 15),
-            'momentum': (momentum, 15),
-            'business_value': (business_value, 15)
+        # Pattern-specific thresholds for creation gaps
+        creation_thresholds = {
+            'Annual': {'warning': 180, 'critical': 365},
+            'Seasonal': {'warning': 90, 'critical': 180},
+            'Regular': {'warning': 45, 'critical': 90},
+            'Occasional': {'warning': 120, 'critical': 240},
+            'Struggling': {'warning': 60, 'critical': 120},
+            'Unknown': {'warning': 90, 'critical': 180}
         }
         
-        for comp_name, (value, max_val) in components.items():
-            if value < 0 or value > max_val:
-                print(f"  WARNING: Account {account_id} {comp_name} out of range: {value}")
-                
-        # Sum base score
-        base_score = (
-            absolute_decline +
-            position_risk +
-            activity_risk +
-            momentum +
-            business_value
-        )
+        thresholds = creation_thresholds.get(pattern, {'warning': 90, 'critical': 180})
         
-        # Apply modifiers
-        seasonality_mult = calculate_seasonality_multiplier(
-            account_id, account_metrics, all_accounts_df, industry_lookup
-        )
-        critical_mult = calculate_critical_flags(row)
+        if days_since_created > thresholds['critical']:
+            risk_score += 40
+            risk_factors.append('no_creation_critical')
+        elif days_since_created > thresholds['warning']:
+            progress = (days_since_created - thresholds['warning']) / (thresholds['critical'] - thresholds['warning'])
+            risk_score += 20 + (20 * progress)
+            risk_factors.append('no_creation_warning')
         
-        # Validate multipliers (now 0.7-1.5 range)
-        if seasonality_mult < 0.6 or seasonality_mult > 1.6:
-            print(f"  WARNING: Account {account_id} seasonality multiplier unusual: {seasonality_mult}")
+        # TIER 2: Revenue Performance (35 points max)
+        # The key business metric
         
-        # Debug seasonality for samples
-        if account_id % 5000 == 1:  # Sample debug
-            print(f"  Account {account_id}: Seasonality multiplier = {seasonality_mult}")
-        if critical_mult < 0.5 or critical_mult > 2.0:
-            print(f"  WARNING: Account {account_id} critical multiplier unusual: {critical_mult}")
+        revenue_current = account_row.get('revenue_current', 0)
+        revenue_previous = account_row.get('revenue_prev', 0)
         
-        # Final calculation
-        final_score = base_score * seasonality_mult * critical_mult
+        # Absolute revenue decline
+        if revenue_previous > 0:
+            revenue_decline = (revenue_previous - revenue_current) / revenue_previous
+            
+            if revenue_decline >= 0.75:
+                risk_score += 35
+                risk_factors.append('severe_revenue_decline')
+            elif revenue_decline >= 0.50:
+                risk_score += 25
+                risk_factors.append('major_revenue_decline')
+            elif revenue_decline >= 0.25:
+                risk_score += 15
+                risk_factors.append('revenue_decline')
+            elif revenue_decline > 0:
+                risk_score += revenue_decline * 20
+        else:
+            revenue_decline = 0
         
-        # Ensure valid range
-        return max(0, min(100, round(final_score)))
+        # Revenue position within cohort
+        if len(all_accounts_df) > 100:
+            revenue_percentile = stats.percentileofscore(
+                all_accounts_df['revenue_current'], 
+                revenue_current
+            )
+            if revenue_percentile < 25:
+                risk_score += 10
+                risk_factors.append('bottom_quartile_revenue')
+        
+        # TIER 3: Struggle Indicators (25 points max)
+        # Are they trying but failing?
+        
+        creation_to_sale_gap = pattern_info['days_since_created'] - pattern_info['days_since_visible']
+        
+        if creation_to_sale_gap > 60:
+            # They've created events recently but no sales in 60+ days
+            risk_score += 25
+            risk_factors.append('events_not_selling')
+        elif creation_to_sale_gap > 30:
+            risk_score += 15
+            risk_factors.append('sales_struggling')
+        
+        # Free event detection
+        if len(booking_data) > 0 and int(account_id) in booking_data['AccountId'].values:
+            account_bookings = booking_data[booking_data['AccountId'] == int(account_id)]
+            total_fees = (
+                account_bookings['BookingFee'].sum() +
+                account_bookings['CardFee'].sum() +
+                account_bookings['ProcessingFee'].sum() +
+                account_bookings['TicketFee'].sum()
+            )
+            
+            if total_fees == 0 and revenue_current == 0:
+                # Only running free events now
+                risk_score += 15
+                risk_factors.append('free_events_only')
+        
+        # Velocity decline
+        if pattern in ['Regular', 'Seasonal']:
+            expected_clusters = pattern_info['clusters_per_year']
+            # Count recent clusters (last 90 days)
+            recent_cutoff = datetime.now(UK_TZ) - timedelta(days=90)
+            if len(booking_data) > 0 and int(account_id) in booking_data['AccountId'].values:
+                recent_bookings = booking_data[
+                    (booking_data['AccountId'] == int(account_id)) & 
+                    (pd.to_datetime(booking_data['TransactionDate']) > recent_cutoff)
+                ]
+                if 'EventDate' in recent_bookings.columns:
+                    recent_dates = pd.to_datetime(recent_bookings['EventDate'].dropna()).unique()
+                else:
+                    recent_dates = pd.to_datetime(recent_bookings['TransactionDate'].dropna()).unique()
+                recent_clusters = len(identify_temporal_clusters(recent_dates, gap_days=30))
+            else:
+                recent_clusters = 0
+            
+            annualized_recent = recent_clusters * 4
+            
+            if expected_clusters > 0 and annualized_recent < expected_clusters * 0.5:
+                risk_score += 10
+                risk_factors.append('velocity_decline')
+        
+        # MODIFIERS
+        
+        # High-value account modifier
+        if account_row.get('Current_Tier') in ['Key Account', 'High Value']:
+            risk_score *= 1.1  # Prioritize high-value accounts
+            
+        # Tier drop modifier  
+        tier_map = {'NIL': 0, 'Tier 1': 1, 'Tier 2': 2, 'Tier 3': 3, 'Tier 4': 4, 'High Value': 5, 'Key Account': 6}
+        current_tier_val = tier_map.get(account_row.get('Current_Tier', 'NIL'), 0)
+        previous_tier_val = tier_map.get(account_row.get('Previous_Tier', 'NIL'), 0)
+        
+        if previous_tier_val - current_tier_val >= 2:
+            risk_score += 10
+            risk_factors.append('major_tier_drop')
+        
+        # Long-term customer modifier
+        if account_row.get('Years_Loyalty', 0) > 5 and risk_score > 50:
+            risk_factors.append('longtime_customer_at_risk')
+        
+        return {
+            'score': min(100, round(risk_score)),
+            'factors': risk_factors,
+            'pattern': pattern,
+            'days_since_created': days_since_created,
+            'revenue_decline_pct': revenue_decline if revenue_previous > 0 else 0
+        }
         
     except Exception as e:
-        account_name = row.get('Account_Name', 'Unknown')
+        account_name = account_row.get('Account_Name', 'Unknown')
         # Only show first error in detail to avoid spam
-        if not hasattr(calculate_bulletproof_churn_risk, '_error_shown'):
+        if not hasattr(calculate_churn_risk_final, '_error_shown'):
             print(f"\n  ERROR calculating churn risk: {type(e).__name__}: {str(e)}")
             print(f"  First error was for account {account_name}")
             import traceback
             traceback.print_exc()
-            calculate_bulletproof_churn_risk._error_shown = True
-        return 50  # Default middle risk on error
+            calculate_churn_risk_final._error_shown = True
+        return {
+            'score': 50,  # Default middle risk on error
+            'factors': ['calculation_error'],
+            'pattern': 'Unknown',
+            'days_since_created': 999,
+            'revenue_decline_pct': 0
+        }
 
 def determine_activity_rating(current_freq, previous_freq, days_since_last, has_historical, avg_lead_days=60, last_event_date=None):
     """Determine activity rating based on event patterns and creation lead times"""
@@ -835,7 +1032,9 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
     return "New"
 
 # === METRICS CALC ===
-def calculate_metrics_from_aggregated(account_metrics, industry_lookup=None, sub_industry_lookup=None):
+def calculate_metrics_from_aggregated(account_metrics, industry_lookup=None, sub_industry_lookup=None, 
+                                    first_event_created_lookup=None, last_event_created_lookup=None,
+                                    all_booking_data=None):
     """Calculate metrics from pre-aggregated account data"""
     print("\nCalculating metrics for accounts...")
     
@@ -844,6 +1043,12 @@ def calculate_metrics_from_aggregated(account_metrics, industry_lookup=None, sub
         industry_lookup = {}
     if sub_industry_lookup is None:
         sub_industry_lookup = {}
+    if first_event_created_lookup is None:
+        first_event_created_lookup = {}
+    if last_event_created_lookup is None:
+        last_event_created_lookup = {}
+    if all_booking_data is None:
+        all_booking_data = pd.DataFrame()
     
     all_metrics = []
     processed = 0
@@ -1023,6 +1228,11 @@ def calculate_metrics_from_aggregated(account_metrics, industry_lookup=None, sub
         row['Current_Tier'] = tier_current
         row['Previous_Tier'] = tier_prev
         
+        # Add event creation dates from Accounts data
+        account_id_int = int(account_name)
+        row['FirstEventCreated'] = first_event_created_lookup.get(account_id_int)
+        row['LastEventCreated'] = last_event_created_lookup.get(account_id_int)
+        
         # Get last event date
         event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]
         last_event_date = max(event_dates).date() if event_dates else None
@@ -1033,10 +1243,11 @@ def calculate_metrics_from_aggregated(account_metrics, industry_lookup=None, sub
             avg_lead_days=avg_lead_days, last_event_date=last_event_date
         )
         
-        # Calculate bulletproof churn risk
-        churn_prob = calculate_bulletproof_churn_risk(
-            row, metrics_df, industry_lookup, sub_industry_lookup, account_metrics
+        # Calculate enhanced churn risk
+        risk_result = calculate_churn_risk_final(
+            row, all_booking_data, metrics_df
         )
+        churn_prob = risk_result['score']
             
         results.append({
             "Account_Name": account_name,
@@ -1057,7 +1268,10 @@ def calculate_metrics_from_aggregated(account_metrics, industry_lookup=None, sub
             "_event_count_current": event_count_current,
             "_event_count_previous": event_count_previous,
             "_revenue_current": row.get('revenue_current', 0),
-            "_revenue_previous": row.get('revenue_prev', 0)
+            "_revenue_previous": row.get('revenue_prev', 0),
+            "_risk_factors": ','.join(risk_result.get('factors', [])),
+            "_event_pattern": risk_result.get('pattern', 'Unknown'),
+            "_days_since_created": risk_result.get('days_since_created', 999)
         })
     
     # Print event frequency summary
@@ -1449,6 +1663,10 @@ def main():
             industry_lookup = dict(zip(accounts_df['Id'].astype(int), accounts_df['Industry'].fillna('Unknown')))
             sub_industry_lookup = dict(zip(accounts_df['Id'].astype(int), accounts_df['SubIndustry'].fillna('Unknown')))
             
+            # Add creation date lookups
+            first_event_created_lookup = dict(zip(accounts_df['Id'].astype(int), pd.to_datetime(accounts_df['FirstEventCreated'], errors='coerce')))
+            last_event_created_lookup = dict(zip(accounts_df['Id'].astype(int), pd.to_datetime(accounts_df['LastEventCreated'], errors='coerce')))
+            
             # Debug: Show industry distribution
             industry_counts = accounts_df['Industry'].value_counts().head(10)
             print("\n  Top industries:")
@@ -1460,11 +1678,16 @@ def main():
             print("  Continuing without industry segmentation...")
             industry_lookup = {}
             sub_industry_lookup = {}
+            first_event_created_lookup = {}
+            last_event_created_lookup = {}
         
         # Process data using optimized chunked approach
         account_metrics = process_booking_data_optimized(s3_client, key_all, key_month)
         
         print(f"\nTotal unique accounts found: {len(account_metrics):,}")
+        
+        # Load booking data for enhanced churn risk analysis
+        booking_data_for_analysis = load_booking_data_for_analysis(s3_client, key_month)
         
     except Exception as e:
         print(f"ERROR: Failed to process S3 files: {str(e)}")
@@ -1473,7 +1696,9 @@ def main():
         return
     
     # Calculate metrics and tiers
-    updates = calculate_metrics_from_aggregated(account_metrics, industry_lookup, sub_industry_lookup)
+    updates = calculate_metrics_from_aggregated(account_metrics, industry_lookup, sub_industry_lookup,
+                                               first_event_created_lookup, last_event_created_lookup,
+                                               booking_data_for_analysis)
     
     # Save results to CSV for audit
     csv_filename = f"tier_updates_{datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')}.csv"

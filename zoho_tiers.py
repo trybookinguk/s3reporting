@@ -691,6 +691,13 @@ def calculate_bulletproof_churn_risk(row, all_accounts_df, industry_lookup, sub_
     try:
         account_id = int(row['Account_Name'])
         
+        # Debug first few accounts
+        if str(account_id) in ['3', '4', '7', '36', '41']:
+            print(f"\n  DEBUG Account {account_id}:")
+            print(f"    Row keys: {list(row.keys())[:10]}...")  # Show first 10 keys
+            print(f"    revenue_current_pct: {row.get('revenue_current_pct', 'MISSING')}")
+            print(f"    revenue_prev_pct: {row.get('revenue_prev_pct', 'MISSING')}")
+        
         # Validate data quality
         is_valid, error_msg = validate_row_data(row)
         if not is_valid:
@@ -765,7 +772,13 @@ def calculate_bulletproof_churn_risk(row, all_accounts_df, industry_lookup, sub_
         return max(0, min(100, round(final_score)))
         
     except Exception as e:
-        print(f"  ERROR calculating churn risk for account {row.get('Account_Name', 'Unknown')}: {str(e)}")
+        account_name = row.get('Account_Name', 'Unknown')
+        print(f"  ERROR calculating churn risk for account {account_name}: {type(e).__name__}: {str(e)}")
+        import traceback
+        # Show first few errors in detail
+        if account_name in ['3', '4', '7', '36', '41'] or account_name == 'Unknown':
+            print(f"  Full traceback for account {account_name}:")
+            traceback.print_exc()
         return 50  # Default middle risk on error
 
 def determine_activity_rating(current_freq, previous_freq, days_since_last, has_historical, avg_lead_days=60, last_event_date=None):

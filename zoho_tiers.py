@@ -7,8 +7,6 @@ import requests
 from datetime import datetime, timedelta
 import pytz
 from pandas.tseries.offsets import MonthBegin
-import smtplib
-from email.message import EmailMessage
 
 # === ENV VARS ===
 # Support both naming conventions for AWS credentials
@@ -24,10 +22,6 @@ ZOHO_REFRESH_TOKEN = os.environ["ZOHO_REFRESH_TOKEN"]
 ZOHO_DOMAIN = "https://www.zohoapis.com"
 BUCKET = "produk-rdsextracts-438255373632"
 
-# Mailgun credentials
-MAILGUN_SMTP_LOGIN = os.environ["MAILGUN_SMTP_LOGIN"]
-MAILGUN_SMTP_PASSWORD = os.environ["MAILGUN_SMTP_PASSWORD"]
-MAILGUN_DOMAIN = os.environ["MAILGUN_DOMAIN"]
 
 # Check if running in test mode
 TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
@@ -37,7 +31,6 @@ UK_TZ = pytz.timezone('Europe/London')
 TODAY = datetime.now(UK_TZ).date()
 CUTOFF_365 = TODAY - timedelta(days=365)
 CUTOFF_730 = CUTOFF_365 - timedelta(days=365)
-TEST_RECIPIENT = 'alex@trybooking.co.uk'  # Email recipient for reports
 
 # === AUTH ===
 def get_access_token():
@@ -1904,95 +1897,6 @@ def generate_at_risk_accounts_report(results_df):
     
     return pd.DataFrame(report_data)
 
-
-def email_at_risk_report(report_df, filename):
-    """Email the at risk accounts report"""
-    
-    print(f"Preparing to email at risk report with {len(report_df)} accounts")
-    print(f"Attachment filename: {filename}")
-    
-    # Email setup
-    msg = EmailMessage()
-    msg['Subject'] = f'{"[TEST] " if TEST_MODE else ""}⚠️ At Risk Accounts Alert - {datetime.now().strftime("%B %Y")}'
-    msg['From'] = f'TryBooking Reporting <reports@{MAILGUN_DOMAIN}>'
-    msg['To'] = TEST_RECIPIENT if TEST_MODE else 'alex@trybooking.co.uk'
-    
-    # Calculate summary stats
-    critical_count = len(report_df[report_df['Risk_Level'] == 'Critical'])
-    total_current_revenue = report_df['Current_Revenue'].sum()
-    total_expected_loss = report_df['Revenue_At_Risk'].sum()
-    
-    # Plain text body
-    body = f"""Hi Alex,
-
-⚠️ URGENT: {len(report_df)} accounts have been identified as high churn risk.
-
-Summary:
-- Critical Risk (76-100): {critical_count} accounts
-- High Risk (51-75): {len(report_df) - critical_count} accounts
-- Total Current Revenue: £{total_current_revenue:,.2f}
-- Expected Revenue Loss: £{total_expected_loss:,.2f}
-
-Top 5 Priority Accounts (sorted by revenue impact):
-{report_df.head()[['Account_Name', 'Priority_Score', 'Revenue_At_Risk', 'Key_Risks']].to_string(index=False)}
-
-Please review the attached CSV for the complete list.
-
-Best regards,
-TryBooking Reporting System
-"""
-    
-    # HTML version
-    body_html = f"""<div style="font-family: Arial, sans-serif; font-size: 11pt;">
-<p>Hi Alex,</p>
-<p><strong style="color: #d9534f;">⚠️ URGENT: {len(report_df)} accounts have been identified as high churn risk.</strong></p>
-
-<h3>Summary:</h3>
-<ul>
-<li><strong>Critical Risk (76-100):</strong> {critical_count} accounts</li>
-<li><strong>High Risk (51-75):</strong> {len(report_df) - critical_count} accounts</li>
-<li><strong>Total Current Revenue:</strong> £{total_current_revenue:,.2f}</li>
-<li><strong>Expected Revenue Loss:</strong> £{total_expected_loss:,.2f}</li>
-</ul>
-
-<h3>Immediate Action Required:</h3>
-<p>The accounts are sorted by <strong>Priority Score</strong>, which combines churn risk with revenue impact to focus your efforts on the highest-value accounts.</p>
-<p>Each account includes:</p>
-<ul>
-<li>Priority score and churn risk rating</li>
-<li>Expected revenue at risk (£)</li>
-<li>Key risk factors (e.g., no event creation, revenue decline)</li>
-<li>Days since last event created</li>
-<li>Event pattern (Annual, Seasonal, Regular)</li>
-</ul>
-
-<p>Best regards,<br>TryBooking Reporting System</p>
-</div>"""
-    
-    msg.set_content(body)
-    msg.add_alternative(body_html, subtype='html')
-    
-    # Attach CSV
-    try:
-        with open(filename, 'rb') as f:
-            file_data = f.read()
-            msg.add_attachment(file_data, maintype='text', subtype='csv', filename=os.path.basename(filename))
-    except Exception as e:
-        print(f"Error reading attachment file: {e}")
-        raise
-    
-    # Send email
-    try:
-        with smtplib.SMTP("smtp.mailgun.org", 587) as smtp:
-            smtp.starttls()
-            smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-            smtp.send_message(msg)
-    except Exception as e:
-        print(f"SMTP Error details: {type(e).__name__}: {str(e)}")
-        raise
-    
-    print(f"At risk alert sent to {'TEST recipient' if TEST_MODE else 'alex@trybooking.co.uk'} with {len(report_df)} accounts")
-
 # === ANNUAL EVENTS REPORT ===
 def generate_upcoming_annual_events_report(results_df):
     """Generate report for annual events needing outreach"""
@@ -2040,70 +1944,6 @@ def generate_upcoming_annual_events_report(results_df):
                 })
     
     return pd.DataFrame(upcoming).sort_values('Reach_Out_By') if upcoming else pd.DataFrame()
-
-def email_upcoming_events_report(report_df, filename):
-    """Email the upcoming annual events report"""
-    
-    # Prepare email body
-    body_plain = f"""Hi Alex,
-
-Please find attached the upcoming annual events report.
-
-This report identifies annual event organisers who typically create their events soon, 
-allowing proactive outreach approximately 1 month before they usually set up their event.
-
-Summary:
-- Total accounts requiring outreach: {len(report_df)}
-- Outreach needed within 7 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By'], format='%d/%m/%Y') <= pd.Timestamp.now() + pd.Timedelta(days=7)])}
-- Outreach needed within 14 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By'], format='%d/%m/%Y') <= pd.Timestamp.now() + pd.Timedelta(days=14)])}
-
-Best regards,
-TryBooking Reporting System
-"""
-    
-    # HTML version of the body
-    body_html = f"""<div style="font-family: Arial, sans-serif; font-size: 11pt;">
-<p>Hi Alex,</p>
-<p>Please find attached the upcoming annual events report.</p>
-<p>This report identifies annual event organisers who typically create their events soon, 
-allowing proactive outreach approximately 1 month before they usually set up their event.</p>
-<p><strong>Summary:</strong></p>
-<ul>
-<li>Total accounts requiring outreach: {len(report_df)}</li>
-<li>Outreach needed within 7 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By'], format='%d/%m/%Y') <= pd.Timestamp.now() + pd.Timedelta(days=7)])}</li>
-<li>Outreach needed within 14 days: {len(report_df[pd.to_datetime(report_df['Reach_Out_By'], format='%d/%m/%Y') <= pd.Timestamp.now() + pd.Timedelta(days=14)])}</li>
-</ul>
-<p>Best regards,<br>TryBooking Reporting System</p>
-</div>"""
-    
-    # Create email message
-    msg = EmailMessage()
-    msg['Subject'] = f'{"[TEST] " if TEST_MODE else ""}Upcoming Annual Events - {datetime.now().strftime("%B %Y")}'
-    msg['From'] = f"TryBooking Reporting <reports@{MAILGUN_DOMAIN}>"
-    msg['To'] = "alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk"
-    msg['Cc'] = "" if TEST_MODE else "louise@trybooking.co.uk"
-    
-    # Set content
-    msg.set_content(body_plain)
-    msg.add_alternative(body_html, subtype='html')
-    
-    # Attach CSV file
-    with open(filename, 'rb') as f:
-        csv_data = f.read()
-        msg.add_attachment(csv_data, maintype='text', subtype='csv', filename=filename)
-    
-    # Send email
-    try:
-        with smtplib.SMTP("smtp.mailgun.org", 587) as smtp:
-            smtp.starttls()
-            smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-            smtp.send_message(msg)
-    except Exception as e:
-        print(f"SMTP Error details: {type(e).__name__}: {str(e)}")
-        raise
-    
-    recipients = "alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, louise@trybooking.co.uk"
-    print(f"Email sent to {recipients} with {len(report_df)} upcoming annual events")
 
 # === MAIN ===
 def main():
@@ -2271,7 +2111,7 @@ def main():
         for _, row in tier_changes.head(5).iterrows():
             print(f"  Account {row['Account_Name']}: {row['Previous_Tier']} → {row['Current_Tier']}")
     
-    # Generate and email annual events report
+    # Generate annual events report
     print("\n=== Annual Events Report ===")
     # First show how many annual accounts we have
     annual_count = len(updates[updates['Event_Frequency_Current'] == 'Annual'])
@@ -2293,16 +2133,10 @@ def main():
         report_filename = f"upcoming_annual_events_{datetime.now(UK_TZ).strftime('%Y%m%d')}.csv"
         annual_report.to_csv(report_filename, index=False)
         print(f"Upcoming annual events needing outreach: {len(annual_report)}")
-        
-        try:
-            email_upcoming_events_report(annual_report, report_filename)
-            print(f"📧 Emailed upcoming annual events report")
-        except Exception as e:
-            print(f"WARNING: Failed to email annual events report: {str(e)}")
     else:
         print("No upcoming annual events requiring outreach in next 30 days")
     
-    # Generate and email at risk accounts report
+    # Generate at risk accounts report
     print("\n=== At Risk Accounts Report ===")
     at_risk_report = generate_at_risk_accounts_report(updates)
     if not at_risk_report.empty:
@@ -2316,11 +2150,6 @@ def main():
         print(f"  Critical risk (76-100): {critical} accounts")
         print(f"  High risk (51-75): {high} accounts")
         
-        try:
-            email_at_risk_report(at_risk_report, risk_filename)
-            print(f"📧 Emailed at risk accounts alert")
-        except Exception as e:
-            print(f"WARNING: Failed to email at risk report: {str(e)}")
     else:
         print("No at risk accounts identified")
     

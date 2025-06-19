@@ -554,7 +554,14 @@ def calculate_seasonality_multiplier(account_id, account_metrics, all_accounts_d
             
             if len(industry_cohort) >= 20:
                 # What % of industry has current activity?
-                active_pct = (industry_cohort['Event_Count_Current'] > 0).mean()
+                # Check if Event_Count_Current exists in the dataframe
+                if 'Event_Count_Current' in industry_cohort.columns:
+                    active_pct = (industry_cohort['Event_Count_Current'] > 0).mean()
+                elif '_event_count_current' in industry_cohort.columns:
+                    active_pct = (industry_cohort['_event_count_current'] > 0).mean()
+                else:
+                    # Fallback: check if they have revenue
+                    active_pct = (industry_cohort['revenue_current'] > 0).mean()
                 
                 if active_pct < 0.2:  # Less than 20% of industry active
                     multiplier *= 0.9  # Additional reduction

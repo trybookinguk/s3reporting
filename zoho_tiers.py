@@ -754,6 +754,7 @@ def calculate_event_frequency_v2(account_row, booking_data, first_event_created_
                 if date_range > 0:
                     clusters = identify_temporal_clusters(event_dates, gap_days=30)
                     clusters_per_year = len(clusters) / max(date_range / 365, 1)
+                    months_with_events = len(pd.DatetimeIndex(event_dates).tz_localize(None).to_period('M').unique())
                     
                     if clusters_per_year <= 1.5:
                         pattern = 'Annual'
@@ -808,7 +809,8 @@ def calculate_event_frequency_v2(account_row, booking_data, first_event_created_
     
     # Calculate patterns
     clusters_per_year = len(clusters) / max(account_age_days / 365, 1)
-    months_with_events = len(pd.DatetimeIndex(event_dates).to_period('M').unique())
+    # Remove timezone info before converting to periods to avoid warning
+    months_with_events = len(pd.DatetimeIndex(event_dates).tz_localize(None).to_period('M').unique())
     
     # Pattern classification
     if clusters_per_year <= 1.5:
@@ -889,6 +891,200 @@ def calculate_priority_score(row, risk_result):
     
     return round(min(priority, 100))
 
+def get_weighted_creation_months(account_id, booking_data):
+    """
+    Identify when accounts create events, weighted by event volume and revenue
+    """
+    import calendar
+    
+    if len(booking_data) == 0:
+        return []
+    
+    account_events = booking_data[booking_data['AccountId'] == int(account_id)]
+    if len(account_events) == 0:
+        return []
+    
+    # Parse event dates
+    if 'EventDate' in account_events.columns:
+        account_events = account_events.copy()
+        account_events['EventDate'] = pd.to_datetime(account_events['EventDate'], errors='coerce')
+        account_events = account_events.dropna(subset=['EventDate'])
+    else:
+        return []
+    
+    if len(account_events) == 0:
+        return []
+    
+    # Calculate total revenue per event
+    fee_columns = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+    existing_fee_cols = [col for col in fee_columns if col in account_events.columns]
+    if existing_fee_cols:
+        account_events['TotalRevenue'] = account_events[existing_fee_cols].sum(axis=1)
+    else:
+        account_events['TotalRevenue'] = 0
+    
+    # Group by event month to get volume and revenue
+    account_events['EventMonth'] = account_events['EventDate'].dt.to_period('M')
+    monthly_stats = account_events.groupby(['EventMonth', 'EventId']).agg({
+        'TicketQuantity': 'sum',
+        'TotalRevenue': 'sum'
+    }).reset_index()
+    
+    # Count unique events per month
+    events_per_month = monthly_stats.groupby('EventMonth').agg({
+        'EventId': 'nunique',
+        'TicketQuantity': 'sum',
+        'TotalRevenue': 'sum'
+    })
+    
+    # Calculate when these were likely created (2-3 months prior)
+    creation_months = {}
+    for event_month, stats in events_per_month.iterrows():
+        # Estimate creation month (2 months before event)
+        creation_date = event_month.to_timestamp() - pd.DateOffset(months=2)
+        creation_month = creation_date.month
+        
+        if creation_month not in creation_months:
+            creation_months[creation_month] = {
+                'event_count': 0,
+                'total_tickets': 0,
+                'total_revenue': 0
+            }
+        
+        creation_months[creation_month]['event_count'] += stats['EventId']
+        creation_months[creation_month]['total_tickets'] += stats['TicketQuantity']
+        creation_months[creation_month]['total_revenue'] += stats['TotalRevenue']
+    
+    # Calculate importance weights
+    total_events = sum(m['event_count'] for m in creation_months.values())
+    total_revenue = sum(m['total_revenue'] for m in creation_months.values())
+    
+    # Calculate years of data
+    date_range = account_events['EventDate'].max() - account_events['EventDate'].min()
+    years_of_data = max(date_range.days / 365, 1)
+    
+    typical_months = []
+    for month, stats in creation_months.items():
+        event_weight = stats['event_count'] / total_events if total_events > 0 else 0
+        revenue_weight = stats['total_revenue'] / total_revenue if total_revenue > 0 else 0
+        
+        # Combined importance (70% events, 30% revenue)
+        importance = (event_weight * 0.7) + (revenue_weight * 0.3)
+        
+        # Only include months with >5% importance
+        if importance > 0.05:
+            typical_months.append({
+                'month': month,
+                'month_name': calendar.month_name[month],
+                'event_count': stats['event_count'],
+                'avg_events_per_year': stats['event_count'] / years_of_data,
+                'importance': importance,
+                'revenue_share': revenue_weight,
+                'event_share': event_weight
+            })
+    
+    return sorted(typical_months, key=lambda x: x['importance'], reverse=True)
+
+def check_missed_creation_windows(typical_months, last_created_date, current_date, pattern='Unknown'):
+    """
+    Check if account has missed any typical creation windows
+    """
+    if not typical_months or pd.isna(last_created_date):
+        return []
+    
+    missed_windows = []
+    
+    for month_info in typical_months:
+        month = month_info['month']
+        avg_events_per_year = month_info['avg_events_per_year']
+        
+        # Determine expected frequency
+        if avg_events_per_year >= 0.8:  # Nearly annual
+            check_years = 1
+        elif avg_events_per_year >= 0.4:  # Every 2-3 years
+            check_years = 2
+        else:  # Less frequent
+            check_years = 3
+        
+        # Check recent years
+        for years_back in range(check_years):
+            expected_year = current_date.year - years_back
+            expected_date = datetime(expected_year, month, 15, tzinfo=UK_TZ)
+            
+            # Have we passed this date?
+            if current_date > expected_date:
+                # When should they have created? (2-3 months before)
+                if pattern in ['Annual', 'Seasonal']:
+                    lead_time_days = 90  # 3 months
+                elif pattern == 'Regular':
+                    lead_time_days = 30  # 1 month
+                else:  # Occasional
+                    lead_time_days = 60  # 2 months
+                
+                expected_creation = expected_date - timedelta(days=lead_time_days)
+                
+                # Did they create for this window?
+                if last_created_date < expected_creation:
+                    months_overdue = (current_date - expected_date).days / 30.44  # avg days per month
+                    
+                    # Only flag if significantly overdue
+                    if months_overdue > 0.5:  # At least 2 weeks past event date
+                        missed_windows.append({
+                            'month': month,
+                            'month_name': month_info['month_name'],
+                            'months_overdue': months_overdue,
+                            'expected_date': expected_date,
+                            'importance': month_info['importance'],
+                            'event_share': month_info['event_share']
+                        })
+                        break  # Only count once per month
+    
+    return missed_windows
+
+def calculate_weighted_window_risk(missed_windows, typical_months):
+    """
+    Calculate risk based on importance of missed windows
+    """
+    if not missed_windows:
+        return 0, []
+    
+    total_risk = 0
+    risk_details = []
+    
+    for window in missed_windows:
+        months_overdue = window['months_overdue']
+        importance = window['importance']
+        
+        # Base risk from timing
+        if months_overdue >= 3:
+            base_risk = 40  # Very critical
+        elif months_overdue >= 1.5:
+            base_risk = 25  # Critical
+        elif months_overdue >= 0.5:
+            base_risk = 15  # High risk
+        else:
+            base_risk = 5   # Warning
+        
+        # Weight by importance (capped multiplier to avoid extreme scores)
+        importance_multiplier = min(1.5, 0.5 + importance)
+        weighted_risk = base_risk * importance_multiplier
+        
+        total_risk += weighted_risk
+        
+        risk_details.append({
+            'month': window['month_name'],
+            'importance': importance,
+            'months_overdue': months_overdue,
+            'risk_contribution': weighted_risk,
+            'event_share': window['event_share']
+        })
+    
+    # Sort by risk contribution
+    risk_details.sort(key=lambda x: x['risk_contribution'], reverse=True)
+    
+    # Cap total risk but ensure significant windows score high
+    return min(45, total_risk), risk_details
+
 def validate_row_data(row):
     """
     Ensure data is valid before scoring
@@ -956,12 +1152,12 @@ def calculate_churn_risk_final(account_row, booking_data, all_accounts_df,
             risk_factors.append('no_creation_warning')
         
         # TIER 2: Revenue Performance (35 points max)
-        # The key business metric
+        # Focus on decline rate, not absolute position
         
         revenue_current = account_row.get('revenue_current', 0)
         revenue_previous = account_row.get('revenue_prev', 0)
         
-        # Absolute revenue decline
+        # Absolute revenue decline (main component)
         if revenue_previous > 0:
             revenue_decline = (revenue_previous - revenue_current) / revenue_previous
             
@@ -975,19 +1171,13 @@ def calculate_churn_risk_final(account_row, booking_data, all_accounts_df,
                 risk_score += 15
                 risk_factors.append('revenue_decline')
             elif revenue_decline > 0:
-                risk_score += revenue_decline * 20
+                risk_score += revenue_decline * 30  # Scale 0-25% decline to 0-7.5 points
         else:
             revenue_decline = 0
-        
-        # Revenue position within cohort
-        if len(all_accounts_df) > 100:
-            revenue_percentile = stats.percentileofscore(
-                all_accounts_df['revenue_current'], 
-                revenue_current
-            )
-            if revenue_percentile < 25:
+            # New account with no revenue history
+            if revenue_current == 0:
                 risk_score += 10
-                risk_factors.append('bottom_quartile_revenue')
+                risk_factors.append('no_revenue_activity')
         
         # TIER 3: Struggle Indicators (25 points max)
         # Are they trying but failing?
@@ -1029,22 +1219,7 @@ def calculate_churn_risk_final(account_row, booking_data, all_accounts_df,
                 risk_score += 10
                 risk_factors.append('velocity_decline')
         
-        # ENHANCED MODIFIERS
-        
-        # 1. DYNAMIC REVENUE MULTIPLIER
-        # Scale risk based on revenue impact using logarithmic scaling
-        annual_revenue = revenue_current + revenue_previous
-        if annual_revenue > 0:
-            # Log scale to avoid extreme multipliers, with base at £1000
-            # £1k = 1.0x, £10k = 1.15x, £100k = 1.3x, £1M = 1.45x
-            revenue_multiplier = 1.0 + (np.log10(max(annual_revenue / 1000, 1)) * 0.15)
-            revenue_multiplier = min(revenue_multiplier, 1.5)  # Cap at 1.5x
-            
-            # Apply multiplier
-            risk_score *= revenue_multiplier
-            
-            if revenue_multiplier > 1.2:
-                risk_factors.append(f'high_revenue_account_{int(annual_revenue/1000)}k')
+        # SIMPLIFIED MODIFIERS - Focus on behavior, not double-counting value
         
         # 2. DECLINE ACCELERATION TRACKING
         # Check if revenue decline is accelerating by comparing periods
@@ -1071,8 +1246,8 @@ def calculate_churn_risk_final(account_row, booking_data, all_accounts_df,
                             risk_score += 10
                             risk_factors.append('decline_acceleration')
         
-        # 3. INDUSTRY DECLINE ADJUSTMENT
-        # Adjust score based on industry-wide trends
+        # 3. INDUSTRY CONTEXT (NOT ADJUSTMENT)
+        # Use industry trends to provide context, not to reduce risk
         industry = account_row.get('Industry', 'Unknown')
         if industry != 'Unknown' and len(all_accounts_df) > 20:
             # Get industry cohort
@@ -1094,33 +1269,143 @@ def calculate_churn_risk_final(account_row, booking_data, all_accounts_df,
                 if decline_count > 0:
                     industry_avg_decline = industry_avg_decline / decline_count
                     
-                    # If industry is declining overall, reduce individual risk
-                    if industry_avg_decline > 0.2:  # 20%+ industry decline
-                        # Reduce risk proportionally, but not by more than 30%
-                        adjustment_factor = max(0.7, 1 - (industry_avg_decline * 0.5))
-                        risk_score *= adjustment_factor
-                        risk_factors.append(f'industry_decline_adjusted_{int(industry_avg_decline*100)}pct')
+                    # CRITICAL CHANGE: Industry decline is contextual, not mitigating
+                    # High-value accounts at risk remain at risk regardless of industry
                     
-                    # If individual is declining much worse than industry, increase risk
-                    elif revenue_decline > 0 and revenue_decline > industry_avg_decline + 0.3:
+                    # If declining worse than industry average, that's additional risk
+                    if revenue_decline > 0 and revenue_decline > industry_avg_decline + 0.2:
+                        risk_score += 15
+                        risk_factors.append(f'declining_worse_than_industry_{int(industry_avg_decline*100)}pct')
+                    
+                    # If industry is healthy but you're declining, that's concerning
+                    elif industry_avg_decline < 0.1 and revenue_decline > 0.25:
                         risk_score += 10
-                        risk_factors.append('declining_vs_industry')
+                        risk_factors.append('declining_in_healthy_industry')
+                    
+                    # Note industry context for reporting (but don't reduce score)
+                    if industry_avg_decline > 0.2:
+                        risk_factors.append(f'industry_context_decline_{int(industry_avg_decline*100)}pct')
         
-        # Tier drop modifier (keep existing)
+        # WEIGHTED TIER DROP - drops from higher tiers are more concerning
         tier_map = {'NIL': 0, 'Tier 1': 1, 'Tier 2': 2, 'Tier 3': 3, 'Tier 4': 4, 'High Value': 5, 'Key Account': 6}
+        tier_drop_weights = {
+            'Key Account': 3.0,      # Losing a Key Account is critical
+            'High Value': 2.5,       # High Value drops are very concerning
+            'Tier 4': 2.0,          # Upper tier drops matter
+            'Tier 3': 1.5,          # Mid-tier drops are notable
+            'Tier 2': 1.0,          # Lower tier drops less impactful
+            'Tier 1': 0.5,          # Minimal accounts dropping
+        }
+        
         current_tier_val = tier_map.get(account_row.get('Current_Tier', 'NIL'), 0)
         previous_tier_val = tier_map.get(account_row.get('Previous_Tier', 'NIL'), 0)
+        drop_distance = previous_tier_val - current_tier_val
         
-        if previous_tier_val - current_tier_val >= 2:
-            risk_score += 10
-            risk_factors.append('major_tier_drop')
+        if drop_distance > 0:
+            # Weight the drop based on starting position
+            previous_tier = account_row.get('Previous_Tier', 'NIL')
+            weight = tier_drop_weights.get(previous_tier, 1.0)
+            
+            # Calculate weighted risk (max 20 points for tier drops)
+            tier_drop_score = min(20, drop_distance * weight * 3)
+            
+            # Only add if not already heavily penalized by revenue decline
+            if revenue_decline < 0.5 or tier_drop_score > 10:
+                risk_score += tier_drop_score
+                
+                if drop_distance >= 2:
+                    risk_factors.append(f'major_tier_drop_from_{previous_tier}')
+                else:
+                    risk_factors.append(f'tier_drop_from_{previous_tier}')
+        
+        # VOLUME-WEIGHTED WINDOW DETECTION
+        # Check if they've missed their typical event creation windows
+        typical_months = get_weighted_creation_months(account_id, booking_data)
+        
+        if typical_months and pattern != 'Unknown':
+            # Get last created date
+            last_created = last_event_created_lookup.get(int(account_id)) if last_event_created_lookup else None
+            if pd.isna(last_created) and 'LastEventCreated' in account_row:
+                last_created = pd.to_datetime(account_row['LastEventCreated'], errors='coerce')
+            
+            if not pd.isna(last_created):
+                # Check for missed windows
+                missed_windows = check_missed_creation_windows(
+                    typical_months, 
+                    last_created,
+                    datetime.now(UK_TZ),
+                    pattern
+                )
+                
+                if missed_windows:
+                    # Calculate weighted risk based on importance
+                    window_risk, risk_details = calculate_weighted_window_risk(missed_windows, typical_months)
+                    
+                    if window_risk > 0:
+                        risk_score += window_risk
+                        
+                        # Add risk factors based on severity
+                        if window_risk >= 30:
+                            risk_factors.append('missed_critical_event_windows')
+                        elif window_risk >= 20:
+                            risk_factors.append('missed_important_event_windows')
+                        else:
+                            risk_factors.append('missed_event_windows')
+                        
+                        # Add details about the most critical missed window
+                        if risk_details:
+                            top_window = risk_details[0]
+                            if top_window['importance'] > 0.5:
+                                risk_factors.append(f"missed_{top_window['month']}_critical_{int(top_window['event_share']*100)}pct_events")
+                            elif top_window['importance'] > 0.2:
+                                risk_factors.append(f"missed_{top_window['month']}_{int(top_window['months_overdue'])}mo_overdue")
         
         # Long-term customer modifier (keep existing)
         if account_row.get('Years_Loyalty', 0) > 5 and risk_score > 50:
             risk_factors.append('longtime_customer_at_risk')
         
+        # VALUE-BASED ADJUSTMENTS - Percentile-based protection
+        annual_revenue = revenue_current + revenue_previous
+        
+        # Calculate revenue percentile across all accounts
+        if len(all_accounts_df) > 100:
+            # Use current revenue for percentile (what they're worth now)
+            revenue_percentile = stats.percentileofscore(
+                all_accounts_df['revenue_current'].fillna(0), 
+                revenue_current
+            )
+            
+            # Top percentile accounts get minimum risk scores when behavior is bad
+            if revenue_percentile >= 90:  # Top 10%
+                if days_since_created > thresholds['critical']:
+                    if risk_score < 80:
+                        risk_score = 80
+                        risk_factors.append('top_10pct_revenue_critical')
+                elif days_since_created > thresholds['warning']:
+                    if risk_score < 65:
+                        risk_score = 65
+                        risk_factors.append('top_10pct_revenue_warning')
+            
+            elif revenue_percentile >= 75:  # Top 25%
+                if days_since_created > thresholds['critical']:
+                    if risk_score < 70:
+                        risk_score = 70
+                        risk_factors.append('top_25pct_revenue_critical')
+                elif days_since_created > thresholds['warning']:
+                    if risk_score < 55:
+                        risk_score = 55
+                        risk_factors.append('top_25pct_revenue_warning')
+            
+            # Bottom quartile penalty (existing behavior)
+            if revenue_percentile < 25 and revenue_current > 0:
+                risk_score += 5
+                risk_factors.append('bottom_quartile_revenue')
+        
+        # Cap score at 100
+        final_score = min(100, round(risk_score))
+        
         return {
-            'score': min(100, round(risk_score)),
+            'score': final_score,
             'factors': risk_factors,
             'pattern': pattern,
             'days_since_created': days_since_created,

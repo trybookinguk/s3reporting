@@ -4,27 +4,36 @@
 
 The Enhanced Churn Risk Model is a sophisticated scoring system (0-100) that predicts account churn likelihood by analyzing event creation patterns, revenue trends, and business activity. The model uniquely leverages **LastEventCreated** data to detect when accounts stop creating events, catching churn signals months before traditional metrics.
 
-## Latest Enhancements (v2)
+## Latest Enhancements (v3)
 
-### 1. Dynamic Revenue Multiplier
-- Logarithmic scaling based on account value (£1k→1.0x, £100k→1.3x, £1M→1.45x)
-- Ensures resources focus on protecting highest-revenue accounts
-- Smooth progression prevents outliers while maintaining differentiation
+### 1. Volume-Weighted Event Window Detection
+- Tracks which months accounts typically create events
+- Weights importance by event volume and revenue (70/30 mix)
+- Detects when accounts miss their critical creation windows
+- Adds up to 45 points for missing high-importance windows
 
-### 2. Decline Acceleration Detection
+### 2. Weighted Tier Drop Scoring
+- Drops from higher tiers score more severely
+- Key Account drop: 3x weight, High Value: 2.5x, down to Tier 1: 0.5x
+- Maximum 20 points for tier drops
+- Prevents double-counting with revenue decline
+
+### 3. Percentile-Based Value Protection
+- Top 10% revenue accounts: Minimum 80 points if critical, 65 if warning
+- Top 25% revenue accounts: Minimum 70 points if critical, 55 if warning
+- Bottom quartile penalty: +5 points for struggling low-value accounts
+- No fixed revenue thresholds - all percentile-based
+
+### 4. Industry Context (Not Mitigation)
+- Industry decline no longer reduces individual risk scores
+- Declining worse than industry adds 15 points
+- Declining in healthy industry adds 10 points
+- Context noted for reporting but doesn't excuse poor performance
+
+### 5. Decline Acceleration Detection
 - Tracks if revenue decline is accelerating vs historical trends
 - Adds up to 20 points for accounts "falling off a cliff"
 - Distinguishes gradual decline from sudden collapse
-
-### 3. Industry Decline Adjustment
-- Reduces individual risk scores during industry-wide downturns
-- Increases scores for accounts declining worse than peers
-- Requires 10+ accounts per industry for statistical validity
-
-### 4. Priority Scoring System
-- Combines risk score with revenue impact (50/50 weighting)
-- Sorts at-risk accounts by expected revenue loss
-- Enables focus on highest-impact interventions
 
 ## Key Innovation: Event Creation vs Event Occurrence
 
@@ -35,7 +44,7 @@ Traditional models only see events that sold tickets. This model uses `LastEvent
 
 ## Model Architecture
 
-### Three-Tier Risk Assessment
+### Multi-Tier Risk Assessment
 
 #### Tier 1: Creation Activity (40 points max)
 The strongest churn predictor - have they stopped creating events?
@@ -62,10 +71,8 @@ creation_thresholds = {
 - Lost 75%+ revenue: 35 points
 - Lost 50-75% revenue: 25 points
 - Lost 25-50% revenue: 15 points
-- Lost 0-25% revenue: 0-10 points (scaled)
-
-**Bottom Quartile Penalty (+10 points):**
-- If revenue percentile < 25%: Additional 10 points
+- Lost 0-25% revenue: 0-7.5 points (scaled)
+- New account with no revenue: 10 points
 
 #### Tier 3: Struggle Indicators (25 points max)
 
@@ -73,12 +80,25 @@ creation_thresholds = {
 - Created events recently but no sales > 60 days: 25 points
 - Created events recently but no sales > 30 days: 15 points
 
-**Free Events Only (REMOVED):**
-- No longer considered a risk factor
-- Free events are a valid business model
-
 **Velocity Decline (+10 points):**
 - For Regular/Seasonal patterns: Recent activity < 50% of expected
+
+#### Tier 4: Missed Event Windows (45 points max) - NEW
+
+**Volume-Weighted Window Risk:**
+- Tracks typical creation months by event volume
+- 3+ months overdue on critical window: 40 points × importance
+- 1.5+ months overdue: 25 points × importance
+- 0.5+ months overdue: 15 points × importance
+- Maximum 45 points total
+
+#### Tier 5: Tier Drops (20 points max)
+
+**Weighted by Starting Position:**
+- Key Account drop: 3x weight
+- High Value drop: 2.5x weight
+- Tier 4 drop: 2x weight
+- Lower tiers: 1.5x down to 0.5x
 
 ### Enhanced Modifiers
 
@@ -171,18 +191,20 @@ def calculate_event_frequency_v2(account_row, booking_data):
 
 ### Example: Account 5716 (Churned Theatre)
 
-**Before Enhancement (Score: 49)**
-- Model only saw December events in 365-day window
-- Couldn't detect 6-month creation gap
+**Before Enhancement (Score: 51)**
+- Industry decline adjustment reduced score by 30%
+- Missed event window not detected
 - Misclassified as moderate risk
 
-**After Enhancement (Score: ~85)**
-- Pattern: Seasonal (annual festival + Christmas)
-- Days since created: 180+ (critical for seasonal)
-- Creation activity score: 40 points
+**After Enhancement (Score: ~95-100)**
+- Pattern: Occasional (biannual shows)
+- Days since created: 288 (critical for pattern)
+- Creation activity: 40 points
 - Revenue decline (51%): 25 points
-- Other factors: 20 points
-- Correctly identified as critical risk
+- Missed June window (high importance): ~30 points
+- Tier drop (Key Account → High Value): ~7.5 points
+- Top revenue percentile override: Ensures 80+ minimum
+- **Total: 95-100 (CRITICAL RISK)**
 
 ## Edge Cases Handled
 

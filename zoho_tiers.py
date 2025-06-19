@@ -723,16 +723,56 @@ def identify_temporal_clusters(event_dates, gap_days=30):
     clusters.append(current_cluster)
     return clusters
 
-def calculate_event_frequency_v2(account_row, booking_data):
+def calculate_event_frequency_v2(account_row, booking_data, first_event_created_lookup=None, last_event_created_lookup=None):
     """
     Enhanced event frequency calculation using creation dates and visible sales
     """
     account_id = account_row['Account_Name']
+    account_id_int = int(account_id) if isinstance(account_id, (int, float, str)) else account_id
+    
+    # Try to get from lookups if not in row
     first_created = account_row.get('FirstEventCreated')
     last_created = account_row.get('LastEventCreated')
     
+    if (pd.isna(first_created) or pd.isna(last_created)) and first_event_created_lookup and last_event_created_lookup:
+        first_created = first_event_created_lookup.get(account_id_int)
+        last_created = last_event_created_lookup.get(account_id_int)
+    
     if pd.isna(first_created) or pd.isna(last_created):
-        # No creation data available
+        # No creation data available - fall back to booking data patterns
+        if len(booking_data) > 0 and account_id_int in booking_data['AccountId'].values:
+            # Use booking data to estimate pattern
+            account_bookings = booking_data[booking_data['AccountId'] == account_id_int]
+            if 'EventDate' in account_bookings.columns:
+                event_dates = pd.to_datetime(account_bookings['EventDate'].dropna()).unique()
+            else:
+                event_dates = pd.to_datetime(account_bookings['TransactionDate'].dropna()).unique()
+            
+            if len(event_dates) > 0:
+                # Estimate pattern from visible data
+                date_range = (event_dates.max() - event_dates.min()).days
+                if date_range > 0:
+                    clusters = identify_temporal_clusters(event_dates, gap_days=30)
+                    clusters_per_year = len(clusters) / max(date_range / 365, 1)
+                    
+                    if clusters_per_year <= 1.5:
+                        pattern = 'Annual'
+                    elif clusters_per_year <= 4:
+                        pattern = 'Seasonal'
+                    elif clusters_per_year >= 6:
+                        pattern = 'Regular'
+                    else:
+                        pattern = 'Occasional'
+                    
+                    return {
+                        'pattern': pattern,
+                        'clusters_per_year': clusters_per_year,
+                        'months_active': len(pd.DatetimeIndex(event_dates).to_period('M').unique()),
+                        'typical_months': pd.DatetimeIndex(event_dates).month.value_counts().head(3).index.tolist(),
+                        'days_since_created': 999,  # Unknown
+                        'days_since_visible': (datetime.now(UK_TZ) - event_dates.max()).days
+                    }
+        
         return {
             'pattern': 'Unknown',
             'clusters_per_year': 0,
@@ -789,6 +829,66 @@ def calculate_event_frequency_v2(account_row, booking_data):
         'days_since_visible': (datetime.now(UK_TZ) - event_dates.max()).days if len(event_dates) > 0 else 999
     }
 
+def calculate_revenue_at_risk(row, risk_result):
+    """
+    Calculate expected revenue loss based on pattern and current performance
+    """
+    revenue_current = row.get('revenue_current', 0)
+    revenue_previous = row.get('revenue_prev', 0)
+    pattern = risk_result.get('pattern', 'Unknown')
+    risk_score = risk_result.get('score', 0)
+    
+    # Base expectation on better of current or previous
+    base_revenue = max(revenue_current, revenue_previous)
+    
+    if base_revenue == 0:
+        return 0
+    
+    # Pattern-based time horizon
+    if pattern == 'Annual':
+        # Full year at risk
+        revenue_at_risk = base_revenue
+    elif pattern == 'Seasonal':
+        # Next 2 seasons at risk
+        revenue_at_risk = base_revenue * 0.5
+    elif pattern == 'Regular':
+        # Next quarter at risk
+        revenue_at_risk = base_revenue * 0.25
+    else:
+        # Conservative estimate
+        revenue_at_risk = base_revenue * 0.33
+    
+    # Adjust by probability (risk score)
+    probability = risk_score / 100
+    expected_loss = revenue_at_risk * probability
+    
+    return round(expected_loss)
+
+def calculate_priority_score(row, risk_result):
+    """
+    Combine risk score with revenue impact for prioritization
+    Higher score = higher priority for intervention
+    """
+    risk_score = risk_result.get('score', 0)
+    revenue_at_risk = calculate_revenue_at_risk(row, risk_result)
+    
+    # Normalize revenue to 0-100 scale (£100k = 100)
+    revenue_factor = min(revenue_at_risk / 1000, 100)
+    
+    # Weight risk and revenue equally
+    priority = (risk_score * 0.5) + (revenue_factor * 0.5)
+    
+    # Boost for certain critical factors
+    risk_factors = risk_result.get('factors', [])
+    if 'no_creation_critical' in risk_factors:
+        priority *= 1.2
+    if 'severe_decline_acceleration' in risk_factors:
+        priority *= 1.15
+    if 'longtime_customer_at_risk' in risk_factors:
+        priority *= 1.1
+    
+    return round(min(priority, 100))
+
 def validate_row_data(row):
     """
     Ensure data is valid before scoring
@@ -812,7 +912,8 @@ def validate_row_data(row):
     
     return True, "Valid"
 
-def calculate_churn_risk_final(account_row, booking_data, all_accounts_df):
+def calculate_churn_risk_final(account_row, booking_data, all_accounts_df, 
+                              first_event_created_lookup=None, last_event_created_lookup=None):
     """
     Revenue-focused churn risk with creation insights
     Returns dict with score and details
@@ -821,7 +922,8 @@ def calculate_churn_risk_final(account_row, booking_data, all_accounts_df):
         account_id = account_row['Account_Name']
         
         # Get pattern analysis
-        pattern_info = calculate_event_frequency_v2(account_row, booking_data)
+        pattern_info = calculate_event_frequency_v2(account_row, booking_data, 
+                                                   first_event_created_lookup, last_event_created_lookup)
         
         # Initialize risk components
         risk_score = 0
@@ -900,20 +1002,8 @@ def calculate_churn_risk_final(account_row, booking_data, all_accounts_df):
             risk_score += 15
             risk_factors.append('sales_struggling')
         
-        # Free event detection
-        if len(booking_data) > 0 and int(account_id) in booking_data['AccountId'].values:
-            account_bookings = booking_data[booking_data['AccountId'] == int(account_id)]
-            total_fees = (
-                account_bookings['BookingFee'].sum() +
-                account_bookings['CardFee'].sum() +
-                account_bookings['ProcessingFee'].sum() +
-                account_bookings['TicketFee'].sum()
-            )
-            
-            if total_fees == 0 and revenue_current == 0:
-                # Only running free events now
-                risk_score += 15
-                risk_factors.append('free_events_only')
+        # Free event detection - REMOVED as not a risk factor
+        # Free events are a valid business model, not a churn indicator
         
         # Velocity decline
         if pattern in ['Regular', 'Seasonal']:
@@ -939,13 +1029,84 @@ def calculate_churn_risk_final(account_row, booking_data, all_accounts_df):
                 risk_score += 10
                 risk_factors.append('velocity_decline')
         
-        # MODIFIERS
+        # ENHANCED MODIFIERS
         
-        # High-value account modifier
-        if account_row.get('Current_Tier') in ['Key Account', 'High Value']:
-            risk_score *= 1.1  # Prioritize high-value accounts
+        # 1. DYNAMIC REVENUE MULTIPLIER
+        # Scale risk based on revenue impact using logarithmic scaling
+        annual_revenue = revenue_current + revenue_previous
+        if annual_revenue > 0:
+            # Log scale to avoid extreme multipliers, with base at £1000
+            # £1k = 1.0x, £10k = 1.15x, £100k = 1.3x, £1M = 1.45x
+            revenue_multiplier = 1.0 + (np.log10(max(annual_revenue / 1000, 1)) * 0.15)
+            revenue_multiplier = min(revenue_multiplier, 1.5)  # Cap at 1.5x
             
-        # Tier drop modifier  
+            # Apply multiplier
+            risk_score *= revenue_multiplier
+            
+            if revenue_multiplier > 1.2:
+                risk_factors.append(f'high_revenue_account_{int(annual_revenue/1000)}k')
+        
+        # 2. DECLINE ACCELERATION TRACKING
+        # Check if revenue decline is accelerating by comparing periods
+        if account_row.get('revenue_prev', 0) > 0 and account_row.get('lifetime_revenue_prev', 0) > 0:
+            # Calculate year-over-year decline rates
+            current_decline_rate = revenue_decline  # Already calculated above
+            
+            # Need previous period's decline rate - estimate from lifetime data
+            years_active = account_row.get('years_loyalty', 1)
+            if years_active > 2:
+                # Rough estimate of previous decline rate
+                avg_historical_revenue = account_row.get('lifetime_revenue_prev', 0) / max(years_active - 1, 1)
+                if avg_historical_revenue > 0:
+                    previous_decline_rate = (avg_historical_revenue - revenue_previous) / avg_historical_revenue
+                    
+                    # Check if decline is accelerating
+                    if current_decline_rate > 0 and previous_decline_rate < current_decline_rate:
+                        acceleration = current_decline_rate - max(previous_decline_rate, 0)
+                        
+                        if acceleration > 0.3:  # 30%+ acceleration
+                            risk_score += 20
+                            risk_factors.append('severe_decline_acceleration')
+                        elif acceleration > 0.15:  # 15%+ acceleration
+                            risk_score += 10
+                            risk_factors.append('decline_acceleration')
+        
+        # 3. INDUSTRY DECLINE ADJUSTMENT
+        # Adjust score based on industry-wide trends
+        industry = account_row.get('Industry', 'Unknown')
+        if industry != 'Unknown' and len(all_accounts_df) > 20:
+            # Get industry cohort
+            industry_mask = all_accounts_df['Industry'] == industry
+            industry_cohort = all_accounts_df[industry_mask]
+            
+            if len(industry_cohort) >= 10:  # Need minimum cohort size
+                # Calculate industry-wide decline
+                industry_avg_decline = 0
+                decline_count = 0
+                
+                for _, ind_row in industry_cohort.iterrows():
+                    if ind_row.get('revenue_prev', 0) > 0:
+                        ind_decline = (ind_row['revenue_prev'] - ind_row['revenue_current']) / ind_row['revenue_prev']
+                        if ind_decline > 0:
+                            industry_avg_decline += ind_decline
+                            decline_count += 1
+                
+                if decline_count > 0:
+                    industry_avg_decline = industry_avg_decline / decline_count
+                    
+                    # If industry is declining overall, reduce individual risk
+                    if industry_avg_decline > 0.2:  # 20%+ industry decline
+                        # Reduce risk proportionally, but not by more than 30%
+                        adjustment_factor = max(0.7, 1 - (industry_avg_decline * 0.5))
+                        risk_score *= adjustment_factor
+                        risk_factors.append(f'industry_decline_adjusted_{int(industry_avg_decline*100)}pct')
+                    
+                    # If individual is declining much worse than industry, increase risk
+                    elif revenue_decline > 0 and revenue_decline > industry_avg_decline + 0.3:
+                        risk_score += 10
+                        risk_factors.append('declining_vs_industry')
+        
+        # Tier drop modifier (keep existing)
         tier_map = {'NIL': 0, 'Tier 1': 1, 'Tier 2': 2, 'Tier 3': 3, 'Tier 4': 4, 'High Value': 5, 'Key Account': 6}
         current_tier_val = tier_map.get(account_row.get('Current_Tier', 'NIL'), 0)
         previous_tier_val = tier_map.get(account_row.get('Previous_Tier', 'NIL'), 0)
@@ -954,7 +1115,7 @@ def calculate_churn_risk_final(account_row, booking_data, all_accounts_df):
             risk_score += 10
             risk_factors.append('major_tier_drop')
         
-        # Long-term customer modifier
+        # Long-term customer modifier (keep existing)
         if account_row.get('Years_Loyalty', 0) > 5 and risk_score > 50:
             risk_factors.append('longtime_customer_at_risk')
         
@@ -1245,7 +1406,8 @@ def calculate_metrics_from_aggregated(account_metrics, industry_lookup=None, sub
         
         # Calculate enhanced churn risk
         risk_result = calculate_churn_risk_final(
-            row, all_booking_data, metrics_df
+            row, all_booking_data, metrics_df,
+            first_event_created_lookup, last_event_created_lookup
         )
         churn_prob = risk_result['score']
             
@@ -1271,7 +1433,9 @@ def calculate_metrics_from_aggregated(account_metrics, industry_lookup=None, sub
             "_revenue_previous": row.get('revenue_prev', 0),
             "_risk_factors": ','.join(risk_result.get('factors', [])),
             "_event_pattern": risk_result.get('pattern', 'Unknown'),
-            "_days_since_created": risk_result.get('days_since_created', 999)
+            "_days_since_created": risk_result.get('days_since_created', 999),
+            "_revenue_at_risk": calculate_revenue_at_risk(row, risk_result),
+            "_priority_score": calculate_priority_score(row, risk_result)
         })
     
     # Print event frequency summary
@@ -1321,10 +1485,23 @@ def calculate_metrics_from_aggregated(account_metrics, industry_lookup=None, sub
             'Critical (81-100)': results_df[results_df['Churn_Risk'] > 80]
         }
         
+        total_revenue_at_risk = 0
         for band, accounts in risk_bands.items():
             count = len(accounts)
-            revenue_at_risk = accounts['_revenue_current'].sum() if '_revenue_current' in accounts.columns else 0
-            print(f"  {band}: {count:,} accounts (£{revenue_at_risk:,.0f} revenue)")
+            current_revenue = accounts['_revenue_current'].sum() if '_revenue_current' in accounts.columns else 0
+            expected_loss = accounts['_revenue_at_risk'].sum() if '_revenue_at_risk' in accounts.columns else 0
+            total_revenue_at_risk += expected_loss
+            print(f"  {band}: {count:,} accounts (£{current_revenue:,.0f} current, £{expected_loss:,.0f} at risk)")
+        
+        print(f"\n  Total Expected Revenue Loss: £{total_revenue_at_risk:,.0f}")
+        
+        # Top priority accounts
+        print("\nTop 10 Priority Accounts (by revenue impact):")
+        top_priority = results_df.nlargest(10, '_priority_score')
+        for _, acc in top_priority.iterrows():
+            factors = acc.get('_risk_factors', '').split(',')[:2]  # Top 2 factors
+            print(f"  {acc['Account_Name']}: Score={acc['Churn_Risk']}, Priority={acc.get('_priority_score', 0)}, "
+                  f"Revenue@Risk=£{acc.get('_revenue_at_risk', 0):,.0f}, Factors={', '.join(factors)}")
         
         # Score distribution statistics
         print("\nScore Distribution:")
@@ -1400,19 +1577,38 @@ def generate_at_risk_accounts_report(results_df):
          (results_df.get('_revenue_previous', 0) >= MIN_REVENUE))
     ].copy()
     
-    # Sort by risk score descending, then by revenue
-    high_risk_accounts['total_revenue'] = high_risk_accounts['_revenue_current'] + high_risk_accounts['_revenue_previous']
-    high_risk_accounts = high_risk_accounts.sort_values(['Churn_Risk', 'total_revenue'], ascending=[False, False])
+    # Sort by priority score (combines risk with revenue impact)
+    high_risk_accounts = high_risk_accounts.sort_values('_priority_score', ascending=False)
     
     # Prepare report data
     report_data = []
     for _, account in high_risk_accounts.iterrows():
+        # Parse risk factors for display
+        risk_factors_str = account.get('_risk_factors', '')
+        risk_factors = risk_factors_str.split(',') if risk_factors_str else []
+        
+        # Identify key risk reasons
+        key_risks = []
+        if 'no_creation_critical' in risk_factors:
+            key_risks.append('No Event Creation')
+        if 'severe_revenue_decline' in risk_factors:
+            key_risks.append('Severe Revenue Decline')
+        if 'severe_decline_acceleration' in risk_factors:
+            key_risks.append('Accelerating Decline')
+        if 'events_not_selling' in risk_factors:
+            key_risks.append('Events Not Selling')
+        if 'major_tier_drop' in risk_factors:
+            key_risks.append('Major Tier Drop')
+        
         report_data.append({
             'Account_Name': account['Account_Name'],
+            'Priority_Score': account.get('_priority_score', 0),
             'Churn_Risk_Score': account['Churn_Risk'],
+            'Revenue_At_Risk': round(account.get('_revenue_at_risk', 0)),
             'Risk_Level': 'Critical' if account['Churn_Risk'] > 75 else 'High',
-            'Rating': account['Rating'],
-            'Event_Pattern': account['Event_Frequency_Current'],
+            'Key_Risks': ', '.join(key_risks[:3]),  # Top 3 risks
+            'Event_Pattern': account.get('_event_pattern', account['Event_Frequency_Current']),
+            'Days_Since_Created': account.get('_days_since_created', 999),
             'Current_Tier': account['Current_Tier'],
             'Last_Year_Revenue': round(account.get('_revenue_previous', 0), 2),
             'Current_Revenue': round(account.get('_revenue_current', 0), 2),
@@ -1438,7 +1634,8 @@ def email_at_risk_report(report_df, filename):
     
     # Calculate summary stats
     critical_count = len(report_df[report_df['Risk_Level'] == 'Critical'])
-    total_revenue_at_risk = report_df['Current_Revenue'].sum()
+    total_current_revenue = report_df['Current_Revenue'].sum()
+    total_expected_loss = report_df['Revenue_At_Risk'].sum()
     
     # Plain text body
     body = f"""Hi Alex,
@@ -1448,10 +1645,11 @@ def email_at_risk_report(report_df, filename):
 Summary:
 - Critical Risk (76-100): {critical_count} accounts
 - High Risk (51-75): {len(report_df) - critical_count} accounts
-- Total Revenue at Risk: £{total_revenue_at_risk:,.2f}
+- Total Current Revenue: £{total_current_revenue:,.2f}
+- Expected Revenue Loss: £{total_expected_loss:,.2f}
 
-Top 5 Highest Risk Accounts:
-{report_df.head()[['Account_Name', 'Churn_Risk_Score', 'Current_Revenue', 'Rating']].to_string(index=False)}
+Top 5 Priority Accounts (sorted by revenue impact):
+{report_df.head()[['Account_Name', 'Priority_Score', 'Revenue_At_Risk', 'Key_Risks']].to_string(index=False)}
 
 Please review the attached CSV for the complete list.
 
@@ -1468,15 +1666,19 @@ TryBooking Reporting System
 <ul>
 <li><strong>Critical Risk (76-100):</strong> {critical_count} accounts</li>
 <li><strong>High Risk (51-75):</strong> {len(report_df) - critical_count} accounts</li>
-<li><strong>Total Revenue at Risk:</strong> £{total_revenue_at_risk:,.2f}</li>
+<li><strong>Total Current Revenue:</strong> £{total_current_revenue:,.2f}</li>
+<li><strong>Expected Revenue Loss:</strong> £{total_expected_loss:,.2f}</li>
 </ul>
 
 <h3>Immediate Action Required:</h3>
-<p>Please review the attached CSV for the complete list. Each account includes:</p>
+<p>The accounts are sorted by <strong>Priority Score</strong>, which combines churn risk with revenue impact to focus your efforts on the highest-value accounts.</p>
+<p>Each account includes:</p>
 <ul>
-<li>Churn risk score and rating</li>
-<li>Revenue comparison (last year vs current)</li>
-<li>Event frequency changes</li>
+<li>Priority score and churn risk rating</li>
+<li>Expected revenue at risk (£)</li>
+<li>Key risk factors (e.g., no event creation, revenue decline)</li>
+<li>Days since last event created</li>
+<li>Event pattern (Annual, Seasonal, Regular)</li>
 </ul>
 
 <p>Best regards,<br>TryBooking Reporting System</p>
@@ -1658,6 +1860,13 @@ def main():
             accounts_df = pd.read_csv(accounts_obj['Body'])
             print(f"  Loaded {len(accounts_df)} accounts with industry data")
             
+            # Debug: Check available columns
+            print(f"  Account columns: {', '.join(accounts_df.columns[:20])}")
+            if 'FirstEventCreated' in accounts_df.columns:
+                print(f"  FirstEventCreated found, non-null: {accounts_df['FirstEventCreated'].notna().sum()}")
+            if 'LastEventCreated' in accounts_df.columns:
+                print(f"  LastEventCreated found, non-null: {accounts_df['LastEventCreated'].notna().sum()}")
+            
             # Create lookup dictionaries for O(1) access
             # The Accounts report uses 'Id' not 'AccountId'
             industry_lookup = dict(zip(accounts_df['Id'].astype(int), accounts_df['Industry'].fillna('Unknown')))
@@ -1672,6 +1881,14 @@ def main():
             print("\n  Top industries:")
             for industry, count in industry_counts.items():
                 print(f"    {industry}: {count} accounts")
+            
+            # Debug: Check if specific accounts have creation dates
+            test_accounts = [5716, 100, 500, 1000]
+            print("\n  Sample account creation dates:")
+            for acc_id in test_accounts:
+                first = first_event_created_lookup.get(acc_id, 'Not found')
+                last = last_event_created_lookup.get(acc_id, 'Not found')
+                print(f"    Account {acc_id}: First={first}, Last={last}")
                 
         except Exception as e:
             print(f"WARNING: Could not load Accounts data: {e}")

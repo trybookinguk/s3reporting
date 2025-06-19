@@ -2,6 +2,7 @@ import os
 import boto3
 import pandas as pd
 import numpy as np
+from scipy import stats
 import requests
 from datetime import datetime, timedelta
 import pytz
@@ -194,12 +195,15 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
         
         # Debug: sample event tracking
         if len(account_metrics) > 0:
-            sample_accounts = list(account_metrics.keys())[:3]
+            sample_accounts = list(account_metrics.keys())[:5]  # Show 5 samples
             print("\n  Sample event tracking:")
             for acc_id in sample_accounts:
                 curr_events = len(account_metrics[acc_id].get('event_ids_current', set()))
                 prev_events = len(account_metrics[acc_id].get('event_ids_previous', set()))
+                curr_event_ids = list(account_metrics[acc_id].get('event_ids_current', set()))[:3]  # Show first 3 IDs
                 print(f"    Account {acc_id}: {curr_events} current events, {prev_events} previous events")
+                if curr_event_ids:
+                    print(f"      Sample current event IDs: {curr_event_ids}")
     
     return account_metrics
 
@@ -277,61 +281,365 @@ def classify_event_frequency(event_count):
     else:  # 4+
         return "Regular"
 
-def calculate_churn_probability(current_events, previous_events, revenue_current, revenue_previous,
-                               days_since_last, event_pattern, avg_lead_days=60, last_event_date=None):
+# === BULLETPROOF CHURN RISK MODEL ===
+
+def calculate_absolute_decline(row):
     """
-    Calculate churn probability score (0-100)
-    Higher score = higher risk of churn
+    Measures actual revenue loss, not relative position
+    Component 1: 0-30 points
     """
-    factors = {}
+    revenue_current = row.get('revenue_current', 0)
+    revenue_previous = row.get('revenue_prev', 0)
     
-    # 1. Event Frequency Decline (weight: 30%)
-    if previous_events > 0:
-        event_decline = max(0, (previous_events - current_events) / previous_events)
-        factors['event_decline'] = event_decline * 30
+    if revenue_previous == 0:
+        return 0  # No baseline
+    
+    decline_pct = max(0, (revenue_previous - revenue_current) / revenue_previous)
+    
+    # Non-linear scoring
+    if decline_pct >= 0.75:      # Lost 75%+ revenue
+        return 30
+    elif decline_pct >= 0.50:    # Lost 50-75%
+        return 20 + (decline_pct - 0.5) * 40  # 20-30 points
+    elif decline_pct >= 0.25:    # Lost 25-50%
+        return 10 + (decline_pct - 0.25) * 40  # 10-20 points
+    else:                        # Lost 0-25%
+        return decline_pct * 40   # 0-10 points
+
+def calculate_position_risk(row, cohort):
+    """
+    Low percentile = high risk, but capped to prevent volatility
+    Component 2: 0-25 points
+    """
+    if len(cohort) < 100:
+        # Use tier-based scoring instead
+        return calculate_tier_based_risk(row)
+    
+    current_percentile = row.get('revenue_current_pct', 0)
+    
+    # Inverted scale with graduated risk
+    if current_percentile == 0:      # No revenue
+        return 25
+    elif current_percentile < 10:    # Bottom 10%
+        return 20 + (10 - current_percentile) * 0.5  # 20-25 points
+    elif current_percentile < 25:    # Bottom quartile
+        return 15 + (25 - current_percentile) * 0.33  # 15-20 points
+    elif current_percentile < 50:    # Below median
+        return 5 + (50 - current_percentile) * 0.4   # 5-15 points
+    else:                            # Above median
+        return max(0, (50 - current_percentile) * 0.1)  # 0-5 points
+
+def calculate_tier_based_risk(row):
+    """
+    Fallback when cohort is too small
+    Uses tier position as proxy for risk
+    """
+    tier = row.get('Current_Tier', 'NIL')
+    tier_risk = {
+        'NIL': 25,
+        'Tier 1': 20,
+        'Tier 2': 15,
+        'Tier 3': 10,
+        'Tier 4': 5,
+        'High Value': 3,
+        'Key Account': 0
+    }
+    return tier_risk.get(tier, 15)
+
+def calculate_activity_risk(row, cohort):
+    """
+    Simple days-based risk with pattern adjustment
+    Component 3: 0-15 points
+    """
+    days_inactive = row.get('_days_since_last', 999)
+    pattern = row.get('Event_Frequency_Previous', 'Unknown')
+    
+    # Pattern-specific thresholds
+    if pattern == 'Annual':
+        threshold_low = 300   # ~10 months
+        threshold_high = 450  # ~15 months
+    elif pattern == 'Occasional':
+        threshold_low = 120   # 4 months
+        threshold_high = 240  # 8 months
+    elif pattern == 'Regular':
+        threshold_low = 45    # 1.5 months
+        threshold_high = 90   # 3 months
+    else:  # Unknown/Inactive
+        threshold_low = 180
+        threshold_high = 365
+    
+    if days_inactive <= threshold_low:
+        return 0
+    elif days_inactive <= threshold_high:
+        progress = (days_inactive - threshold_low) / (threshold_high - threshold_low)
+        return progress * 15  # 0-15 points
     else:
-        factors['event_decline'] = 0
+        return 15  # Max points
+
+def calculate_momentum(row):
+    """
+    Rate of change matters - gradual vs sudden decline
+    Component 4: 0-15 points
+    """
+    # Compare current to previous percentile, but bounded
+    percentile_drop = max(0, row.get('revenue_prev_pct', 0) - row.get('revenue_current_pct', 0))
     
-    # 2. Revenue Decline (weight: 25%)
-    if revenue_previous > 0:
-        revenue_decline = max(0, (revenue_previous - revenue_current) / revenue_previous)
-        factors['revenue_decline'] = revenue_decline * 25
+    # Only significant drops matter (>10 percentile points)
+    if percentile_drop > 10:
+        # Cap at 50 percentile drop to prevent volatility
+        bounded_drop = min(percentile_drop - 10, 40) / 40
+        return bounded_drop * 15  # 0-15 points
+    return 0
+
+def calculate_business_value(row):
+    """
+    Prioritize high-value accounts
+    Component 5: 0-15 points
+    """
+    tier = row.get('Current_Tier', 'NIL')
+    lifetime_revenue = row.get('lifetime_revenue', 0)
+    
+    # Tier-based component (0-10 points)
+    tier_points = {
+        'Key Account': 10,
+        'High Value': 8,
+        'Tier 4': 6,
+        'Tier 3': 4,
+        'Tier 2': 2,
+        'Tier 1': 1,
+        'NIL': 0
+    }
+    tier_score = tier_points.get(tier, 0)
+    
+    # Lifetime value component (0-5 points)
+    if lifetime_revenue > 100000:
+        ltv_score = 5
+    elif lifetime_revenue > 50000:
+        ltv_score = 4
+    elif lifetime_revenue > 25000:
+        ltv_score = 3
+    elif lifetime_revenue > 10000:
+        ltv_score = 2
+    elif lifetime_revenue > 5000:
+        ltv_score = 1
     else:
-        factors['revenue_decline'] = 0
+        ltv_score = 0
     
-    # 3. Time Since Last Activity (weight: 25%)
-    if event_pattern == "Regular":
-        # Regular events should have activity within 90 days
-        inactivity_score = min(days_since_last / 90, 1.0) * 25
-    elif event_pattern == "Occasional":
-        # Occasional events: 180 days
-        inactivity_score = min(days_since_last / 180, 1.0) * 25
-    elif event_pattern == "Annual" and last_event_date:
-        # Annual events: check if past expected creation
-        expected_next = last_event_date + pd.Timedelta(days=365)
-        expected_creation = expected_next - pd.Timedelta(days=avg_lead_days)
-        days_past_expected = (pd.Timestamp.now().date() - expected_creation).days
-        inactivity_score = min(max(0, days_past_expected) / 90, 1.0) * 25
-    else:
-        inactivity_score = min(days_since_last / 365, 1.0) * 25
-    factors['inactivity'] = inactivity_score
+    return tier_score + ltv_score
+
+def calculate_seasonality_multiplier(account_id, account_metrics):
+    """
+    Reduce risk during known quiet periods
+    Returns multiplier 0.8-1.0
+    """
+    if account_id not in account_metrics or not account_metrics[account_id].get('event_creation_info'):
+        return 1.0
     
-    # 4. Complete Drop-off Signal (weight: 20%)
-    if current_events == 0 and previous_events > 0:
-        factors['complete_dropoff'] = 20
-    else:
-        factors['complete_dropoff'] = 0
+    # Extract event dates from historical data
+    event_info = account_metrics[account_id]['event_creation_info']
+    if not event_info:
+        return 1.0
+        
+    # Get event months
+    event_months = []
+    for info in event_info.values():
+        if info.get('event_date'):
+            month = pd.to_datetime(info['event_date']).month
+            event_months.append(month)
     
-    # Calculate total score
-    total_score = sum(factors.values())
+    if not event_months:
+        return 1.0
     
-    # Apply pattern-specific adjustments
-    if event_pattern == "Annual" and current_events == 0:
-        # Annual events get a grace period adjustment
-        if days_since_last < 400:  # ~13 months
-            total_score *= 0.8  # Reduce score by 20%
+    # Calculate monthly distribution
+    month_counts = pd.Series(event_months).value_counts()
+    total_events = len(event_months)
     
-    return min(100, max(0, total_score))  # Ensure 0-100 range
+    # Check if seasonal (>70% events in 6 months)
+    if total_events >= 3:  # Need minimum events to determine seasonality
+        top_6_months = month_counts.nlargest(6).sum()
+        if top_6_months / total_events > 0.7:
+            peak_months = month_counts.nlargest(6).index.tolist()
+            current_month = datetime.now().month
+            
+            if current_month not in peak_months:
+                return 0.8  # 20% risk reduction
+    
+    return 1.0
+
+def calculate_critical_flags(row):
+    """
+    Binary flags for critical situations
+    Returns multiplier 1.0-1.4
+    """
+    multiplier = 1.0
+    
+    # Complete revenue cessation
+    if row.get('revenue_current', 0) == 0 and row.get('revenue_prev', 0) > 1000:
+        multiplier *= 1.2
+    
+    # Tier collapse (3+ tiers)
+    tier_order = ['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1', 'NIL']
+    try:
+        prev_idx = tier_order.index(row.get('Previous_Tier', 'NIL'))
+        curr_idx = tier_order.index(row.get('Current_Tier', 'NIL'))
+        tier_drop = max(0, curr_idx - prev_idx)
+        if tier_drop >= 3:
+            multiplier *= 1.15
+    except ValueError:
+        pass  # Invalid tier name
+    
+    return multiplier
+
+def get_comparison_cohort(account_id, all_accounts_df, industry_lookup, sub_industry_lookup):
+    """
+    Strict cohort selection with 100+ requirement
+    Returns (cohort_df, cohort_level)
+    """
+    MIN_COHORT_SIZE = 100
+    
+    # Try sub-industry (most specific)
+    sub_industry = sub_industry_lookup.get(account_id)
+    if sub_industry and sub_industry != 'Unknown':
+        sub_cohort_mask = all_accounts_df['Account_Name'].apply(
+            lambda x: sub_industry_lookup.get(int(x), 'Unknown') == sub_industry
+        )
+        sub_cohort = all_accounts_df[sub_cohort_mask]
+        if len(sub_cohort) >= MIN_COHORT_SIZE:
+            return sub_cohort, 'sub_industry'
+    
+    # Try industry
+    industry = industry_lookup.get(account_id)
+    if industry and industry != 'Unknown':
+        ind_cohort_mask = all_accounts_df['Account_Name'].apply(
+            lambda x: industry_lookup.get(int(x), 'Unknown') == industry
+        )
+        ind_cohort = all_accounts_df[ind_cohort_mask]
+        if len(ind_cohort) >= MIN_COHORT_SIZE:
+            return ind_cohort, 'industry'
+    
+    # Fall back to global (always has enough)
+    return all_accounts_df, 'global'
+
+def calculate_new_account_risk(row):
+    """
+    Simplified scoring for accounts without history
+    Returns 0-50
+    """
+    # Base risk is low (they're new)
+    risk = 10
+    
+    # Add risk if no current activity
+    if row.get('revenue_current', 0) == 0:
+        risk += 20
+    
+    # Add risk based on days since last activity
+    days_inactive = row.get('_days_since_last', 0)
+    if days_inactive > 90 and row.get('revenue_current', 0) == 0:
+        risk += 20
+    
+    return min(50, risk)  # Cap at 50 for new accounts
+
+def validate_row_data(row):
+    """
+    Ensure data is valid before scoring
+    Returns (is_valid, error_message)
+    """
+    required_fields = [
+        'revenue_current', 'revenue_prev',
+        'Event_Frequency_Current', 'Event_Frequency_Previous',
+        'Current_Tier', 'Previous_Tier'
+    ]
+    
+    for field in required_fields:
+        if field not in row or pd.isna(row[field]):
+            return False, f"Missing required field: {field}"
+    
+    # Validate numeric fields
+    numeric_fields = ['revenue_current', 'revenue_prev', 'tickets_current', 'tickets_prev']
+    for field in numeric_fields:
+        if field in row and row[field] < 0:
+            return False, f"Negative value for {field}: {row[field]}"
+    
+    return True, "Valid"
+
+def calculate_bulletproof_churn_risk(row, all_accounts_df, industry_lookup, sub_industry_lookup, account_metrics):
+    """
+    Robust churn risk calculation with all edge cases handled
+    Returns 0-100
+    """
+    try:
+        account_id = int(row['Account_Name'])
+        
+        # Validate data quality
+        is_valid, error_msg = validate_row_data(row)
+        if not is_valid:
+            print(f"  WARNING: Account {account_id} has invalid data: {error_msg}")
+            return 50  # Default middle risk for invalid data
+        
+        # Handle edge cases upfront
+        if row.get('revenue_prev', 0) == 0:
+            # New account - special handling
+            return calculate_new_account_risk(row)
+        
+        # Get comparison cohort
+        cohort, cohort_level = get_comparison_cohort(
+            account_id, all_accounts_df, industry_lookup, sub_industry_lookup
+        )
+        
+        # Debug cohort info for samples
+        if account_id % 1000 == 0:  # Sample debug output
+            print(f"  Account {account_id}: Using {cohort_level} cohort ({len(cohort)} accounts)")
+        
+        # Calculate primary components with error handling
+        absolute_decline = calculate_absolute_decline(row)  # 0-30
+        position_risk = calculate_position_risk(row, cohort)  # 0-25
+        activity_risk = calculate_activity_risk(row, cohort)  # 0-15
+        
+        # Calculate secondary components
+        momentum = calculate_momentum(row)  # 0-15
+        business_value = calculate_business_value(row)  # 0-15
+        
+        # Validate component ranges
+        components = {
+            'absolute_decline': (absolute_decline, 30),
+            'position_risk': (position_risk, 25),
+            'activity_risk': (activity_risk, 15),
+            'momentum': (momentum, 15),
+            'business_value': (business_value, 15)
+        }
+        
+        for comp_name, (value, max_val) in components.items():
+            if value < 0 or value > max_val:
+                print(f"  WARNING: Account {account_id} {comp_name} out of range: {value}")
+                
+        # Sum base score
+        base_score = (
+            absolute_decline +
+            position_risk +
+            activity_risk +
+            momentum +
+            business_value
+        )
+        
+        # Apply modifiers
+        seasonality_mult = calculate_seasonality_multiplier(account_id, account_metrics)
+        critical_mult = calculate_critical_flags(row)
+        
+        # Validate multipliers
+        if seasonality_mult < 0.5 or seasonality_mult > 1.5:
+            print(f"  WARNING: Account {account_id} seasonality multiplier unusual: {seasonality_mult}")
+        if critical_mult < 0.5 or critical_mult > 2.0:
+            print(f"  WARNING: Account {account_id} critical multiplier unusual: {critical_mult}")
+        
+        # Final calculation
+        final_score = base_score * seasonality_mult * critical_mult
+        
+        # Ensure valid range
+        return max(0, min(100, round(final_score)))
+        
+    except Exception as e:
+        print(f"  ERROR calculating churn risk for account {row.get('Account_Name', 'Unknown')}: {str(e)}")
+        return 50  # Default middle risk on error
 
 def determine_activity_rating(current_freq, previous_freq, days_since_last, has_historical, avg_lead_days=60, last_event_date=None):
     """Determine activity rating based on event patterns and creation lead times"""
@@ -368,7 +676,9 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
         # For regular events or if no previous activity
         if previous_freq != "Inactive":
             # Had activity before, now inactive
-            if days_since_last < 180:
+            # Use their typical creation lead time + 14 days as the at-risk threshold
+            at_risk_threshold = avg_lead_days + 14
+            if days_since_last < at_risk_threshold:
                 return "At Risk"
             else:
                 return "Churned"
@@ -380,9 +690,15 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
     return "New"
 
 # === METRICS CALC ===
-def calculate_metrics_from_aggregated(account_metrics):
+def calculate_metrics_from_aggregated(account_metrics, industry_lookup=None, sub_industry_lookup=None):
     """Calculate metrics from pre-aggregated account data"""
     print("\nCalculating metrics for accounts...")
+    
+    # Initialize lookups if not provided
+    if industry_lookup is None:
+        industry_lookup = {}
+    if sub_industry_lookup is None:
+        sub_industry_lookup = {}
     
     all_metrics = []
     processed = 0
@@ -426,6 +742,10 @@ def calculate_metrics_from_aggregated(account_metrics):
             'last_booking_date': data.get('last_booking_date')
         }
         
+        # Add industry data
+        industry = industry_lookup.get(account_id, 'Unknown')
+        sub_industry = sub_industry_lookup.get(account_id, 'Unknown')
+        
         all_metrics.append({
             'Account_Name': account_id,
             'tickets_current': float(tickets_current),
@@ -439,6 +759,8 @@ def calculate_metrics_from_aggregated(account_metrics):
             'lifetime_revenue_prev': float(revenue_prev),
             'avg_revenue_prev': float(avg_rev_prev),
             'has_activity': tickets_current >= 10,
+            'Industry': industry,
+            'SubIndustry': sub_industry,
             '_event_data': event_data  # Store for later use
         })
         
@@ -486,6 +808,11 @@ def calculate_metrics_from_aggregated(account_metrics):
             event_data_sample = sample_row['_event_data']
             print(f"  Event IDs current: {len(event_data_sample.get('event_ids_current', set()))}")
             print(f"  Event IDs previous: {len(event_data_sample.get('event_ids_previous', set()))}")
+            # Show actual event IDs for verification
+            curr_ids = list(event_data_sample.get('event_ids_current', set()))[:5]
+            prev_ids = list(event_data_sample.get('event_ids_previous', set()))[:5]
+            print(f"  Sample current event IDs: {curr_ids}")
+            print(f"  Sample previous event IDs: {prev_ids}")
     
     results = []
     event_freq_summary = {'Regular': 0, 'Occasional': 0, 'Annual': 0, 'Inactive': 0}
@@ -544,6 +871,9 @@ def calculate_metrics_from_aggregated(account_metrics):
         last_booking = event_data.get('last_booking_date')
         days_since_last = (TODAY - last_booking.date()).days if last_booking else 999
         
+        # Add days_since_last to row for bulletproof model
+        row['_days_since_last'] = days_since_last
+        
         # Get last event date
         event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]
         last_event_date = max(event_dates).date() if event_dates else None
@@ -554,12 +884,9 @@ def calculate_metrics_from_aggregated(account_metrics):
             avg_lead_days=avg_lead_days, last_event_date=last_event_date
         )
         
-        # Calculate churn probability
-        churn_prob = calculate_churn_probability(
-            event_count_current, event_count_previous,
-            row.get('revenue_current', 0), row.get('revenue_prev', 0),
-            days_since_last, event_freq_current,
-            avg_lead_days=avg_lead_days, last_event_date=last_event_date
+        # Calculate bulletproof churn risk
+        churn_prob = calculate_bulletproof_churn_risk(
+            row, metrics_df, industry_lookup, sub_industry_lookup, account_metrics
         )
             
         results.append({
@@ -571,6 +898,8 @@ def calculate_metrics_from_aggregated(account_metrics):
             "Years_Loyalty": row['years_loyalty'],
             "Event_Frequency_Current": event_freq_current,
             "Event_Frequency_Previous": event_freq_previous,
+            "Event_Count_Current": event_count_current,  # Add actual count
+            "Event_Count_Previous": event_count_previous,  # Add actual count
             "Rating": activity_rating,  # Changed from Activity_Rating to match Zoho field name
             "Churn_Risk": int(churn_prob),  # 0-100 score
             # Hidden fields for report generation (prefix with _)
@@ -596,19 +925,58 @@ def calculate_metrics_from_aggregated(account_metrics):
             count = rating_counts.get(rating, 0)
             print(f"  {rating}: {count:,} accounts")
         
+        # Cohort usage analysis
+        print("\nCohort Analysis:")
+        if industry_lookup:
+            # Count accounts by industry
+            industry_counts = pd.Series([industry_lookup.get(int(acc), 'Unknown') 
+                                       for acc in results_df['Account_Name']]).value_counts()
+            print(f"  Total industries: {len(industry_counts)}")
+            print("  Largest industries:")
+            for industry, count in industry_counts.head(5).items():
+                print(f"    {industry}: {count:,} accounts")
+            
+            # Check which cohorts would be used
+            cohort_usage = {'sub_industry': 0, 'industry': 0, 'global': 0}
+            for _, row in results_df.iterrows():
+                account_id = int(row['Account_Name'])
+                cohort, level = get_comparison_cohort(account_id, results_df, industry_lookup, sub_industry_lookup)
+                cohort_usage[level] += 1
+            
+            print("\n  Cohort level usage:")
+            for level, count in cohort_usage.items():
+                pct = count / len(results_df) * 100 if len(results_df) > 0 else 0
+                print(f"    {level}: {count:,} accounts ({pct:.1f}%)")
+        
         # Churn risk analysis
         print("\nChurn Risk Analysis:")
         risk_bands = {
-            'Low (0-25)': results_df[results_df['Churn_Risk'] <= 25],
-            'Medium (26-50)': results_df[(results_df['Churn_Risk'] > 25) & (results_df['Churn_Risk'] <= 50)],
-            'High (51-75)': results_df[(results_df['Churn_Risk'] > 50) & (results_df['Churn_Risk'] <= 75)],
-            'Critical (76-100)': results_df[results_df['Churn_Risk'] > 75]
+            'Healthy (0-20)': results_df[results_df['Churn_Risk'] <= 20],
+            'Low Risk (21-40)': results_df[(results_df['Churn_Risk'] > 20) & (results_df['Churn_Risk'] <= 40)],
+            'Moderate Risk (41-60)': results_df[(results_df['Churn_Risk'] > 40) & (results_df['Churn_Risk'] <= 60)],
+            'High Risk (61-80)': results_df[(results_df['Churn_Risk'] > 60) & (results_df['Churn_Risk'] <= 80)],
+            'Critical (81-100)': results_df[results_df['Churn_Risk'] > 80]
         }
         
         for band, accounts in risk_bands.items():
             count = len(accounts)
-            revenue_at_risk = accounts['_revenue_current'].sum() if '_revenue_current' in accounts else 0
+            revenue_at_risk = accounts['_revenue_current'].sum() if '_revenue_current' in accounts.columns else 0
             print(f"  {band}: {count:,} accounts (£{revenue_at_risk:,.0f} revenue)")
+        
+        # Score distribution statistics
+        print("\nScore Distribution:")
+        churn_scores = results_df['Churn_Risk']
+        print(f"  Mean: {churn_scores.mean():.1f}")
+        print(f"  Median: {churn_scores.median():.1f}")
+        print(f"  Std Dev: {churn_scores.std():.1f}")
+        print(f"  Min: {churn_scores.min()}")
+        print(f"  Max: {churn_scores.max()}")
+        
+        # Validate score distribution
+        if churn_scores.mean() < 15 or churn_scores.mean() > 45:
+            print("  WARNING: Mean score outside expected range (15-45)")
+        if churn_scores.std() < 10:
+            print("  WARNING: Low standard deviation - scores may be too clustered")
     
     return results_df
 
@@ -625,7 +993,8 @@ def upsert_to_zoho(token, records_df):
         print("TEST MODE: Would update the following accounts:")
         # Show all the fields including new ones
         display_cols = ['Account_Name', 'Current_Tier', 'Previous_Tier', 'Event_Frequency_Current', 
-                       'Event_Frequency_Previous', 'Rating', 'Churn_Risk', 'Ticket_Quantity']
+                       'Event_Frequency_Previous', 'Event_Count_Current', 'Event_Count_Previous',
+                       'Rating', 'Churn_Risk', 'Ticket_Quantity']
         print(records_df[display_cols].head(10))
         print(f"\nTotal accounts to update: {len(records_df)}")
         print(f"Columns being sent to Zoho: {list(records_df.columns)}")
@@ -894,9 +1263,15 @@ def main():
     print(f"\n=== Zoho Tier Update Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')} ===")
     
     # Determine report date
-    report_date = pd.Timestamp.now(UK_TZ).normalize() - pd.Timedelta(days=1)
-    if report_date.day == 1:
-        report_date -= MonthBegin(1)
+    # If running on the 1st, use previous month's data
+    # Otherwise, use current month's data
+    today = pd.Timestamp.now(UK_TZ).normalize()
+    if today.day == 1:
+        # Use last day of previous month
+        report_date = today - pd.Timedelta(days=1)
+    else:
+        # Use current month
+        report_date = today
 
     prefix = report_date.strftime("%Y%m")
     year = report_date.strftime("%Y")
@@ -907,10 +1282,34 @@ def main():
     # S3 keys
     key_all = f"{year}/{month}/{prefix}01-BookingDataAll-TBUK.csv"
     key_month = f"{year}/{month}/{prefix}-BookingData-TBUK.csv"
+    key_accounts = f"{year}/{month}/{prefix}-Accounts-TBUK.csv"
     
     try:
         # Initialize S3 client
         s3_client = get_s3_client()
+        
+        # Fetch Accounts data for industry information
+        print("\nFetching Accounts data for industry classification...")
+        try:
+            accounts_obj = s3_client.get_object(Bucket=BUCKET, Key=key_accounts)
+            accounts_df = pd.read_csv(accounts_obj['Body'])
+            print(f"  Loaded {len(accounts_df)} accounts with industry data")
+            
+            # Create lookup dictionaries for O(1) access
+            industry_lookup = dict(zip(accounts_df['AccountId'].astype(int), accounts_df['Industry'].fillna('Unknown')))
+            sub_industry_lookup = dict(zip(accounts_df['AccountId'].astype(int), accounts_df['SubIndustry'].fillna('Unknown')))
+            
+            # Debug: Show industry distribution
+            industry_counts = accounts_df['Industry'].value_counts().head(10)
+            print("\n  Top industries:")
+            for industry, count in industry_counts.items():
+                print(f"    {industry}: {count} accounts")
+                
+        except Exception as e:
+            print(f"WARNING: Could not load Accounts data: {e}")
+            print("  Continuing without industry segmentation...")
+            industry_lookup = {}
+            sub_industry_lookup = {}
         
         # Process data using optimized chunked approach
         account_metrics = process_booking_data_optimized(s3_client, key_all, key_month)
@@ -924,7 +1323,7 @@ def main():
         return
     
     # Calculate metrics and tiers
-    updates = calculate_metrics_from_aggregated(account_metrics)
+    updates = calculate_metrics_from_aggregated(account_metrics, industry_lookup, sub_industry_lookup)
     
     # Save results to CSV for audit
     csv_filename = f"tier_updates_{datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')}.csv"

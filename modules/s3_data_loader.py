@@ -9,6 +9,10 @@ from .config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET, UK_TZ, 
 
 def get_s3_client():
     """Initialize S3 client with credentials."""
+    # Check credentials when actually needed
+    if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
+        raise ValueError("AWS credentials not found in environment variables")
+    
     return boto3.client(
         "s3",
         aws_access_key_id=AWS_ACCESS_KEY_ID,

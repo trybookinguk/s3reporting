@@ -18,9 +18,6 @@ ZOHO_CLIENT_ID = os.environ.get("ZOHO_CLIENT_ID")
 ZOHO_CLIENT_SECRET = os.environ.get("ZOHO_CLIENT_SECRET")
 ZOHO_REFRESH_TOKEN = os.environ.get("ZOHO_REFRESH_TOKEN")
 
-if not all([ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN]):
-    raise ValueError("Zoho credentials not found in environment variables")
-
 ZOHO_DOMAIN = "https://www.zohoapis.com"
 
 # Mailgun Credentials

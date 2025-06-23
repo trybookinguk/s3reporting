@@ -7,6 +7,10 @@ from .config import ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN, ZOHO
 
 def get_access_token():
     """Get OAuth access token using refresh token."""
+    # Check credentials when actually needed
+    if not all([ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN]):
+        raise ValueError("Zoho credentials not found in environment variables")
+    
     resp = requests.post(
         "https://accounts.zoho.com/oauth/v2/token",
         data={

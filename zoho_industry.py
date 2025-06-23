@@ -1,31 +1,13 @@
 import os
-import boto3
 import pandas as pd
 from pandas.tseries.offsets import MonthBegin
 import requests
 from datetime import datetime
 
-# === ENV VARS ===
-AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY"]
-AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_KEY"]
-ZOHO_CLIENT_ID = os.environ["ZOHO_CLIENT_ID"]
-ZOHO_CLIENT_SECRET = os.environ["ZOHO_CLIENT_SECRET"]
-ZOHO_REFRESH_TOKEN = os.environ["ZOHO_REFRESH_TOKEN"]
-ZOHO_DOMAIN = "https://www.zohoapis.com"
-
-# === Zoho Auth ===
-def get_access_token():
-    resp = requests.post(
-        "https://accounts.zoho.com/oauth/v2/token",
-        data={
-            "refresh_token": ZOHO_REFRESH_TOKEN,
-            "client_id": ZOHO_CLIENT_ID,
-            "client_secret": ZOHO_CLIENT_SECRET,
-            "grant_type": "refresh_token"
-        }
-    )
-    resp.raise_for_status()
-    return resp.json()["access_token"]
+# Import shared modules
+from modules.config import S3_BUCKET, ZOHO_DOMAIN
+from modules.s3_data_loader import get_s3_client
+from modules.zoho_api import get_access_token, upsert_to_zoho
 
 # === S3 Download ===
 def fetch_s3_report():
@@ -41,12 +23,9 @@ def fetch_s3_report():
     filename = f"{prefix}-Accounts-TBUK.csv"
     s3_key = f"{year}/{month}/{filename}"
 
-    s3 = boto3.client(
-        "s3",
-        aws_access_key_id=AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=AWS_SECRET_ACCESS_KEY
-    )
-    obj = s3.get_object(Bucket="produk-rdsextracts-438255373632", Key=s3_key)
+    # Use shared S3 client
+    s3 = get_s3_client()
+    obj = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)
     return pd.read_csv(obj["Body"])
 
 # === Zoho CRM Fetch ===
@@ -140,38 +119,7 @@ def prepare_upserts(s3_df, zoho_map):
 
 
 # === Zoho Upsert ===
-def send_upserts(token, records):
-    url = f"{ZOHO_DOMAIN}/crm/v2/Accounts/upsert"
-    headers = {
-        "Authorization": f"Zoho-oauthtoken {token}",
-        "Content-Type": "application/json"
-    }
-    results = []
-    for i in range(0, len(records), 100):
-        batch = records[i:i+100]
-        payload = {
-            "data": batch,
-            "duplicate_check_fields": ["Account_Name"]
-        }
-        # DEBUG: Print first record of batch
-        print("First record in batch:")
-        print(batch[0])
-        resp = requests.post(url, headers=headers, json=payload)
-        try:
-            resp.raise_for_status()
-        except requests.HTTPError:
-            print(f"\nBatch error {i}–{i+len(batch)}:")
-            print(f"Status {resp.status_code}: {resp.text}")
-            continue
-
-        for r in resp.json().get("data", []):
-            if r.get("status") != "success":
-                acct = r.get("details", {}).get("Account_Name", "UNKNOWN")
-                msg = r.get("message", "No message")
-                print(f"Failed record: {acct} → {msg}")
-        results.extend(resp.json().get("data", []))
-        
-    return results
+# Now uses shared upsert_to_zoho from modules.zoho_api
 
 # === Main ===
 def main():
@@ -185,7 +133,8 @@ def main():
         return
 
     print(f"Prepared {len(upserts)} updates...")
-    result = send_upserts(token, upserts)
+    # Use shared upsert function with debug=True and return_results=True
+    result = upsert_to_zoho(token, upserts, debug=True, return_results=True)
     success = [r for r in result if r.get("status") == "success"]
     print(f"Successfully synced: {len(success)} of {len(upserts)}")
 

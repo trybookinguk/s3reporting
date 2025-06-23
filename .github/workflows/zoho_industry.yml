@@ -28,5 +28,4 @@ jobs:
           ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
           ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
           ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
-          ZOHO_DOMAIN: ${{ secrets.ZOHO_DOMAIN }}
         run: python zoho_industry.py

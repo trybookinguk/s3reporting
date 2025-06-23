@@ -4,9 +4,9 @@ import boto3
 import pandas as pd
 from datetime import datetime, timedelta
 
-# === Secrets ===
-AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY"]
-AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_KEY"]
+# Import shared modules
+from modules.config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET, UK_TZ
+from modules.s3_data_loader import get_s3_client
 
 # === Time Windows ===
 today = datetime.today()
@@ -27,8 +27,6 @@ last_year_week_end = pd.Timestamp(last_year_week_end, tz='Europe/London')
 print(f"Last year comparison week: {last_year_week_start.strftime('%d %B %Y')} to {last_year_week_end.strftime('%d %B %Y')}")
 
 # === S3 Fetch - Use yesterday's date for file location ===
-bucket_name = "produk-rdsextracts-438255373632"
-
 # Reports are generated at midnight for the previous day's data
 # So we need the file that contains yesterday's data
 yesterday = today - timedelta(days=1)
@@ -41,12 +39,9 @@ s3_key = f"{folder_year}/{folder_month}/{filename}"
 print(f"Fetching file: {s3_key}")
 
 try:
-    s3 = boto3.client(
-        's3',
-        aws_access_key_id=AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=AWS_SECRET_ACCESS_KEY
-    )
-    obj = s3.get_object(Bucket=bucket_name, Key=s3_key)
+    # Use shared S3 client
+    s3 = get_s3_client()
+    obj = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)
     df = pd.read_csv(obj['Body'])
     df['DateTimeCreated'] = pd.to_datetime(df['DateTimeCreated'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
     print(f"Successfully loaded {len(df)} records from {s3_key}")

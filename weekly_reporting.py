@@ -6,18 +6,13 @@ import smtplib
 from email.message import EmailMessage
 from datetime import datetime, timedelta
 
-# === Secrets ===
-AWS_ACCESS_KEY_ID = os.environ["AWS_ACCESS_KEY_ID"]
-AWS_SECRET_ACCESS_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
-MAILGUN_SMTP_LOGIN = os.environ["MAILGUN_SMTP_LOGIN"]
-MAILGUN_SMTP_PASSWORD = os.environ["MAILGUN_SMTP_PASSWORD"]
-MAILGUN_DOMAIN = os.environ["MAILGUN_DOMAIN"]
-
-# Check if running in test mode
-TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
-MAILGUN_SMTP_LOGIN = os.environ["MAILGUN_SMTP_LOGIN"]
-MAILGUN_SMTP_PASSWORD = os.environ["MAILGUN_SMTP_PASSWORD"]
-MAILGUN_DOMAIN = os.environ["MAILGUN_DOMAIN"]
+# Import shared modules
+from modules.config import (
+    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET,
+    MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN,
+    SMTP_HOST, SMTP_PORT, TEST_MODE, UK_TZ
+)
+from modules.s3_data_loader import get_s3_client
 
 # === Time Windows ===
 today = datetime.today()
@@ -31,8 +26,6 @@ last_year_week_start = pd.Timestamp(last_year_week_start, tz='Europe/London')
 last_year_week_end = pd.Timestamp(last_year_week_end, tz='Europe/London')
 
 # === S3 Fetch - Use yesterday's date for file location ===
-bucket_name = "produk-rdsextracts-438255373632"
-
 # Reports are generated at midnight for the previous day's data
 # So we need the file that contains yesterday's data
 yesterday = today - timedelta(days=1)
@@ -42,13 +35,10 @@ file_prefix = yesterday.strftime('%Y%m')
 filename = f"{file_prefix}-Accounts-TBUK.csv"
 s3_key = f"{folder_year}/{folder_month}/{filename}"
 
-s3 = boto3.client(
-    's3',
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
-)
+# Use shared S3 client
+s3 = get_s3_client()
 
-obj = s3.get_object(Bucket=bucket_name, Key=s3_key)
+obj = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)
 df = pd.read_csv(obj['Body'])
 df['DateTimeCreated'] = pd.to_datetime(df['DateTimeCreated'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
 
@@ -103,7 +93,7 @@ def send_mail(to, cc, subject, html_body):
     msg.set_content("This is an HTML report. Please view it in an HTML-compatible client.")
     msg.add_alternative(html_body, subtype='html')
 
-    with smtplib.SMTP("smtp.mailgun.org", 587) as smtp:
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
         smtp.starttls()
         smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
         smtp.send_message(msg)

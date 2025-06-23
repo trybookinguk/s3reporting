@@ -5,18 +5,16 @@ from datetime import datetime, timedelta, timezone
 from collections import Counter
 import os
 
-# === Env: Zoho & Mailgun SMTP Credentials ===
-CLIENT_ID = os.environ["ZOHO_CLIENT_ID"]
-CLIENT_SECRET = os.environ["ZOHO_CLIENT_SECRET"]
-REFRESH_TOKEN = os.environ["ZOHO_REFRESH_TOKEN"]
+# Import shared modules
+from modules.config import (
+    ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN,
+    MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN,
+    SMTP_HOST, SMTP_PORT, TEST_MODE
+)
+from modules.zoho_api import get_access_token
+
+# Additional environment variable specific to this script
 PORTAL_NAME = os.environ["ZOHO_PORTAL_NAME"]
-
-MAILGUN_SMTP_LOGIN = os.environ["MAILGUN_SMTP_LOGIN"]      
-MAILGUN_SMTP_PASSWORD = os.environ["MAILGUN_SMTP_PASSWORD"]
-MAILGUN_DOMAIN = os.environ["MAILGUN_DOMAIN"]              
-
-# Check if running in test mode
-TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
 
 # === Tags to track ===
 TRACKED_TAGS = ["Unknown User", "Event Organiser", "Ticket Purchaser", "New Business"]
@@ -28,18 +26,8 @@ last_monday = last_monday.replace(hour=0, minute=0, second=0, microsecond=0)
 last_sunday = last_monday + timedelta(days=6)
 last_sunday = last_sunday.replace(hour=23, minute=59, second=59, microsecond=999999)
 
-# === Step 1: Get access token ===
-def get_access_token():
-    url = "https://accounts.zoho.com/oauth/v2/token"
-    data = {
-        "refresh_token": REFRESH_TOKEN,
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "grant_type": "refresh_token"
-    }
-    response = requests.post(url, data=data)
-    response.raise_for_status()
-    return response.json()["access_token"]
+# === Step 1: Get access token === 
+# Now using shared get_access_token from modules.zoho_api
 
 # === Step 2: Fetch all conversations (stop early when past range) ===
 def fetch_conversations(token):
@@ -147,7 +135,7 @@ Chats by day:
     msg['Subject'] = subject
     msg.set_content(body)
 
-    with smtplib.SMTP("smtp.mailgun.org", 587) as smtp:
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
         smtp.starttls()
         smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
         smtp.send_message(msg)

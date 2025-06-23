@@ -40,7 +40,7 @@ jobs:
           ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
           ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
           MAILGUN_SMTP_LOGIN: ${{ secrets.MAILGUN_SMTP_LOGIN }}
-          MAILGUN_SMTP_PASSWORD: ${{ secrets.MAILGUN_PASSWORD }}
+          MAILGUN_SMTP_PASSWORD: ${{ secrets.MAILGUN_SMTP_PASSWORD }}
           MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
           TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
         run: python zoho_tiers.py
@@ -59,12 +59,4 @@ jobs:
         with:
           name: annual-events-report
           path: upcoming_annual_events_*.csv
-          retention-days: 30
-      
-      - name: Upload At Risk Accounts Report
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: at-risk-accounts-report
-          path: at_risk_accounts_*.csv
           retention-days: 30

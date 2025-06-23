@@ -6,7 +6,7 @@ from datetime import datetime
 
 # Import shared modules
 from modules.config import S3_BUCKET, ZOHO_DOMAIN
-from modules.s3_data_loader import get_s3_client
+from modules.s3_data_loader import get_s3_client, download_s3_file_cached
 from modules.zoho_api import get_access_token, upsert_to_zoho
 
 # === S3 Download ===
@@ -23,10 +23,9 @@ def fetch_s3_report():
     filename = f"{prefix}-Accounts-TBUK.csv"
     s3_key = f"{year}/{month}/{filename}"
 
-    # Use shared S3 client
+    # Use shared S3 client with caching
     s3 = get_s3_client()
-    obj = s3.get_object(Bucket=S3_BUCKET, Key=s3_key)
-    return pd.read_csv(obj["Body"])
+    return download_s3_file_cached(s3, s3_key)
 
 # === Zoho CRM Fetch ===
 def fetch_zoho_accounts(token):

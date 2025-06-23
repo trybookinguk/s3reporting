@@ -68,9 +68,17 @@ This codebase implements automated reporting pipelines for TryBooking UK using G
 - Zoho: `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN`, `ZOHO_ORG_ID`
 - Mailgun: `MAILGUN_FROM`, `MAILGUN_PASSWORD`
 - Optional: `TEST_MODE`, `TEST_DATE` for development
+- Optional: `NO_CACHE=1` to disable S3 file caching
 
 ### Common Operations
 - **Fetching S3 files**: Use boto3 to download from `produk-rdsextracts-438255373632` bucket
+  - Files are automatically cached in `.cache/` directory to avoid repeated downloads
+  - Cache validates S3 file timestamps - stale cache is automatically refreshed
+  - Cache expires after 7 days to ensure fresh data
+  - GitHub Actions workflows use `actions/cache` to persist cache between runs
+  - Cache key includes date to ensure fresh data each day in production
+  - Set `NO_CACHE=1` environment variable to disable caching
+  - Run `python3 -c "from modules.s3_data_loader import clear_cache; clear_cache()"` to clear cache locally
 - **Processing dates**: Always use timezone-aware datetime with Europe/London
 - **Zoho API**: OAuth2 with refresh token flow, batch operations of 200 records max
 - **Email sending**: SMTP via Mailgun with HTML/plain text multipart messages

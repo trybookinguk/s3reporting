@@ -3,6 +3,9 @@ S3 data loading functionality for TryBooking tier calculation.
 """
 import boto3
 import pandas as pd
+import os
+import pickle
+import json
 from datetime import datetime
 from .config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET, UK_TZ, CUTOFF_365, CUTOFF_730
 
@@ -29,9 +32,150 @@ def fetch_s3_file_info(s3_client, key):
         return 0
 
 
-def process_booking_data_optimized(s3_client, key_all, key_month):
-    """Process booking data using chunked reading and optimized memory usage."""
-    print("\nOptimized processing for large files...")
+def get_cache_path(key):
+    """Generate cache file path for an S3 key."""
+    # Create cache directory if it doesn't exist
+    cache_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.cache')
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
+    
+    # Replace slashes with underscores for filename
+    cache_filename = key.replace('/', '_') + '.pkl'
+    return os.path.join(cache_dir, cache_filename)
+
+
+def get_cache_metadata_path(key):
+    """Generate cache metadata file path for an S3 key."""
+    cache_path = get_cache_path(key)
+    return cache_path + '.meta'
+
+
+def is_cache_valid(s3_client, key, cache_path):
+    """Check if cached file is still valid by comparing timestamps."""
+    meta_path = get_cache_metadata_path(key)
+    
+    # Check if cache and metadata exist
+    if not os.path.exists(cache_path) or not os.path.exists(meta_path):
+        return False
+    
+    try:
+        # Read cached metadata
+        with open(meta_path, 'r') as f:
+            cache_meta = json.load(f)
+        
+        # Get S3 object metadata
+        response = s3_client.head_object(Bucket=S3_BUCKET, Key=key)
+        s3_last_modified = response['LastModified'].timestamp()
+        s3_etag = response.get('ETag', '').strip('"')
+        
+        # Check if file has changed
+        if cache_meta.get('last_modified') != s3_last_modified:
+            print(f"  Cache outdated: S3 file modified")
+            return False
+        
+        if cache_meta.get('etag') != s3_etag:
+            print(f"  Cache outdated: S3 file ETag changed")
+            return False
+        
+        # Check cache age (optional - expire after 7 days)
+        cache_age_days = (datetime.now().timestamp() - cache_meta.get('cached_at', 0)) / 86400
+        if cache_age_days > 7:
+            print(f"  Cache outdated: Cached {cache_age_days:.1f} days ago")
+            return False
+        
+        return True
+    except Exception as e:
+        print(f"  Error checking cache validity: {e}")
+        return False
+
+
+def save_cache_metadata(s3_client, key):
+    """Save metadata about the cached file."""
+    meta_path = get_cache_metadata_path(key)
+    
+    try:
+        response = s3_client.head_object(Bucket=S3_BUCKET, Key=key)
+        metadata = {
+            'key': key,
+            'last_modified': response['LastModified'].timestamp(),
+            'etag': response.get('ETag', '').strip('"'),
+            'size': response.get('ContentLength', 0),
+            'cached_at': datetime.now().timestamp()
+        }
+        
+        with open(meta_path, 'w') as f:
+            json.dump(metadata, f)
+    except Exception as e:
+        print(f"  Warning: Could not save cache metadata: {e}")
+
+
+def clear_cache():
+    """Clear all cached files and metadata."""
+    cache_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.cache')
+    if os.path.exists(cache_dir):
+        import shutil
+        shutil.rmtree(cache_dir)
+        print("Cache cleared.")
+
+
+def download_s3_file_cached(s3_client, key, use_cache=True):
+    """
+    Download an S3 file with optional caching.
+    Useful for scripts that just need a simple CSV download.
+    
+    Args:
+        s3_client: Boto3 S3 client
+        key: S3 key to download
+        use_cache: Whether to use cache (default: True)
+    
+    Returns:
+        pandas DataFrame
+    """
+    # Check if caching is disabled via environment
+    if os.environ.get('NO_CACHE', '').lower() in ['1', 'true', 'yes']:
+        use_cache = False
+    
+    if use_cache:
+        cache_path = get_cache_path(key)
+        if os.path.exists(cache_path) and is_cache_valid(s3_client, key, cache_path):
+            print(f"Using cached file: {os.path.basename(cache_path)}")
+            with open(cache_path, 'rb') as f:
+                return pickle.load(f)
+    
+    # Download from S3
+    print(f"Downloading from S3: {key}")
+    obj = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
+    df = pd.read_csv(obj['Body'])
+    
+    # Cache if enabled
+    if use_cache:
+        cache_path = get_cache_path(key)
+        print(f"Caching to: {os.path.basename(cache_path)}")
+        with open(cache_path, 'wb') as f:
+            pickle.dump(df, f)
+        # Save metadata
+        save_cache_metadata(s3_client, key)
+    
+    return df
+
+
+def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True):
+    """
+    Process booking data with true streaming aggregation.
+    Only keeps aggregated metrics in memory, not raw transactions.
+    
+    Args:
+        s3_client: Boto3 S3 client
+        key_all: S3 key for all-time booking data
+        key_month: S3 key for current month booking data
+        use_cache: Whether to use cached files if available (default: True)
+    """
+    print("\nOptimized streaming processing for large files...")
+    
+    # Check if caching is disabled via environment
+    if os.environ.get('NO_CACHE', '').lower() in ['1', 'true', 'yes']:
+        use_cache = False
+        print("  Caching disabled by NO_CACHE environment variable")
     
     # Define data types to reduce memory usage
     dtypes = {
@@ -45,7 +189,7 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
         'TicketFee': 'float32'
     }
     
-    # Process in chunks and aggregate by account
+    # Store only aggregated metrics per account
     account_metrics = {}
     chunk_size = 100000  # Process 100k rows at a time
     
@@ -54,26 +198,55 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
         file_size = fetch_s3_file_info(s3_client, key)
         print(f"  File size: {file_size / 1024 / 1024:.1f} MB")
         
-        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
-        
-        # First, peek at the columns to verify structure
-        first_chunk = pd.read_csv(obj['Body'], nrows=5)
-        available_columns = list(first_chunk.columns)
-        print(f"  Sample columns: {available_columns[:10]}...")
-        print(f"  Total columns: {len(available_columns)}")
-        
-        # Only use dtypes for columns that exist
-        actual_dtypes = {col: dtype for col, dtype in dtypes.items() if col in available_columns}
-        print(f"  Using dtypes for: {list(actual_dtypes.keys())}")
-        
-        # Re-fetch the object for actual processing
-        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
-        
         total_rows = 0
-        for chunk_num, chunk in enumerate(pd.read_csv(obj['Body'], chunksize=chunk_size, 
-                                                      dtype=actual_dtypes, 
-                                                      parse_dates=['TransactionDate'], 
-                                                      low_memory=False)):
+        chunks_iter = None
+        
+        if use_cache:
+            cache_path = get_cache_path(key)
+            if os.path.exists(cache_path) and is_cache_valid(s3_client, key, cache_path):
+                print(f"  Using cached file: {os.path.basename(cache_path)}")
+                # For cached files, read the pickle and create chunks
+                with open(cache_path, 'rb') as f:
+                    cached_df = pickle.load(f)
+                
+                # Create chunk iterator from cached dataframe
+                def chunk_generator():
+                    for start in range(0, len(cached_df), chunk_size):
+                        yield cached_df.iloc[start:start + chunk_size].copy()
+                
+                chunks_iter = chunk_generator()
+            else:
+                # Download from S3 but also cache the data
+                print(f"  Downloading from S3 and caching...")
+                obj = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
+                
+                # Read all chunks and cache
+                all_chunks = []
+                for chunk in pd.read_csv(obj['Body'], chunksize=chunk_size,
+                                       dtype=dtypes,
+                                       parse_dates=['TransactionDate'],
+                                       low_memory=False):
+                    all_chunks.append(chunk)
+                
+                # Save to cache
+                full_df = pd.concat(all_chunks, ignore_index=True)
+                print(f"  Saving to cache: {os.path.basename(cache_path)}")
+                with open(cache_path, 'wb') as f:
+                    pickle.dump(full_df, f)
+                # Save metadata
+                save_cache_metadata(s3_client, key)
+                
+                chunks_iter = iter(all_chunks)
+        else:
+            # No caching - direct streaming from S3
+            obj = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
+            chunks_iter = pd.read_csv(obj['Body'], chunksize=chunk_size,
+                                    dtype=dtypes,
+                                    parse_dates=['TransactionDate'],
+                                    low_memory=False)
+        
+        # Process chunks
+        for chunk_num, chunk in enumerate(chunks_iter):
             # Add timezone info
             chunk['TransactionDate'] = pd.to_datetime(chunk['TransactionDate'], utc=True).dt.tz_convert(UK_TZ)
             chunk['Revenue'] = chunk['BookingFee'] + chunk['CardFee'] + chunk['ProcessingFee'] + chunk['TicketFee']
@@ -86,33 +259,60 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
             for account_id, group in chunk.groupby('AccountId'):
                 if account_id not in account_metrics:
                     account_metrics[account_id] = {
-                        'transactions': [],
+                        # Pre-aggregated metrics instead of raw transactions
+                        'tickets_current': 0,
+                        'revenue_current': 0.0,
+                        'tickets_prev': 0,
+                        'revenue_prev': 0.0,
+                        'tickets_lifetime': 0,
+                        'revenue_lifetime': 0.0,
+                        'years': set(),
+                        'years_pre_cutoff': set(),
                         'seen_tx_ids': set(),
                         'event_ids_current': set(),
                         'event_ids_previous': set(),
                         'event_creation_info': {},
-                        'last_booking_date': None
+                        'last_booking_date': None,
+                        'first_booking_date': None,
+                        # For compatibility with existing code
+                        'transactions': None  # Will store aggregated data later
                     }
                 
+                metrics = account_metrics[account_id]
+                
                 # Filter out already seen transactions
-                new_transactions = group[~group['BookingTransactionId'].isin(account_metrics[account_id]['seen_tx_ids'])]
+                new_tx_mask = ~group['BookingTransactionId'].isin(metrics['seen_tx_ids'])
+                new_transactions = group[new_tx_mask]
                 
                 if len(new_transactions) > 0:
-                    # Store only essential columns to save memory
-                    essential_cols = ['TransactionDate', 'Revenue', 'TicketQuantity', 'Year', 'BookingTransactionId']
-                    if 'EventId' in new_transactions.columns:
-                        essential_cols.append('EventId')
-                    if 'EventDate' in new_transactions.columns:
-                        essential_cols.append('EventDate')
+                    # Update seen transaction IDs
+                    metrics['seen_tx_ids'].update(new_transactions['BookingTransactionId'].tolist())
                     
-                    essential_data = new_transactions[essential_cols].copy()
-                    account_metrics[account_id]['transactions'].append(essential_data)
-                    account_metrics[account_id]['seen_tx_ids'].update(new_transactions['BookingTransactionId'].tolist())
-                    
-                    # Update last booking date
-                    last_booking = new_transactions['TransactionDate'].max()
-                    if account_metrics[account_id]['last_booking_date'] is None or last_booking > account_metrics[account_id]['last_booking_date']:
-                        account_metrics[account_id]['last_booking_date'] = last_booking
+                    # Aggregate metrics instead of storing raw data
+                    for _, tx in new_transactions.iterrows():
+                        tx_date = tx['TransactionDate'].date()
+                        
+                        # Update lifetime metrics
+                        metrics['tickets_lifetime'] += tx['TicketQuantity']
+                        metrics['revenue_lifetime'] += tx['Revenue']
+                        metrics['years'].add(tx['Year'])
+                        
+                        # Update period-specific metrics
+                        if tx_date >= CUTOFF_365:
+                            metrics['tickets_current'] += tx['TicketQuantity']
+                            metrics['revenue_current'] += tx['Revenue']
+                        elif tx_date >= CUTOFF_730:
+                            metrics['tickets_prev'] += tx['TicketQuantity']
+                            metrics['revenue_prev'] += tx['Revenue']
+                        
+                        if tx_date < CUTOFF_365:
+                            metrics['years_pre_cutoff'].add(tx['Year'])
+                        
+                        # Update booking dates
+                        if metrics['last_booking_date'] is None or tx['TransactionDate'] > metrics['last_booking_date']:
+                            metrics['last_booking_date'] = tx['TransactionDate']
+                        if metrics['first_booking_date'] is None or tx['TransactionDate'] < metrics['first_booking_date']:
+                            metrics['first_booking_date'] = tx['TransactionDate']
                     
                     # Process events if EventId column exists
                     if 'EventId' in new_transactions.columns and 'EventDate' in new_transactions.columns:
@@ -147,17 +347,37 @@ def process_booking_data_optimized(s3_client, key_all, key_month):
             
             total_rows += len(chunk)
             if chunk_num % 10 == 0:
-                print(f"  Processed {total_rows:,} rows...")
+                print(f"  Processed {total_rows:,} rows, tracking {len(account_metrics):,} accounts...")
         
         print(f"  Total rows processed: {total_rows:,}")
+    
+    # Convert sets to counts and prepare data for tier calculator
+    print("\nFinalizing metrics...")
+    for account_id, metrics in account_metrics.items():
+        # Calculate derived metrics
+        metrics['years_loyalty'] = len(metrics['years'])
+        metrics['years_loyalty_prev'] = len(metrics['years_pre_cutoff'])
+        
+        # Calculate average revenue per year
+        if metrics['years_loyalty'] > 0:
+            metrics['avg_revenue_per_year'] = metrics['revenue_lifetime'] / metrics['years_loyalty']
+        else:
+            metrics['avg_revenue_per_year'] = 0
+            
+        if metrics['years_loyalty_prev'] > 0:
+            # Revenue up to previous period
+            revenue_up_to_prev = metrics['revenue_lifetime'] - metrics['revenue_current']
+            metrics['avg_revenue_prev'] = revenue_up_to_prev / metrics['years_loyalty_prev']
+        else:
+            metrics['avg_revenue_prev'] = 0
+        
+        # Clean up temporary fields (keep for event tracking)
+        metrics['seen_tx_ids'] = len(metrics['seen_tx_ids'])  # Just keep count
         
         # Debug: sample event tracking
-        if len(account_metrics) > 0:
-            sample_accounts = list(account_metrics.keys())[:3]
-            print("\n  Sample event tracking:")
-            for acc_id in sample_accounts:
-                curr_events = len(account_metrics[acc_id].get('event_ids_current', set()))
-                prev_events = len(account_metrics[acc_id].get('event_ids_previous', set()))
-                print(f"    Account {acc_id}: {curr_events} current events, {prev_events} previous events")
+        if account_id in list(account_metrics.keys())[:3]:
+            curr_events = len(metrics.get('event_ids_current', set()))
+            prev_events = len(metrics.get('event_ids_previous', set()))
+            print(f"  Account {account_id}: {curr_events} current events, {prev_events} previous events")
     
     return account_metrics

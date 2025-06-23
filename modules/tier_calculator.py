@@ -115,35 +115,22 @@ def calculate_metrics_from_aggregated(account_metrics):
     processed = 0
     
     for account_id, data in account_metrics.items():
-        if not data['transactions']:
+        # Skip if no transactions (using new optimized check)
+        if data.get('tickets_lifetime', 0) == 0:
             continue
-            
-        # Combine all transactions for this account
-        account_df = pd.concat(data['transactions'], ignore_index=True)
-        account_df = account_df.sort_values('TransactionDate')
         
-        # Define windows
-        current_period = account_df[account_df['TransactionDate'].dt.date >= CUTOFF_365]
-        previous_period = account_df[
-            (account_df['TransactionDate'].dt.date >= CUTOFF_730) &
-            (account_df['TransactionDate'].dt.date < CUTOFF_365)
-        ]
-        lifetime = account_df
-        lifetime_pre_cutoff = account_df[account_df['TransactionDate'].dt.date < CUTOFF_365]
+        # Use pre-aggregated metrics directly (all data from optimized loader has these)
+        years_loyalty = data.get('years_loyalty', 0)
+        lifetime_revenue = data.get('revenue_lifetime', 0)
+        avg_revenue_per_year = data.get('avg_revenue_per_year', 0)
+        tickets_current = data.get('tickets_current', 0)
+        revenue_current = data.get('revenue_current', 0)
         
-        # Calculate metrics
-        years_loyalty = lifetime['Year'].nunique()
-        lifetime_revenue = lifetime['Revenue'].sum()
-        avg_revenue_per_year = lifetime_revenue / years_loyalty if years_loyalty else 0
-        tickets_current = current_period['TicketQuantity'].sum()
-        revenue_current = current_period['Revenue'].sum()
-        
-        # Previous period metrics
-        years_loyalty_prev = lifetime_pre_cutoff['Year'].nunique()
-        revenue_prev = lifetime_pre_cutoff['Revenue'].sum()
-        avg_rev_prev = revenue_prev / years_loyalty_prev if years_loyalty_prev else 0
-        tickets_prev = previous_period['TicketQuantity'].sum()
-        revenue_window_prev = previous_period['Revenue'].sum()
+        years_loyalty_prev = data.get('years_loyalty_prev', 0)
+        revenue_prev = lifetime_revenue - revenue_current  # Revenue up to previous period
+        avg_rev_prev = data.get('avg_revenue_prev', 0)
+        tickets_prev = data.get('tickets_prev', 0)
+        revenue_window_prev = data.get('revenue_prev', 0)  # Revenue in previous window
         
         # Include event tracking data
         event_data = {

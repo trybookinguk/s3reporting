@@ -51,13 +51,15 @@ def main():
         print(f"Loading Account report from: {key_account}")
         account_df = download_s3_file_cached(s3_client, key_account)
         
-        # Create lookup dictionary: AccountId -> {LastEventCreation}
+        # Create lookup dictionary: AccountId -> {LastEventCreation, Industry}
         account_lookup = {}
-        if 'Id' in account_df.columns and 'LastEventCreation' in account_df.columns:
-            account_lookup = account_df.set_index('Id')[['LastEventCreation']].to_dict('index')
-            print(f"Loaded {len(account_lookup):,} accounts with LastEventCreation data")
+        required_cols = ['Id', 'LastEventCreation', 'Industry', 'Postcode']
+        if all(col in account_df.columns for col in required_cols):
+            account_lookup = account_df.set_index('Id')[['LastEventCreation', 'Industry', 'Postcode']].to_dict('index')
+            print(f"Loaded {len(account_lookup):,} accounts with LastEventCreation, Industry and Postcode data")
         else:
-            print("WARNING: Account report missing required columns (Id, LastEventCreation)")
+            missing_cols = [col for col in required_cols if col not in account_df.columns]
+            print(f"WARNING: Account report missing columns: {missing_cols}")
         
         # Process data using optimized chunked approach
         account_metrics = process_booking_data_optimized(s3_client, key_all, key_month)

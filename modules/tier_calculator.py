@@ -209,8 +209,13 @@ def calculate_metrics_from_aggregated(account_metrics, account_lookup=None):
         # Check if account has event creation in period for 'New' status
         has_event_creation_current = False
         has_event_creation_previous = False
+        industry = None
+        account_postcode = None
         if account_lookup and account_name in account_lookup:
-            last_creation = account_lookup[account_name].get('LastEventCreation')
+            account_info = account_lookup[account_name]
+            last_creation = account_info.get('LastEventCreation')
+            industry = account_info.get('Industry')
+            account_postcode = account_info.get('Postcode')
             if last_creation and pd.notna(last_creation):
                 last_creation_date = pd.to_datetime(last_creation).date()
                 if last_creation_date >= EVENT_FREQ_CUTOFF_CURRENT:
@@ -235,11 +240,22 @@ def calculate_metrics_from_aggregated(account_metrics, account_lookup=None):
         event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]
         last_event_date = max(event_dates).date() if event_dates else None
         
-        # Simple activity rating for now (will be updated later per user request)
-        if event_freq_current != "Inactive":
-            activity_rating = "Active"
-        else:
-            activity_rating = "Inactive"
+        # Determine activity rating using full logic
+        has_historical = years_loyalty > 0 or len(event_data.get('event_months_previous', set())) > 0
+        
+        activity_rating = determine_activity_rating(
+            current_freq=event_freq_current,
+            previous_freq=event_freq_previous,
+            days_since_last=days_since_last,
+            has_historical=has_historical,
+            avg_lead_days=avg_lead_days,
+            last_event_date=last_event_date,
+            months_active_list=months_active_list,
+            revenue_previous=row.get('revenue_prev', 0),
+            industry=industry,
+            current_tier=tier_current,
+            account_postcode=account_postcode
+        )
         
         # Calculate Months Active fingerprint using frequency months for consistency
         all_freq_months = event_data.get('event_months_freq_current', set()) | event_data.get('event_months_freq_previous', set())
@@ -276,7 +292,7 @@ def calculate_metrics_from_aggregated(account_metrics, account_lookup=None):
     if not results_df.empty:
         rating_counts = results_df['Rating'].value_counts()
         print("\nActivity Rating Summary:")
-        for rating in ['Active', 'At Risk', 'Churned', 'Returned', 'New', 'Inactive']:
+        for rating in ['Active', 'Outreach', 'At Risk', 'Churned', 'Returned', 'New', 'Inactive']:
             count = rating_counts.get(rating, 0)
             print(f"  {rating}: {count:,} accounts")
         

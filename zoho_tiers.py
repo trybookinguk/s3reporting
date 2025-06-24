@@ -10,7 +10,7 @@ from datetime import datetime
 # Import from our modules
 from modules.config import UK_TZ
 from modules.s3_data_loader import get_s3_client, process_booking_data_optimized, download_s3_file_cached
-from modules.tier_calculator import calculate_metrics_from_aggregated
+from modules.account_processor import process_accounts
 from modules.zoho_api import get_access_token, upsert_to_zoho
 from modules.report_generator import generate_upcoming_annual_events_report, email_upcoming_events_report
 
@@ -72,8 +72,8 @@ def main():
         traceback.print_exc()
         return
     
-    # Calculate metrics and tiers with account lookup
-    updates = calculate_metrics_from_aggregated(account_metrics, account_lookup)
+    # Process accounts: calculate tiers, event frequencies, and activity ratings
+    updates = process_accounts(account_metrics, account_lookup)
     
     # Save results to CSV for audit
     csv_filename = f"tier_updates_{datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')}.csv"

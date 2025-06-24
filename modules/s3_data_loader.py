@@ -184,7 +184,7 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
     dtypes = {
         'BookingTransactionId': 'int64',
         'AccountId': 'int32',
-        'EventId': 'Int64',  # Nullable integer type
+        'EventID': 'Int64',  # Nullable integer type - note uppercase ID
         'TicketQuantity': 'int16',
         'BookingFee': 'float32',
         'CardFee': 'float32',
@@ -317,9 +317,9 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
                         if metrics['first_booking_date'] is None or tx['TransactionDate'] < metrics['first_booking_date']:
                             metrics['first_booking_date'] = tx['TransactionDate']
                     
-                    # Process event data if EventId and EventDate columns exist
-                    if 'EventId' in new_transactions.columns and 'EventDate' in new_transactions.columns:
-                        event_data = new_transactions[['EventId', 'TransactionDate', 'EventDate']].copy()
+                    # Process event data if EventID and EventDate columns exist
+                    if 'EventID' in new_transactions.columns and 'EventDate' in new_transactions.columns:
+                        event_data = new_transactions[['EventID', 'TransactionDate', 'EventDate']].copy()
                         # Filter out rows without EventDate
                         event_data = event_data[pd.notna(event_data['EventDate'])]
                         
@@ -356,7 +356,7 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
                             account_metrics[account_id]['event_months_freq_previous'].update(freq_previous_months)
                             
                             # Also track event creation info for lead time calculations
-                            event_groups = event_data[pd.notna(event_data['EventId'])].groupby('EventId')
+                            event_groups = event_data[pd.notna(event_data['EventID'])].groupby('EventID')
                             
                             for event_id, group in event_groups:
                                 event_id_key = int(event_id) if pd.notna(event_id) else None

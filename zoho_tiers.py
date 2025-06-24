@@ -41,7 +41,7 @@ def main():
     # S3 keys
     key_all = f"{year}/{month}/{prefix}01-BookingDataAll-TBUK.csv"
     key_month = f"{year}/{month}/{prefix}-BookingData-TBUK.csv"
-    key_account = f"{year}/{month}/{prefix}-Account-TBUK.csv"
+    key_account = f"{year}/{month}/{prefix}-Accounts-TBUK.csv"
     
     try:
         # Initialize S3 client

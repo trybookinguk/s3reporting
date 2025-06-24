@@ -8,6 +8,7 @@ from .config import (
     EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS
 )
 from .event_frequency import classify_event_frequency, get_months_active_fingerprint, format_months_active_for_zoho
+from .activity_rating import determine_activity_rating
 
 
 def determine_tier_from_percentiles(a_pct, b_pct, c_years, d_pct, e_pct, has_activity):
@@ -58,46 +59,7 @@ def determine_tier_from_percentiles(a_pct, b_pct, c_years, d_pct, e_pct, has_act
     return best_tier
 
 
-# Event frequency classification moved to event_frequency.py module
-
-
-def determine_activity_rating(current_freq, previous_freq, days_since_last, has_historical, 
-                            avg_lead_days=60, last_event_date=None):
-    """Determine activity rating based on event patterns and creation lead times."""
-    if current_freq != "Inactive":
-        return "Active"
-    
-    if previous_freq == "Inactive" and not has_historical:
-        return "New" if days_since_last < 365 else "Inactive"
-    
-    if current_freq != "Inactive" and previous_freq == "Inactive" and has_historical:
-        return "Returned"
-    
-    # At Risk logic using creation lead times
-    if previous_freq != "Inactive" and current_freq == "Inactive":
-        # For annual/occasional events, check if we're past expected creation time
-        if previous_freq in ["Annual", "Occasional"] and last_event_date:
-            # Calculate when they should have created their next event
-            expected_next_event = last_event_date + pd.Timedelta(days=365)
-            expected_creation_date = expected_next_event - pd.Timedelta(days=avg_lead_days)
-            days_past_expected_creation = (pd.Timestamp.now().date() - expected_creation_date).days
-            
-            # At Risk if past expected creation but not too far past
-            if 0 < days_past_expected_creation <= 90:
-                return "At Risk"
-            elif days_past_expected_creation > 90:
-                return "Churned"
-            else:
-                # Not yet time to create next event
-                return "Active"
-        
-        # For regular events or if no date info, use simpler logic
-        if days_since_last < 180:
-            return "At Risk"
-        else:
-            return "Churned"
-    
-    return "Inactive"
+# Rating functions moved to activity_rating.py module
 
 
 def calculate_metrics_from_aggregated(account_metrics, account_lookup=None):

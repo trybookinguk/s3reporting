@@ -9,7 +9,7 @@ from datetime import datetime
 
 # Import from our modules
 from modules.config import UK_TZ
-from modules.s3_data_loader import get_s3_client, process_booking_data_optimized
+from modules.s3_data_loader import get_s3_client, process_booking_data_optimized, download_s3_file_cached
 from modules.tier_calculator import calculate_metrics_from_aggregated
 from modules.zoho_api import get_access_token, upsert_to_zoho
 from modules.report_generator import generate_upcoming_annual_events_report, email_upcoming_events_report
@@ -41,10 +41,23 @@ def main():
     # S3 keys
     key_all = f"{year}/{month}/{prefix}01-BookingDataAll-TBUK.csv"
     key_month = f"{year}/{month}/{prefix}-BookingData-TBUK.csv"
+    key_account = f"{year}/{month}/{prefix}-Account-TBUK.csv"
     
     try:
         # Initialize S3 client
         s3_client = get_s3_client()
+        
+        # Load Account report for LastEventCreation data
+        print(f"Loading Account report from: {key_account}")
+        account_df = download_s3_file_cached(s3_client, key_account)
+        
+        # Create lookup dictionary: AccountId -> {LastEventCreation}
+        account_lookup = {}
+        if 'Id' in account_df.columns and 'LastEventCreation' in account_df.columns:
+            account_lookup = account_df.set_index('Id')[['LastEventCreation']].to_dict('index')
+            print(f"Loaded {len(account_lookup):,} accounts with LastEventCreation data")
+        else:
+            print("WARNING: Account report missing required columns (Id, LastEventCreation)")
         
         # Process data using optimized chunked approach
         account_metrics = process_booking_data_optimized(s3_client, key_all, key_month)
@@ -57,8 +70,8 @@ def main():
         traceback.print_exc()
         return
     
-    # Calculate metrics and tiers
-    updates = calculate_metrics_from_aggregated(account_metrics)
+    # Calculate metrics and tiers with account lookup
+    updates = calculate_metrics_from_aggregated(account_metrics, account_lookup)
     
     # Save results to CSV for audit
     csv_filename = f"tier_updates_{datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')}.csv"

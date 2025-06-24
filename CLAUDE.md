@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Instructions
+
+You should ultrathink all instructions, and ensure a rock solid solution is implemented whilst still being maintainable.
+It is critical that you do not assume context that hasn't been provided. If you require 
+
 ## Commands
 
 ### Running Scripts Locally
@@ -83,3 +88,53 @@ This codebase implements automated reporting pipelines for TryBooking UK using G
 - **Zoho API**: OAuth2 with refresh token flow, batch operations of 200 records max
 - **Email sending**: SMTP via Mailgun with HTML/plain text multipart messages
 - **Error handling**: Critical operations wrapped in try-except, failures logged to console
+
+## Reporting Fields
+
+Our platform provides several reports via S3 that can be used for data analysis. These are:
+
+- BookingDataAll: provides all booking data up until the 1st of the month.
+- BookingData: provides all booking data for the current month, updated daily at midnight.
+- Accounts: provides account related data.
+
+### Booking Data Reports
+| **Field** | **Description** |
+| BookingID | **Internal platform use only** |
+| BookingTransactionID | **Internal platform use only** |
+| AccountID | The ID of the account on TryBooking. |
+| AccountName | The name of the account on TryBooking. |
+| DateTimeCreated | The date and time the account was created on TryBooking. |
+| EventID | The ID of the event within TryBooking |
+| EventName | The name of the event within TryBooking |
+| DonationCampaignId | **Not used in UK** |
+| DonationCampaignName | **Not used in UK** |
+| TransactionDate | The date and time the transaction took place. |
+| BookingUrlId | External Booking ID |
+| PaymentReceived | The price of all tickets within the transaction (excluding fees) |
+| TicketQuantity | The quantity of tickets contained within the transaction. |
+| BookingFee | The ticket fee which has been paid by the event organiser. |
+| CardFee | The processing fee which has been paid by the event organiser. |
+| ProcessingFee | The processing fee which has been paid by the ticket purchaser. |
+| Surcharge | **No longer used in UK.** Payment surcharges (e.g. AU charge extra for PP) |
+| ProcessingFeeSurcharge | **No longer used in UK.** Payment surcharges (e.g. AU charge extra for PP) |
+| TicketFee | The processing fee which has been paid by the ticket purchaser. |
+| TransactionType | Appears to always be Payment. |
+| PaymentType | **Paid tickets only**. The payment type used for the transaction. |
+| EventPostcode | The postcode added to the event as venue details. |
+| AccountPostcode | The postcode added to the account under Account Settings. |
+| EventDate | The session date and time of the event for which tickets were booked. |
+| Industry | The industry assigned to the account within the TryBooking platform. |
+| SubIndustry | The sub industry assigned to the account within the TryBooking platform. |
+| Gateway Group | The gateway assigned to the account within the TryBooking platform. |
+| DGRStatus | **Not used in UK** |
+| CustomerId | Internal customer ID. |
+| IPCountry | The country that the transaction was made within based on IP. |
+| Status | The status of the transaction, either Successful, Failed or Unknown. |
+| Wallet | **Stripe only**. The type of mobile wallet (Apple Pay/Google Pay) used. |
+| GatewayName | The payment gateway used for the transaction. |
+| GatewayID | The payment reference used within Stripe/PayPal. |
+| GatewayReference | **Not used in UK** |
+| GiftCertificateTypeName | The name of the gift certificate used for the transaction. |
+| GiftCertificateID | The unique ID for the gift certificate used for the transaction (if applicable) |
+| BookingCountryCode | Always GBR - internal region code. |
+

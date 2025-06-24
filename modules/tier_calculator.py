@@ -4,8 +4,10 @@ Tier calculation and business logic for TryBooking accounts.
 import pandas as pd
 from .config import (
     CUTOFF_365, CUTOFF_730, TODAY, TIER_PERCENTILES, MIN_YEARS_BY_TIER,
-    MIN_TICKETS_FOR_ACTIVE, EVENT_FREQUENCY_THRESHOLDS
+    MIN_TICKETS_FOR_ACTIVE, EVENT_FREQUENCY_THRESHOLDS,
+    EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS
 )
+from .event_frequency import classify_event_frequency, get_months_active_fingerprint, format_months_active_for_zoho
 
 
 def determine_tier_from_percentiles(a_pct, b_pct, c_years, d_pct, e_pct, has_activity):
@@ -56,16 +58,7 @@ def determine_tier_from_percentiles(a_pct, b_pct, c_years, d_pct, e_pct, has_act
     return best_tier
 
 
-def classify_event_frequency(event_count):
-    """Convert event count to pattern classification."""
-    if event_count == 0:
-        return "Inactive"
-    elif event_count == 1:
-        return "Annual"
-    elif event_count <= 3:
-        return "Occasional"
-    else:  # 4+
-        return "Regular"
+# Event frequency classification moved to event_frequency.py module
 
 
 def determine_activity_rating(current_freq, previous_freq, days_since_last, has_historical, 
@@ -107,8 +100,13 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
     return "Inactive"
 
 
-def calculate_metrics_from_aggregated(account_metrics):
-    """Calculate metrics from pre-aggregated account data."""
+def calculate_metrics_from_aggregated(account_metrics, account_lookup=None):
+    """Calculate metrics from pre-aggregated account data.
+    
+    Args:
+        account_metrics: Dictionary of aggregated account metrics
+        account_lookup: Optional dictionary with Account report data (for LastEventCreation)
+    """
     print("\nCalculating metrics for accounts...")
     
     all_metrics = []
@@ -132,10 +130,10 @@ def calculate_metrics_from_aggregated(account_metrics):
         tickets_prev = data.get('tickets_prev', 0)
         revenue_window_prev = data.get('revenue_prev', 0)  # Revenue in previous window
         
-        # Include event tracking data
+        # Include both month tracking and event creation data
         event_data = {
-            'event_ids_current': data.get('event_ids_current', set()),
-            'event_ids_previous': data.get('event_ids_previous', set()),
+            'event_months_current': data.get('event_months_current', set()),
+            'event_months_previous': data.get('event_months_previous', set()),
             'event_creation_info': data.get('event_creation_info', {}),
             'last_booking_date': data.get('last_booking_date')
         }
@@ -198,11 +196,12 @@ def calculate_metrics_from_aggregated(account_metrics):
         print(f"Sample row has _event_data: {'_event_data' in sample_row}")
         if '_event_data' in sample_row:
             event_data_sample = sample_row['_event_data']
-            print(f"  Event IDs current: {len(event_data_sample.get('event_ids_current', set()))}")
-            print(f"  Event IDs previous: {len(event_data_sample.get('event_ids_previous', set()))}")
+            print(f"  Active months current: {len(event_data_sample.get('event_months_current', set()))}")
+            print(f"  Active months previous: {len(event_data_sample.get('event_months_previous', set()))}")
+            print(f"  Event creation info entries: {len(event_data_sample.get('event_creation_info', {}))}")
     
     results = []
-    event_freq_summary = {'Regular': 0, 'Occasional': 0, 'Annual': 0, 'Inactive': 0}
+    event_freq_summary = {'Continuous': 0, 'Regular': 0, 'Seasonal': 0, 'Annual': 0, 'Inactive': 0}
     
     for _, row in metrics_df.iterrows():
         tier_current = determine_tier_from_percentiles(
@@ -236,18 +235,33 @@ def calculate_metrics_from_aggregated(account_metrics):
         # Calculate new metrics from stored event data
         event_data = row.get('_event_data', {})
         
-        # Get event counts
-        event_count_current = len(event_data.get('event_ids_current', set()))
-        event_count_previous = len(event_data.get('event_ids_previous', set()))
-        event_creation_info = event_data.get('event_creation_info', {})
-        has_historical = len(event_creation_info) > event_count_current + event_count_previous
+        # Get month counts for tier calculation (rolling window)
+        month_count_current = len(event_data.get('event_months_current', set()))
+        month_count_previous = len(event_data.get('event_months_previous', set()))
         
-        # Calculate event frequency
-        event_freq_current = classify_event_frequency(event_count_current)
-        event_freq_previous = classify_event_frequency(event_count_previous)
+        # Get month counts for frequency calculation (month boundary)
+        freq_month_count_current = len(event_data.get('event_months_freq_current', set()))
+        freq_month_count_previous = len(event_data.get('event_months_freq_previous', set()))
+        event_creation_info = event_data.get('event_creation_info', {})
+        
+        # Check if account has event creation in period for 'New' status
+        has_event_creation_current = False
+        has_event_creation_previous = False
+        if account_lookup and account_name in account_lookup:
+            last_creation = account_lookup[account_name].get('LastEventCreation')
+            if last_creation and pd.notna(last_creation):
+                last_creation_date = pd.to_datetime(last_creation).date()
+                if last_creation_date >= EVENT_FREQ_CUTOFF_CURRENT:
+                    has_event_creation_current = True
+                elif last_creation_date >= EVENT_FREQ_CUTOFF_PREVIOUS:
+                    has_event_creation_previous = True
+        
+        # Calculate event frequency based on month boundary counts
+        event_freq_current = classify_event_frequency(freq_month_count_current, has_event_creation_current)
+        event_freq_previous = classify_event_frequency(freq_month_count_previous, has_event_creation_previous)
         event_freq_summary[event_freq_current] += 1
         
-        # Calculate lead times
+        # Calculate lead times for annual event predictions
         lead_times = [info['lead_days'] for info in event_creation_info.values() if info['lead_days'] > 0]
         avg_lead_days = int(sum(lead_times) / len(lead_times)) if lead_times else 60
         
@@ -255,15 +269,20 @@ def calculate_metrics_from_aggregated(account_metrics):
         last_booking = event_data.get('last_booking_date')
         days_since_last = (TODAY - last_booking.date()).days if last_booking else 999
         
-        # Get last event date
+        # Get last event date for annual predictions
         event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]
         last_event_date = max(event_dates).date() if event_dates else None
         
-        # Determine activity rating with lead time consideration
-        activity_rating = determine_activity_rating(
-            event_freq_current, event_freq_previous, days_since_last, has_historical,
-            avg_lead_days=avg_lead_days, last_event_date=last_event_date
-        )
+        # Simple activity rating for now (will be updated later per user request)
+        if event_freq_current != "Inactive":
+            activity_rating = "Active"
+        else:
+            activity_rating = "Inactive"
+        
+        # Calculate Months Active fingerprint using frequency months for consistency
+        all_freq_months = event_data.get('event_months_freq_current', set()) | event_data.get('event_months_freq_previous', set())
+        months_active_list = get_months_active_fingerprint(all_freq_months)
+        months_active_zoho = format_months_active_for_zoho(months_active_list)
             
         results.append({
             "Account_Name": account_name,
@@ -275,10 +294,12 @@ def calculate_metrics_from_aggregated(account_metrics):
             "Event_Frequency_Current": event_freq_current,
             "Event_Frequency_Previous": event_freq_previous,
             "Rating": activity_rating,  # Changed from Activity_Rating to match Zoho field name
+            "Months_Active": months_active_zoho,  # New field for Zoho multi-select
             # Hidden fields for report generation (prefix with _)
             "_avg_lead_days": avg_lead_days,
             "_last_event_date": last_event_date,
-            "_event_count_current": event_count_current,
+            "_month_count_current": month_count_current,
+            "_months_active_list": months_active_list,  # Keep list format for reporting
             "_revenue_current": row.get('revenue_current', 0),
             "_revenue_prev": row.get('revenue_prev', 0)
         })
@@ -296,5 +317,14 @@ def calculate_metrics_from_aggregated(account_metrics):
         for rating in ['Active', 'At Risk', 'Churned', 'Returned', 'New', 'Inactive']:
             count = rating_counts.get(rating, 0)
             print(f"  {rating}: {count:,} accounts")
+        
+        # Months Active patterns summary
+        print("\nMonths Active Patterns (Top 10):")
+        month_patterns = results_df['Months_Active'].value_counts().head(10)
+        month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        for pattern, count in month_patterns.items():
+            if pattern:  # Skip empty patterns
+                months = [month_names[int(m)-1] for m in pattern.split(',')]
+                print(f"  {', '.join(months)}: {count:,} accounts")
     
     return results_df

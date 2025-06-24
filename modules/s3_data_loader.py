@@ -7,7 +7,10 @@ import os
 import pickle
 import json
 from datetime import datetime
-from .config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET, UK_TZ, CUTOFF_365, CUTOFF_730
+from .config import (
+    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET, UK_TZ, 
+    CUTOFF_365, CUTOFF_730, EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS
+)
 
 
 def get_s3_client():
@@ -269,13 +272,13 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
                         'years': set(),
                         'years_pre_cutoff': set(),
                         'seen_tx_ids': set(),
-                        'event_ids_current': set(),
-                        'event_ids_previous': set(),
-                        'event_creation_info': {},
+                        'event_months_current': set(),  # (year, month) tuples for current period (tier calculation)
+                        'event_months_previous': set(),  # (year, month) tuples for previous period (tier calculation)
+                        'event_months_freq_current': set(),  # (year, month) tuples for current period (frequency calculation)
+                        'event_months_freq_previous': set(),  # (year, month) tuples for previous period (frequency calculation)
+                        'event_creation_info': {},  # Keep for lead time calculations
                         'last_booking_date': None,
-                        'first_booking_date': None,
-                        # For compatibility with existing code
-                        'transactions': None  # Will store aggregated data later
+                        'first_booking_date': None
                     }
                 
                 metrics = account_metrics[account_id]
@@ -314,24 +317,46 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
                         if metrics['first_booking_date'] is None or tx['TransactionDate'] < metrics['first_booking_date']:
                             metrics['first_booking_date'] = tx['TransactionDate']
                     
-                    # Process events if EventId column exists
+                    # Process event data if EventId and EventDate columns exist
                     if 'EventId' in new_transactions.columns and 'EventDate' in new_transactions.columns:
                         event_data = new_transactions[['EventId', 'TransactionDate', 'EventDate']].copy()
-                        event_data = event_data[pd.notna(event_data['EventId'])]
+                        # Filter out rows without EventDate
+                        event_data = event_data[pd.notna(event_data['EventDate'])]
                         
                         if len(event_data) > 0:
-                            # Vectorized period classification
+                            # Convert EventDate to datetime if not already
+                            event_data['EventDate'] = pd.to_datetime(event_data['EventDate'])
+                            
+                            # Extract year-month tuples from EventDate for frequency analysis
+                            event_data['event_year_month'] = event_data['EventDate'].apply(
+                                lambda x: (x.year, x.month)
+                            )
+                            
+                            # Classify into current/previous based on TransactionDate
+                            # For tier calculations (rolling window)
                             current_mask = event_data['TransactionDate'].dt.date >= CUTOFF_365
                             previous_mask = (event_data['TransactionDate'].dt.date >= CUTOFF_730) & (~current_mask)
                             
-                            # Update event sets
-                            current_events = event_data[current_mask]['EventId'].dropna().astype(int).unique()
-                            previous_events = event_data[previous_mask]['EventId'].dropna().astype(int).unique()
-                            account_metrics[account_id]['event_ids_current'].update(current_events)
-                            account_metrics[account_id]['event_ids_previous'].update(previous_events)
+                            # Update month sets for tier calculations
+                            current_months = set(event_data[current_mask]['event_year_month'].unique())
+                            previous_months = set(event_data[previous_mask]['event_year_month'].unique())
                             
-                            # Group by EventId to find first booking per event
-                            event_groups = event_data[pd.notna(event_data['EventDate'])].groupby('EventId')
+                            account_metrics[account_id]['event_months_current'].update(current_months)
+                            account_metrics[account_id]['event_months_previous'].update(previous_months)
+                            
+                            # For event frequency calculations (month boundary)
+                            freq_current_mask = event_data['TransactionDate'].dt.date >= EVENT_FREQ_CUTOFF_CURRENT
+                            freq_previous_mask = (event_data['TransactionDate'].dt.date >= EVENT_FREQ_CUTOFF_PREVIOUS) & (~freq_current_mask)
+                            
+                            # Update month sets for frequency calculations
+                            freq_current_months = set(event_data[freq_current_mask]['event_year_month'].unique())
+                            freq_previous_months = set(event_data[freq_previous_mask]['event_year_month'].unique())
+                            
+                            account_metrics[account_id]['event_months_freq_current'].update(freq_current_months)
+                            account_metrics[account_id]['event_months_freq_previous'].update(freq_previous_months)
+                            
+                            # Also track event creation info for lead time calculations
+                            event_groups = event_data[pd.notna(event_data['EventId'])].groupby('EventId')
                             
                             for event_id, group in event_groups:
                                 event_id_key = int(event_id) if pd.notna(event_id) else None
@@ -374,10 +399,10 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
         # Clean up temporary fields (keep for event tracking)
         metrics['seen_tx_ids'] = len(metrics['seen_tx_ids'])  # Just keep count
         
-        # Debug: sample event tracking
+        # Debug: sample month tracking
         if account_id in list(account_metrics.keys())[:3]:
-            curr_events = len(metrics.get('event_ids_current', set()))
-            prev_events = len(metrics.get('event_ids_previous', set()))
-            print(f"  Account {account_id}: {curr_events} current events, {prev_events} previous events")
+            curr_months = len(metrics.get('event_months_current', set()))
+            prev_months = len(metrics.get('event_months_previous', set()))
+            print(f"  Account {account_id}: {curr_months} active months (current), {prev_months} active months (previous)")
     
     return account_metrics

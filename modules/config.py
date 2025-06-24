@@ -31,8 +31,15 @@ TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
 # === DATE AND TIMEZONE SETTINGS ===
 UK_TZ = pytz.timezone('Europe/London')
 TODAY = datetime.now(UK_TZ).date()
+
+# Tier calculations use rolling 365-day windows
 CUTOFF_365 = TODAY - timedelta(days=365)
 CUTOFF_730 = CUTOFF_365 - timedelta(days=365)
+
+# Event frequency uses month boundaries for stability
+# Include up to start of assessment month
+EVENT_FREQ_CUTOFF_CURRENT = TODAY.replace(day=1) - timedelta(days=365)
+EVENT_FREQ_CUTOFF_PREVIOUS = EVENT_FREQ_CUTOFF_CURRENT - timedelta(days=365)
 
 # === TIER THRESHOLDS ===
 # Percentile thresholds for tier classification

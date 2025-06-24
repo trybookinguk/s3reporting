@@ -141,18 +141,41 @@ Chats by day:
         smtp.send_message(msg)
 
 # === Run ===
-try:
-    access_token = get_access_token()
-    conversations = fetch_conversations(access_token)
-    filtered = [c for c in conversations if is_within_last_week(c)]
-    print(f"Filtered conversations: {len(filtered)}")
+def main():
+    """Main execution function."""
+    send_email_report = os.environ.get('SEND_EMAIL', '1') != '0'
+    
+    print(f"\n=== SalesIQ Weekly Report ===")
+    print(f"Email sending: {'ENABLED' if send_email_report else 'DISABLED'}")
+    if send_email_report and TEST_MODE:
+        print("TEST MODE: Email will be sent to alex@trybooking.co.uk only")
+    
+    try:
+        access_token = get_access_token()
+        conversations = fetch_conversations(access_token)
+        filtered = [c for c in conversations if is_within_last_week(c)]
+        print(f"Filtered conversations: {len(filtered)}")
 
-    if not filtered:
-        raise Exception("No conversations found in the last week.")
+        if not filtered:
+            raise Exception("No conversations found in the last week.")
 
-    tag_counts = summarize_tags(filtered)
-    busiest_day = get_busiest_day(filtered)
-    day_counts = get_day_counts(filtered)
-    send_email(len(filtered), tag_counts, busiest_day, day_counts)
-except Exception as e:
-    print("Error:", e)
+        tag_counts = summarize_tags(filtered)
+        busiest_day = get_busiest_day(filtered)
+        day_counts = get_day_counts(filtered)
+        
+        if send_email_report:
+            send_email(len(filtered), tag_counts, busiest_day, day_counts)
+            print("Email sent successfully!")
+        else:
+            print("\nEmail sending disabled - report summary:")
+            print(f"Total conversations: {len(filtered)}")
+            print(f"Tag summary: {tag_counts}")
+            print(f"Busiest day: {busiest_day}")
+            
+    except Exception as e:
+        print("Error:", e)
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    main()

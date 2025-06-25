@@ -184,12 +184,6 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
     """
     print("\nOptimized streaming processing for large files...")
     
-    # Debug: Print cutoff dates
-    print(f"  DEBUG: CUTOFF_365 = {CUTOFF_365}")
-    print(f"  DEBUG: CUTOFF_730 = {CUTOFF_730}")
-    print(f"  DEBUG: EVENT_FREQ_CUTOFF_CURRENT = {EVENT_FREQ_CUTOFF_CURRENT}")
-    print(f"  DEBUG: EVENT_FREQ_CUTOFF_PREVIOUS = {EVENT_FREQ_CUTOFF_PREVIOUS}")
-    
     # Check if caching is disabled via environment
     if os.environ.get('NO_CACHE', '').lower() in ['1', 'true', 'yes']:
         use_cache = False
@@ -265,12 +259,6 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
         
         # Process chunks
         for chunk_num, chunk in enumerate(chunks_iter):
-            # Debug: Check columns on first chunk
-            if chunk_num == 0:
-                print(f"  DEBUG: Columns in data: {list(chunk.columns)}")
-                print(f"  DEBUG: Has EventId: {'EventId' in chunk.columns}")
-                print(f"  DEBUG: Has EventDate: {'EventDate' in chunk.columns}")
-            
             # Ensure TransactionDate is datetime (already parsed from CSV with parse_dates)
             # Keep in UTC as per data source
             chunk['Revenue'] = chunk['BookingFee'] + chunk['CardFee'] + chunk['ProcessingFee'] + chunk['TicketFee']
@@ -338,22 +326,11 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
                         if metrics['first_booking_date'] is None or tx['TransactionDate'] < metrics['first_booking_date']:
                             metrics['first_booking_date'] = tx['TransactionDate']
                     
-                    # Debug columns for first few accounts
-                    if chunk_num == 0 and account_id in list(account_metrics.keys())[:1]:
-                        print(f"    DEBUG: new_transactions columns: {list(new_transactions.columns)}")
-                    
                     # Process event data if EventId and EventDate columns exist
                     if 'EventId' in new_transactions.columns and 'EventDate' in new_transactions.columns:
                         event_data = new_transactions[['EventId', 'TransactionDate', 'EventDate']].copy()
                         # Filter out rows without EventDate
                         event_data = event_data[pd.notna(event_data['EventDate'])]
-                        
-                        # Debug: Check if we have event data
-                        if chunk_num == 0 and account_id in list(account_metrics.keys())[:3]:
-                            print(f"    DEBUG: Account {account_id} - event_data rows: {len(event_data)}")
-                            if len(event_data) > 0:
-                                print(f"    DEBUG: First EventDate: {event_data['EventDate'].iloc[0]}")
-                                print(f"    DEBUG: EventDate type: {type(event_data['EventDate'].iloc[0])}")
                         
                         if len(event_data) > 0:
                             # EventDate is already parsed as datetime from CSV
@@ -430,10 +407,5 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
         # Clean up temporary fields (keep for event tracking)
         metrics['seen_tx_ids'] = len(metrics['seen_tx_ids'])  # Just keep count
         
-        # Debug: sample month tracking
-        if account_id in list(account_metrics.keys())[:3]:
-            curr_months = len(metrics.get('event_months_current', set()))
-            prev_months = len(metrics.get('event_months_previous', set()))
-            print(f"  Account {account_id}: {curr_months} active months (current), {prev_months} active months (previous)")
     
     return account_metrics

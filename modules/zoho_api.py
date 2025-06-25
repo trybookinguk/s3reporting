@@ -85,11 +85,6 @@ def upsert_to_zoho(token, records, debug=False, return_results=False):
             "duplicate_check_fields": ["Account_Name"]
         }
         
-        # Debug: Print first record of batch
-        if debug and batch:
-            print(f"\nBatch {i//batch_size + 1} - First record:")
-            for key, value in batch[0].items():
-                print(f"  {key}: {value} (type: {type(value).__name__})")
         
         try:
             resp = requests.post(url, headers=headers, json=payload)

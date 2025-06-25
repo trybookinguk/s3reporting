@@ -41,9 +41,7 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
         if days_since_created <= 14 and current_freq == "Inactive" and not has_historical:
             is_new_account = True
     
-    # Active: Any current activity (not Inactive)
-    if current_freq != "Inactive":
-        return "Active"
+    # Don't immediately return Active - we need to check days since last activity first
     
     # New accounts - special handling with strict thresholds based on account creation date
     if is_new_account:
@@ -60,8 +58,8 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
     if current_freq != "Inactive" and previous_freq == "Inactive":
         return "Returned"
     
-    # At Risk/Churned logic for accounts that were active but now inactive
-    if previous_freq != "Inactive" and current_freq == "Inactive":
+    # At Risk/Churned logic - check based on account type and days since last activity
+    if previous_freq != "Inactive":  # Account has historical activity
         
         # HIGH-TIER ANNUAL/SEASONAL EVENTS - Three stage approach
         # Tier 3 and above get proactive outreach
@@ -151,7 +149,7 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
             if previous_freq == "Continuous":
                 if days_to_check >= 90:
                     return "Churned"
-                elif days_to_check >= 45:
+                elif days_to_check >= 30:
                     return "At Risk"
             else:  # Regular
                 if days_to_check >= 180:
@@ -165,6 +163,10 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
                 return "Churned"
             elif days_since_last >= 180:
                 return "At Risk"
+    
+    # If account has current activity and doesn't meet any at-risk criteria, it's Active
+    if current_freq != "Inactive":
+        return "Active"
     
     return "Inactive"
 

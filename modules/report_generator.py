@@ -7,7 +7,7 @@ from datetime import datetime
 from email.message import EmailMessage
 from .config import (
     MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD,
-    MAILGUN_DOMAIN, SMTP_HOST, SMTP_PORT, TEST_MODE, DEFAULT_RECIPIENT, CC_RECIPIENT
+    MAILGUN_DOMAIN, SMTP_HOST, SMTP_PORT, TEST_MODE, DEFAULT_RECIPIENT, CC_RECIPIENT, UK_TZ
 )
 
 
@@ -118,3 +118,206 @@ allowing proactive outreach approximately 1 month before they usually set up the
     
     recipients = DEFAULT_RECIPIENT if TEST_MODE else f"{DEFAULT_RECIPIENT}, {CC_RECIPIENT}"
     print(f"Email sent to {recipients} with {len(report_df)} upcoming annual events")
+
+
+def email_tier_updates_report(updates_df, csv_filename):
+    """Email the tier updates report with retention priority summary."""
+    
+    # Get summary statistics
+    tier_counts = updates_df['Current_Tier'].value_counts()
+    tier_changes = updates_df[updates_df['Current_Tier'] != updates_df['Previous_Tier']]
+    priority_counts = updates_df['Retention_Priority'].value_counts()
+    
+    # Get top priority accounts (excluding churned accounts)
+    very_high_accounts = updates_df[
+        (updates_df['Retention_Priority'] == 'Very High') & 
+        (updates_df['Rating'] != 'Churned')
+    ].nlargest(10, '_retention_priority_score')
+    high_accounts = updates_df[
+        (updates_df['Retention_Priority'] == 'High') & 
+        (updates_df['Rating'] != 'Churned')
+    ].nlargest(10, '_retention_priority_score')
+    
+    # Count churned accounts (they have empty retention priority)
+    churned_count = len(updates_df[updates_df['Rating'] == 'Churned'])
+    
+    # Create HTML table for very high priority accounts
+    very_high_table_html = ""
+    if not very_high_accounts.empty:
+        very_high_table_html = """
+<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; font-family: Arial, sans-serif; font-size: 10pt;">
+<tr style="background-color: #f0f0f0;">
+<th>Account Name</th>
+<th>Tier</th>
+<th>Activity Rating</th>
+<th>Priority Score</th>
+<th>Revenue Drop</th>
+<th>Current Revenue</th>
+</tr>"""
+        for _, account in very_high_accounts.iterrows():
+            revenue_drop = account.get('_revenue_drop_category', 'N/A')
+            current_revenue = f"£{account.get('_revenue_current', 0):,.2f}"
+            very_high_table_html += f"""
+<tr>
+<td>{account['Account_Name']}</td>
+<td>{account['Current_Tier']}</td>
+<td>{account['Rating']}</td>
+<td>{account['_retention_priority_score']}</td>
+<td>{revenue_drop}</td>
+<td>{current_revenue}</td>
+</tr>"""
+        very_high_table_html += "</table>"
+    
+    # Prepare email body
+    body_plain = f"""Hi Alex,
+
+Please find attached the tier updates report for {datetime.now(UK_TZ).strftime('%B %Y')}.
+
+SUMMARY
+=======
+Total accounts processed: {len(updates_df):,}
+Tier changes: {len(tier_changes):,} accounts
+
+TIER DISTRIBUTION
+================"""
+    
+    for tier in ['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1', 'NIL']:
+        count = tier_counts.get(tier, 0)
+        pct = (count / len(updates_df) * 100) if len(updates_df) > 0 else 0
+        body_plain += f"\n{tier}: {count:,} ({pct:.1f}%)"
+    
+    body_plain += f"""
+
+RETENTION PRIORITY DISTRIBUTION
+==============================
+Very High: {priority_counts.get('Very High', 0):,} accounts
+High: {priority_counts.get('High', 0):,} accounts
+Medium: {priority_counts.get('Medium', 0):,} accounts
+Low: {priority_counts.get('Low', 0):,} accounts
+
+Churned (No Priority): {churned_count:,} accounts - Excluded from CS workflows
+
+Action required for {priority_counts.get('Very High', 0) + priority_counts.get('High', 0):,} accounts (Very High + High priority)
+
+Note: Churned accounts are excluded from standard CS workflows and priority scoring
+
+Best regards,
+TryBooking Reporting System
+"""
+    
+    # HTML version
+    body_html = f"""<div style="font-family: Arial, sans-serif; font-size: 11pt;">
+<p>Hi Alex,</p>
+<p>Please find attached the tier updates report for {datetime.now(UK_TZ).strftime('%B %Y')}.</p>
+
+<h3>Summary</h3>
+<ul>
+<li>Total accounts processed: <strong>{len(updates_df):,}</strong></li>
+<li>Tier changes: <strong>{len(tier_changes):,}</strong> accounts</li>
+</ul>
+
+<h3>Tier Distribution</h3>
+<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
+<tr style="background-color: #f0f0f0;">
+<th>Tier</th>
+<th>Count</th>
+<th>Percentage</th>
+</tr>"""
+    
+    for tier in ['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1', 'NIL']:
+        count = tier_counts.get(tier, 0)
+        pct = (count / len(updates_df) * 100) if len(updates_df) > 0 else 0
+        body_html += f"""
+<tr>
+<td>{tier}</td>
+<td>{count:,}</td>
+<td>{pct:.1f}%</td>
+</tr>"""
+    
+    body_html += f"""</table>
+
+<h3>Retention Priority Distribution</h3>
+<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
+<tr style="background-color: #f0f0f0;">
+<th>Priority</th>
+<th>Count</th>
+<th>Action</th>
+</tr>
+<tr>
+<td><span style="color: #d32f2f; font-weight: bold;">Very High</span></td>
+<td>{priority_counts.get('Very High', 0):,}</td>
+<td>Immediate intervention required</td>
+</tr>
+<tr>
+<td><span style="color: #f57c00; font-weight: bold;">High</span></td>
+<td>{priority_counts.get('High', 0):,}</td>
+<td>Urgent outreach needed</td>
+</tr>
+<tr>
+<td><span style="color: #388e3c;">Medium</span></td>
+<td>{priority_counts.get('Medium', 0):,}</td>
+<td>Standard monitoring</td>
+</tr>
+<tr>
+<td><span style="color: #757575;">Low</span></td>
+<td>{priority_counts.get('Low', 0):,}</td>
+<td>Regular communications</td>
+</tr>
+</table>
+
+<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; margin-top: 10px;">
+<tr style="background-color: #f0f0f0;">
+<th>Excluded Accounts</th>
+<th>Count</th>
+<th>Note</th>
+</tr>
+<tr>
+<td><span style="color: #9e9e9e;">Churned (No Priority)</span></td>
+<td>{churned_count:,}</td>
+<td>Retention Priority field is empty - Excluded from CS workflows</td>
+</tr>
+</table>
+
+<p style="margin-top: 10px;"><em>Total Churned Accounts: {churned_count:,}</em></p>
+
+<p><strong>Action required for {priority_counts.get('Very High', 0) + priority_counts.get('High', 0):,} accounts</strong> (Very High + High priority)</p>
+<p style="font-size: 10pt; color: #666;">Note: Churned accounts are automatically excluded from standard CS workflows regardless of tier or revenue drop.</p>
+"""
+    
+    if very_high_table_html:
+        body_html += f"""
+<h3>Top Very High Priority Accounts</h3>
+<p>These accounts require immediate attention (churned accounts excluded):</p>
+{very_high_table_html}
+"""
+    
+    body_html += """
+<p>Best regards,<br>TryBooking Reporting System</p>
+</div>"""
+    
+    # Create email message
+    msg = EmailMessage()
+    msg['Subject'] = f'{"[TEST] " if TEST_MODE else ""}Tier Updates & Retention Priorities - {datetime.now(UK_TZ).strftime("%B %Y")}'
+    msg['From'] = f"TryBooking Reporting <reports@{MAILGUN_DOMAIN}>"
+    msg['To'] = DEFAULT_RECIPIENT
+    
+    if CC_RECIPIENT and not TEST_MODE:
+        msg['Cc'] = CC_RECIPIENT
+    
+    # Set content
+    msg.set_content(body_plain)
+    msg.add_alternative(body_html, subtype='html')
+    
+    # Attach CSV file
+    with open(csv_filename, 'rb') as f:
+        csv_data = f.read()
+        msg.add_attachment(csv_data, maintype='text', subtype='csv', filename=csv_filename)
+    
+    # Send email via Mailgun
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
+        smtp.starttls()
+        smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
+        smtp.send_message(msg)
+    
+    recipients = DEFAULT_RECIPIENT if TEST_MODE else f"{DEFAULT_RECIPIENT}, {CC_RECIPIENT}"
+    print(f"Email sent to {recipients} with tier updates and retention priorities")

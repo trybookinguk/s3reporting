@@ -12,7 +12,7 @@ from modules.config import UK_TZ
 from modules.s3_data_loader import get_s3_client, process_booking_data_optimized, download_s3_file_cached
 from modules.account_processor import process_accounts
 from modules.zoho_api import get_access_token, upsert_to_zoho
-from modules.report_generator import generate_upcoming_annual_events_report, email_upcoming_events_report
+from modules.report_generator import generate_upcoming_annual_events_report, email_upcoming_events_report, email_tier_updates_report
 
 
 def main():
@@ -66,6 +66,86 @@ def main():
         
         print(f"\nTotal unique accounts found: {len(account_metrics):,}")
         
+        # Load full booking data for revenue factor calculations
+        print("\nLoading full booking data for revenue analysis...")
+        booking_data_df = None
+        try:
+            # Load both BookingDataAll and current month BookingData
+            print(f"Loading BookingDataAll from: {key_all}")
+            booking_all_df = download_s3_file_cached(s3_client, key_all)
+            
+            print(f"Loading BookingData from: {key_month}")
+            booking_month_df = download_s3_file_cached(s3_client, key_month)
+            
+            # Combine and remove duplicates based on BookingTransactionId
+            print("Combining booking data and removing duplicates...")
+            booking_data_df = pd.concat([booking_all_df, booking_month_df], ignore_index=True)
+            initial_count = len(booking_data_df)
+            booking_data_df = booking_data_df.drop_duplicates(subset='BookingTransactionId')
+            print(f"Removed {initial_count - len(booking_data_df):,} duplicate transactions")
+            
+            # Only keep necessary columns for revenue analysis to save memory
+            revenue_cols = ['AccountId', 'TransactionDate', 'PaymentReceived', 'BookingFee', 
+                          'CardFee', 'ProcessingFee', 'TicketFee']
+            # Keep only columns that exist in the dataframe
+            available_cols = [col for col in revenue_cols if col in booking_data_df.columns]
+            booking_data_df = booking_data_df[available_cols].copy()
+            
+            # Calculate total revenue if component columns exist
+            if all(col in booking_data_df.columns for col in ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']):
+                booking_data_df['Revenue'] = (booking_data_df['BookingFee'] + 
+                                             booking_data_df['CardFee'] + 
+                                             booking_data_df['ProcessingFee'] + 
+                                             booking_data_df['TicketFee'])
+            elif 'PaymentReceived' in booking_data_df.columns:
+                # Fallback to PaymentReceived if fee columns not available
+                booking_data_df['Revenue'] = booking_data_df['PaymentReceived']
+            
+            # Ensure TransactionDate is datetime
+            if 'TransactionDate' in booking_data_df.columns:
+                booking_data_df['TransactionDate'] = pd.to_datetime(booking_data_df['TransactionDate'])
+            
+            # Merge industry information from Accounts data
+            print("Merging industry information...")
+            if 'Industry' in account_df.columns and 'SubIndustry' in account_df.columns:
+                # Prepare account data for merge
+                account_industry_df = account_df[['Id', 'Industry', 'SubIndustry']].copy()
+                account_industry_df.rename(columns={'Id': 'AccountId'}, inplace=True)
+                
+                # Convert AccountId to string for consistent merging
+                booking_data_df['AccountId'] = booking_data_df['AccountId'].astype(str)
+                account_industry_df['AccountId'] = account_industry_df['AccountId'].astype(str)
+                
+                # Merge industry data
+                booking_data_df = booking_data_df.merge(
+                    account_industry_df,
+                    on='AccountId',
+                    how='left'
+                )
+                
+                # Log missing industry data
+                missing_industry = booking_data_df['Industry'].isna().sum()
+                if missing_industry > 0:
+                    print(f"WARNING: {missing_industry:,} transactions missing industry data")
+            
+            # Add year and month columns from TransactionDate for performance
+            if 'TransactionDate' in booking_data_df.columns:
+                booking_data_df['Year'] = booking_data_df['TransactionDate'].dt.year
+                booking_data_df['Month'] = booking_data_df['TransactionDate'].dt.month
+                
+                # Filter to last 2 years of data for performance
+                two_years_ago = pd.Timestamp.now() - pd.DateOffset(years=2)
+                original_count = len(booking_data_df)
+                booking_data_df = booking_data_df[booking_data_df['TransactionDate'] >= two_years_ago]
+                print(f"Filtered to last 2 years: {len(booking_data_df):,} transactions (removed {original_count - len(booking_data_df):,})")
+            
+            print(f"Prepared booking data: {len(booking_data_df):,} transactions for revenue analysis")
+            
+        except Exception as e:
+            print(f"WARNING: Failed to load full booking data for revenue analysis: {str(e)}")
+            print("Will proceed with basic revenue calculations only")
+            booking_data_df = None
+        
     except Exception as e:
         print(f"ERROR: Failed to process S3 files: {str(e)}")
         import traceback
@@ -73,7 +153,7 @@ def main():
         return
     
     # Process accounts: calculate tiers, event frequencies, and activity ratings
-    updates = process_accounts(account_metrics, account_lookup)
+    updates = process_accounts(account_metrics, account_lookup, booking_data_df)
     
     # Save results to CSV for audit
     csv_filename = f"tier_updates_{datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')}.csv"
@@ -97,6 +177,16 @@ def main():
         print("\nExample tier changes (first 5):")
         for _, row in tier_changes.head(5).iterrows():
             print(f"  Account {row['Account_Name']}: {row['Previous_Tier']} → {row['Current_Tier']}")
+    
+    # Retention priority statistics (already printed in process_accounts)
+    # Show top very high priority accounts
+    if 'Retention_Priority' in updates.columns:
+        very_high_accounts = updates[updates['Retention_Priority'] == 'Very High']
+        if len(very_high_accounts) > 0:
+            print(f"\nTop Very High Priority Accounts (showing first 5 of {len(very_high_accounts)}):")
+            top_very_high = very_high_accounts.nlargest(5, '_retention_priority_score')
+            for _, row in top_very_high.iterrows():
+                print(f"  Account {row['Account_Name']}: {row['Current_Tier']}, {row['Rating']}, Score: {row['_retention_priority_score']}")
     
     # Generate annual events report
     print("\n=== Annual Events Report ===")
@@ -134,26 +224,31 @@ def main():
     else:
         print("No upcoming annual events requiring outreach in next 30 days")
     
+    # Send tier updates email report
+    try:
+        # Check if email credentials are configured
+        from modules.config import MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN
+        if all([MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN]):
+            email_tier_updates_report(updates, csv_filename)
+            print(f"📧 Emailed tier updates report with retention priorities")
+        else:
+            print("Email credentials not configured - skipping tier updates email")
+    except Exception as e:
+        print(f"WARNING: Failed to email tier updates report: {str(e)}")
+    
     # Clean up hidden fields before Zoho upload
     hidden_cols = [col for col in updates.columns if col.startswith('_')]
     zoho_updates = updates.drop(columns=hidden_cols, errors='ignore')
     print(f"\nRemoving {len(hidden_cols)} hidden columns before Zoho upload")
     
     if not zoho_updates.empty:
-        # Debug: Check for any invalid Account_Name values
-        print(f"\nChecking Account_Name values...")
-        invalid_names = zoho_updates[zoho_updates['Account_Name'].isna() | (zoho_updates['Account_Name'] == '')]
-        if not invalid_names.empty:
-            print(f"WARNING: Found {len(invalid_names)} records with invalid Account_Name")
-            print(invalid_names[['Account_Name', 'Current_Tier', 'Event_Frequency_Current']].head())
-        
         # Get Zoho token and update
         try:
             print("\nAuthenticating with Zoho...")
             token = get_access_token()
             
             print("Updating Zoho CRM...")
-            upsert_to_zoho(token, zoho_updates, debug=True)
+            upsert_to_zoho(token, zoho_updates)
             
         except Exception as e:
             print(f"ERROR: Zoho update failed: {str(e)}")

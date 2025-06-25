@@ -9,3 +9,11 @@ from .event_frequency import (
     get_seasonal_pattern,
     predict_next_event_month
 )
+
+from .revenue_factor import (
+    calculate_industry_quintiles,
+    calculate_revenue_drop_score,
+    handle_seasonal_comparison,
+    get_revenue_factor,
+    calculate_new_account_thresholds
+)

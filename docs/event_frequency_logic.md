@@ -9,6 +9,7 @@ The event frequency classification system analyzes account activity patterns to 
 ### 1. Data Collection
 - The system tracks which months have events with ticket sales
 - Uses **EventDate** field (when the event happens, not when tickets are sold)
+- Also requires **EventId** field to group events properly
 - Tracks two 12-month periods:
   - **Current Period**: From start of current month going back 12 months
   - **Previous Period**: The 12 months before that
@@ -34,9 +35,10 @@ Based on the number of unique months with events:
 
 ### 4. Special Case: "New" Status
 An account is classified as "New" when:
-- They have 0 months with ticket sales in the current period
-- BUT they have created an event (detected via LastEventCreation date)
-- This helps identify newly opened accounts
+- They have 0 months with ticket sales (no bookings in BookingDataAll)
+- BUT they have created an event (detected via LastEventCreation date in Accounts report)
+- This classification is used during event frequency analysis
+- Note: The Activity Rating system has its own "New" logic based on DateTimeCreated field
 
 ## Key Design Decisions
 
@@ -52,9 +54,10 @@ An account is classified as "New" when:
 
 ### Months Active Export
 The system exports which specific months have activity to Zoho CRM:
-- Format: Full month names (e.g., "January,March,July,December")
+- Format: Array of full month names (e.g., ["January", "March", "July", "December"])
 - Shows the seasonal pattern at a glance
-- Combines both current and previous periods for complete picture
+- Only includes months from the current period (last 12 months)
+- Sent as a multi-select field to Zoho CRM
 
 ## Examples
 
@@ -62,13 +65,13 @@ The system exports which specific months have activity to Zoho CRM:
 - Events in June, July, August for past 3 years
 - **Current Period**: 3 unique months
 - **Classification**: Seasonal
-- **Months Active**: "June,July,August"
+- **Months Active**: ["June", "July", "August"]
 
 ### Example 2: Monthly Quiz Night
 - Events every month except December
 - **Current Period**: 11 unique months
 - **Classification**: Continuous
-- **Months Active**: "January,February,March,April,May,June,July,August,September,October,November"
+- **Months Active**: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November"]
 
 ### Example 3: New Theatre Company
 - Account created 2 months ago
@@ -81,7 +84,7 @@ The system exports which specific months have activity to Zoho CRM:
 - One big event each November
 - **Current Period**: 1 unique month
 - **Classification**: Annual
-- **Months Active**: "November"
+- **Months Active**: ["November"]
 
 ## Technical Implementation
 
@@ -92,16 +95,19 @@ The logic is split across several files:
    - `EVENT_FREQ_CUTOFF_PREVIOUS`: Start of month 24 months ago
 
 2. **s3_data_loader.py**: Extracts event months from booking data
-   - Groups transactions by EventDate
+   - Groups transactions by EventId and EventDate
    - Tracks unique (year, month) combinations
+   - Maintains separate sets for tier calculation and frequency windows
 
 3. **event_frequency.py**: Contains classification logic
    - `classify_event_frequency()`: Converts month count to classification
-   - `format_months_active_for_zoho()`: Formats month names for export
+   - `format_months_active_for_zoho()`: Returns list of month names for Zoho multi-select
+   - `get_months_active_fingerprint()`: Extracts unique months from event data
 
-4. **tier_calculator.py**: Applies the classification
-   - Uses Account report data to detect "New" accounts
+4. **account_processor.py**: Orchestrates the classification
+   - Uses Account report data to detect "New" accounts (via LastEventCreation)
    - Combines all logic to assign final classifications
+   - Separates current period months for Zoho export
 
 ## Edge Cases Handled
 
@@ -110,3 +116,5 @@ The logic is split across several files:
 2. **Multi-session Events**: Events with multiple sessions in the same month are counted as one month.
 
 3. **Account Creation Timing**: New accounts need time to establish patterns, so recent accounts with single-month activity aren't immediately classified as "Annual".
+
+4. **Data Caching**: The system caches S3 files for performance. After updating field parsing logic (e.g., EventId/EventDate), the cache must be cleared for changes to take effect.

@@ -13,7 +13,7 @@ The **Rating** field tells us how each account is doing and whether they need he
 
 ### 2. **New**
 - **What it means**: They just signed up and are getting started
-- **How we know**: Created an account in the last 14 days but haven't sold tickets yet
+- **How we know**: Account created in the last 14 days (using DateTimeCreated field) with no bookings
 - **What to do**: Keep an eye on them
 
 ### 3. **Outreach**
@@ -27,17 +27,17 @@ The **Rating** field tells us how each account is doing and whether they need he
 ### 4. **At Risk**
 - **What it means**: They've gone quiet and that's worrying
 - **How we know (depends on account type)**:
-  - **New accounts**: No activity after 15-28 days
+  - **New accounts**: No activity 14-27 days after account creation
   - **Annual/Seasonal**: Should be selling tickets based on historical patterns
-  - **Regular**: No activity for 90-180 days
-  - **Continuous**: No activity for 45-90 days
+  - **Regular**: No activity for 90-179 days
+  - **Continuous**: No activity for 30-89 days
   - **Education industry**: July/August excluded from day count
 - **Action**: Immediate intervention required
 
 ### 5. **Churned**
 - **What it means**: They've probably stopped using us
 - **How we know (depends on account type)**:
-  - **New accounts**: No activity after 28 days
+  - **New accounts**: No activity 28+ days after account creation
   - **Annual/Seasonal**: Missed expected event date (plus 30-day grace period)
   - **Regular**: No activity for 180+ days
   - **Continuous**: No activity for 90+ days
@@ -70,7 +70,9 @@ Schools and education accounts are handled differently based on when they normal
 - July and August don't count against them
 - Example: If a school was last active on June 30th and we check on September 15th, they've only been inactive for 15 days (not 77 days)
 
-The system knows which type of school each account is by looking at when they've run events in the past.
+The system identifies education accounts by:
+- Industry field marked as "Education"
+- OR activity pattern showing 60%+ activity during term months (September-June) with summer gap
 
 **Scottish Schools**:
 - Identified automatically by their postcode
@@ -80,12 +82,17 @@ The system knows which type of school each account is by looking at when they've
 
 ### Annual Events
 For accounts that run yearly or seasonal events, we predict when they should be active by looking at:
-- When they ran events before
+- When they ran events before (with 30-day flexibility for events that shift dates)
 - How far in advance they usually set up events
 - When they normally start selling tickets
 
+The system allows annual events to vary by ±30 days from the expected 365-day cycle to accommodate real-world variations like "last Saturday in June" events.
+
 ### Tier-Based Prioritization
 Only our most important accounts (Tier 3 and above) get the "Outreach" rating. This helps us focus on the accounts that matter most.
+
+### Annual Events Report
+A separate report identifies upcoming annual events for Tier 3+ accounts that need proactive outreach in the next 30 days. This report is automatically emailed to stakeholders.
 
 ## Data Sources
 
@@ -93,7 +100,8 @@ To work out the rating, we look at:
 - **How often they run events**: This year vs last year
 - **When they last sold tickets**: How many days ago
 - **When their events happen**: To predict future activity
-- **What type of account**: Industry and when they joined
+- **What type of account**: Industry classification
+- **When they joined**: DateTimeCreated field from Accounts report
 - **How important they are**: Their tier level
 
 ## Business Value

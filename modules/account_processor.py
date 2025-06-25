@@ -10,6 +10,8 @@ from .config import (
 from .tier_calculator import determine_tier_from_percentiles
 from .event_frequency import classify_event_frequency, get_months_active_fingerprint, format_months_active_for_zoho
 from .activity_rating import determine_activity_rating
+from .retention_priority import calculate_retention_priority, calculate_revenue_drop_category, categorize_priority, get_revenue_drop_score
+from .revenue_factor import get_revenue_factor, calculate_industry_quintiles
 
 
 def calculate_percentiles(metrics_df):
@@ -111,12 +113,13 @@ def prepare_metrics_dataframe(account_metrics):
     return pd.DataFrame(all_metrics)
 
 
-def process_accounts(account_metrics, account_lookup=None):
+def process_accounts(account_metrics, account_lookup=None, booking_data_df=None):
     """Main orchestration function for processing accounts.
     
     Args:
         account_metrics: Dictionary of aggregated account metrics
         account_lookup: Optional dictionary with Account report data
+        booking_data_df: Optional DataFrame with all booking data for industry analysis
         
     Returns:
         DataFrame with tier assignments, event frequencies, and activity ratings
@@ -243,6 +246,75 @@ def process_accounts(account_metrics, account_lookup=None):
             account_postcode=account_postcode,
             account_created_date=account_created_date
         )
+        
+        # Calculate revenue drop using sophisticated analysis if booking data available
+        if booking_data_df is not None and not booking_data_df.empty and industry:
+            # Get account's transaction history
+            account_history = booking_data_df[booking_data_df['AccountId'] == account_name].copy()
+            
+            # Determine account pattern for revenue analysis
+            account_pattern = 'continuous'  # Default
+            if event_freq_current == 'Annual' or event_freq_previous == 'Annual':
+                account_pattern = 'annual'
+            elif event_freq_current == 'Seasonal' or event_freq_previous == 'Seasonal':
+                account_pattern = 'seasonal'
+            
+            # Get industry data for quintile calculation
+            industry_data = booking_data_df[booking_data_df['Industry'] == industry]
+            
+            # Prepare account info with accounts_df for quintile calculation
+            account_info = {}
+            if account_lookup:
+                # Convert account_lookup to DataFrame format for quintile calculation
+                accounts_df = pd.DataFrame.from_dict(account_lookup, orient='index')
+                accounts_df.reset_index(inplace=True)
+                accounts_df.rename(columns={'index': 'AccountId'}, inplace=True)
+                account_info['accounts_df'] = accounts_df
+            
+            # Calculate revenue factor with all advanced features
+            try:
+                revenue_result = get_revenue_factor(
+                    current_revenue=row.get('revenue_current', 0),
+                    historical_revenue=account_history,
+                    industry_data=industry_data,
+                    account_type=account_pattern,
+                    account_info=account_info
+                )
+                
+                # Map score to category for compatibility
+                revenue_drop_score = revenue_result['score']
+                revenue_drop_category = revenue_result['severity'].capitalize()
+                revenue_drop_details = revenue_result.get('details', {})
+            except Exception as e:
+                print(f"Warning: Error calculating revenue factor for {account_name}: {str(e)}")
+                # Fallback to simple calculation
+                revenue_drop_category = calculate_revenue_drop_category(
+                    row.get('revenue_current', 0),
+                    row.get('revenue_prev', 0)
+                )
+                revenue_drop_score = get_revenue_drop_score(revenue_drop_category)
+                revenue_drop_details = {}
+        else:
+            # Fallback to simple calculation
+            revenue_drop_category = calculate_revenue_drop_category(
+                row.get('revenue_current', 0),
+                row.get('revenue_prev', 0)
+            )
+            revenue_drop_score = get_revenue_drop_score(revenue_drop_category)
+            revenue_drop_details = {}
+        
+        # Calculate retention priority using either score or category
+        retention_priority_score = calculate_retention_priority(
+            tier_current,
+            activity_rating,
+            revenue_drop_score
+        )
+        
+        retention_priority = categorize_priority(retention_priority_score)
+        
+        # If account is churned (excluded), set retention priority to empty
+        if activity_rating == "Churned":
+            retention_priority = ""
             
         results.append({
             "Account_Name": account_name,
@@ -255,13 +327,17 @@ def process_accounts(account_metrics, account_lookup=None):
             "Event_Frequency_Previous": event_freq_previous,
             "Rating": activity_rating,
             "Months_Active": months_active_zoho,
+            "Retention_Priority": retention_priority,
             # Hidden fields for report generation (prefix with _)
+            "_retention_priority_score": retention_priority_score,
             "_avg_lead_days": avg_lead_days,
             "_last_event_date": last_event_date,
             "_month_count_current": len(event_data.get('event_months_current', set())),
             "_months_active_list": months_active_current,
             "_revenue_current": row.get('revenue_current', 0),
-            "_revenue_prev": row.get('revenue_prev', 0)
+            "_revenue_prev": row.get('revenue_prev', 0),
+            "_revenue_drop_category": revenue_drop_category,
+            "_revenue_drop_details": revenue_drop_details
         })
     
     # Print event frequency summary
@@ -277,6 +353,20 @@ def process_accounts(account_metrics, account_lookup=None):
         for rating in ['Active', 'Outreach', 'At Risk', 'Churned', 'Returned', 'New', 'Inactive']:
             count = rating_counts.get(rating, 0)
             print(f"  {rating}: {count:,} accounts")
+        
+        # Retention Priority summary
+        priority_counts = results_df['Retention_Priority'].value_counts()
+        print("\nRetention Priority Summary:")
+        for priority in ['Very High', 'High', 'Medium', 'Low']:
+            count = priority_counts.get(priority, 0)
+            pct = (count / len(results_df) * 100) if len(results_df) > 0 else 0
+            print(f"  {priority}: {count:,} accounts ({pct:.1f}%)")
+        
+        # Show churned accounts (empty retention priority) separately
+        churned_count = len(results_df[results_df['Rating'] == 'Churned'])
+        if churned_count > 0:
+            churned_pct = (churned_count / len(results_df) * 100) if len(results_df) > 0 else 0
+            print(f"\n  Churned (No Priority): {churned_count:,} accounts ({churned_pct:.1f}%) - Excluded from standard CS workflows")
         
         # Months Active patterns summary
         print("\nMonths Active Patterns (Top 10):")

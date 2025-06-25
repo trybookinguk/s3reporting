@@ -140,13 +140,20 @@ def main():
     print(f"\nRemoving {len(hidden_cols)} hidden columns before Zoho upload")
     
     if not zoho_updates.empty:
+        # Debug: Check for any invalid Account_Name values
+        print(f"\nChecking Account_Name values...")
+        invalid_names = zoho_updates[zoho_updates['Account_Name'].isna() | (zoho_updates['Account_Name'] == '')]
+        if not invalid_names.empty:
+            print(f"WARNING: Found {len(invalid_names)} records with invalid Account_Name")
+            print(invalid_names[['Account_Name', 'Current_Tier', 'Event_Frequency_Current']].head())
+        
         # Get Zoho token and update
         try:
             print("\nAuthenticating with Zoho...")
             token = get_access_token()
             
             print("Updating Zoho CRM...")
-            upsert_to_zoho(token, zoho_updates)
+            upsert_to_zoho(token, zoho_updates, debug=True)
             
         except Exception as e:
             print(f"ERROR: Zoho update failed: {str(e)}")

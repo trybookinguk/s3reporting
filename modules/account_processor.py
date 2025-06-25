@@ -217,10 +217,14 @@ def process_accounts(account_metrics, account_lookup=None):
         event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]
         last_event_date = max(event_dates).date() if event_dates else None
         
-        # Calculate Months Active fingerprint using frequency months for consistency
-        all_freq_months = event_data.get('event_months_freq_current', set()) | event_data.get('event_months_freq_previous', set())
-        months_active_list = get_months_active_fingerprint(all_freq_months)
-        months_active_zoho = format_months_active_for_zoho(months_active_list)
+        # Calculate Months Active fingerprint for current period only (for Zoho field)
+        current_freq_months = event_data.get('event_months_freq_current', set())
+        months_active_current = get_months_active_fingerprint(current_freq_months)
+        months_active_zoho = format_months_active_for_zoho(months_active_current)
+        
+        # For activity rating education pattern detection, we need historical patterns
+        all_freq_months = current_freq_months | event_data.get('event_months_freq_previous', set())
+        months_active_historical = get_months_active_fingerprint(all_freq_months)
         
         # Determine activity rating using full logic
         has_historical = row['years_loyalty'] > 0 or len(event_data.get('event_months_previous', set())) > 0
@@ -232,7 +236,7 @@ def process_accounts(account_metrics, account_lookup=None):
             has_historical=has_historical,
             avg_lead_days=avg_lead_days,
             last_event_date=last_event_date,
-            months_active_list=months_active_list,
+            months_active_list=months_active_historical,
             revenue_previous=row.get('revenue_prev', 0),
             industry=industry,
             current_tier=tier_current,
@@ -255,7 +259,7 @@ def process_accounts(account_metrics, account_lookup=None):
             "_avg_lead_days": avg_lead_days,
             "_last_event_date": last_event_date,
             "_month_count_current": len(event_data.get('event_months_current', set())),
-            "_months_active_list": months_active_list,
+            "_months_active_list": months_active_current,
             "_revenue_current": row.get('revenue_current', 0),
             "_revenue_prev": row.get('revenue_prev', 0)
         })

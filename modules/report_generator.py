@@ -6,7 +6,7 @@ import smtplib
 from datetime import datetime
 from email.message import EmailMessage
 from .config import (
-    ANNUAL_EVENT_MIN_REVENUE, MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD,
+    MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD,
     MAILGUN_DOMAIN, SMTP_HOST, SMTP_PORT, TEST_MODE, DEFAULT_RECIPIENT, CC_RECIPIENT
 )
 
@@ -14,12 +14,12 @@ from .config import (
 def generate_upcoming_annual_events_report(results_df):
     """Generate report for annual events needing outreach."""
     
-    # Filter for annual pattern accounts with minimum revenue
+    # Filter for annual pattern accounts that are Tier 3 or higher
+    tier_3_plus = ['Key Account', 'High Value', 'Tier 4', 'Tier 3']
     annual_accounts = results_df[
         ((results_df['Event_Frequency_Current'] == 'Annual') | 
          (results_df['Event_Frequency_Previous'] == 'Annual')) &
-        ((results_df.get('_revenue_current', 0) >= ANNUAL_EVENT_MIN_REVENUE) | 
-         (results_df.get('_revenue_prev', 0) >= ANNUAL_EVENT_MIN_REVENUE))
+        (results_df['Current_Tier'].isin(tier_3_plus))
     ].copy()
     
     upcoming = []

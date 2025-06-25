@@ -8,7 +8,7 @@ import pandas as pd
 def determine_activity_rating(current_freq, previous_freq, days_since_last, has_historical, 
                             avg_lead_days=60, last_event_date=None, months_active_list=None,
                             revenue_previous=0, industry=None, current_tier=None, 
-                            account_postcode=None):
+                            account_postcode=None, account_created_date=None):
     """
     Determine activity rating based on event patterns and creation lead times.
     
@@ -24,23 +24,37 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
         industry: Industry classification from Account report
         current_tier: Current tier classification (Key Account, High Value, Tier 4, Tier 3, etc.)
         account_postcode: Account postcode for Scottish school detection
+        account_created_date: Date when the account was created (from DateTimeCreated field)
     
     Returns:
         str: Activity rating (Active/Outreach/At Risk/Churned/Returned/New/Inactive)
     """
-    # Active: Any current activity (except New)
-    if current_freq not in ["Inactive", "New"]:
+    # Check if this is a new account based on DateTimeCreated
+    is_new_account = False
+    days_since_created = None
+    
+    if account_created_date:
+        today = pd.Timestamp.now().date()
+        days_since_created = (today - account_created_date).days
+        
+        # Account is "New" if created in last 14 days AND no activity in BookingDataAll (current_freq == "Inactive")
+        if days_since_created <= 14 and current_freq == "Inactive" and not has_historical:
+            is_new_account = True
+    
+    # Active: Any current activity (not Inactive)
+    if current_freq != "Inactive":
         return "Active"
     
-    # New accounts - special handling with strict thresholds
-    if current_freq == "New":
-        # New accounts need quick activation - much stricter thresholds
-        if days_since_last > 28:
-            return "Churned"  # New account that didn't activate within 4 weeks
-        elif days_since_last > 14:
-            return "At Risk"  # New account with no activity after 2 weeks
-        else:
-            return "New"  # New account still in activation window
+    # New accounts - special handling with strict thresholds based on account creation date
+    if is_new_account:
+        return "New"  # Account created within 14 days with no activity
+    
+    # Check if account was created recently but hasn't activated
+    if days_since_created is not None and current_freq == "Inactive" and not has_historical:
+        if days_since_created > 28:
+            return "Churned"  # Account created > 28 days ago with no activity ever
+        elif days_since_created > 14:
+            return "At Risk"  # Account created 15-28 days ago with no activity
     
     # Returned: Was inactive, now active
     if current_freq != "Inactive" and previous_freq == "Inactive":
@@ -135,21 +149,21 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
             
             # Apply thresholds using appropriate day count
             if previous_freq == "Continuous":
-                if days_to_check > 90:
+                if days_to_check >= 90:
                     return "Churned"
-                elif days_to_check > 45:
+                elif days_to_check >= 45:
                     return "At Risk"
             else:  # Regular
-                if days_to_check > 180:
+                if days_to_check >= 180:
                     return "Churned"
-                elif days_to_check > 90:
+                elif days_to_check >= 90:
                     return "At Risk"
         
         # Default fallback for other patterns
         else:
-            if days_since_last > 365:
+            if days_since_last >= 365:
                 return "Churned"
-            elif days_since_last > 180:
+            elif days_since_last >= 180:
                 return "At Risk"
     
     return "Inactive"
@@ -215,8 +229,8 @@ def is_education_pattern(months_list):
     term_months = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6]
     active_term_months = sum(1 for m in months_list if m in term_months)
     
-    # If 70%+ active during term time and summer gap, likely education
-    return has_summer_gap and active_term_months >= 7
+    # If 60%+ active during term time and summer gap, likely education
+    return has_summer_gap and active_term_months >= 6
 
 
 def get_rating_transition_summary(results_df):

@@ -148,7 +148,16 @@ def download_s3_file_cached(s3_client, key, use_cache=True):
     # Download from S3
     print(f"Downloading from S3: {key}")
     obj = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
-    df = pd.read_csv(obj['Body'])
+    # Parse date columns if they exist
+    date_cols = []
+    if 'TransactionDate' in pd.read_csv(obj['Body'], nrows=0).columns:
+        date_cols.append('TransactionDate')
+    if 'EventDate' in pd.read_csv(obj['Body'], nrows=0).columns:
+        date_cols.append('EventDate')
+    
+    # Reset stream position
+    obj = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
+    df = pd.read_csv(obj['Body'], parse_dates=date_cols if date_cols else None)
     
     # Cache if enabled
     if use_cache:
@@ -227,7 +236,7 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
                 all_chunks = []
                 for chunk in pd.read_csv(obj['Body'], chunksize=chunk_size,
                                        dtype=dtypes,
-                                       parse_dates=['TransactionDate'],
+                                       parse_dates=['TransactionDate', 'EventDate'],
                                        low_memory=False):
                     all_chunks.append(chunk)
                 
@@ -245,13 +254,13 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
             obj = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
             chunks_iter = pd.read_csv(obj['Body'], chunksize=chunk_size,
                                     dtype=dtypes,
-                                    parse_dates=['TransactionDate'],
+                                    parse_dates=['TransactionDate', 'EventDate'],
                                     low_memory=False)
         
         # Process chunks
         for chunk_num, chunk in enumerate(chunks_iter):
-            # Add timezone info
-            chunk['TransactionDate'] = pd.to_datetime(chunk['TransactionDate'], utc=True).dt.tz_convert(UK_TZ)
+            # Ensure TransactionDate is datetime (already parsed from CSV with parse_dates)
+            # Keep in UTC as per data source
             chunk['Revenue'] = chunk['BookingFee'] + chunk['CardFee'] + chunk['ProcessingFee'] + chunk['TicketFee']
             chunk['Year'] = chunk['TransactionDate'].dt.year
             
@@ -324,8 +333,7 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
                         event_data = event_data[pd.notna(event_data['EventDate'])]
                         
                         if len(event_data) > 0:
-                            # Convert EventDate to datetime if not already
-                            event_data['EventDate'] = pd.to_datetime(event_data['EventDate'])
+                            # EventDate is already parsed as datetime from CSV
                             
                             # Extract year-month tuples from EventDate for frequency analysis
                             event_data['event_year_month'] = event_data['EventDate'].apply(
@@ -363,10 +371,10 @@ def process_booking_data_optimized(s3_client, key_all, key_month, use_cache=True
                                 if event_id_key and event_id_key not in account_metrics[account_id]['event_creation_info']:
                                     first_booking = group['TransactionDate'].min()
                                     event_date = group['EventDate'].iloc[0]
-                                    lead_days = (pd.to_datetime(event_date).date() - first_booking.date()).days
+                                    lead_days = (event_date.date() - first_booking.date()).days
                                     account_metrics[account_id]['event_creation_info'][event_id_key] = {
                                         'first_booking': first_booking,
-                                        'event_date': pd.to_datetime(event_date),
+                                        'event_date': event_date,
                                         'lead_days': max(lead_days, 0)
                                     }
             

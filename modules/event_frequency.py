@@ -22,14 +22,13 @@ def classify_event_frequency(month_count, has_event_creation=False):
     
     Args:
         month_count: Number of unique months with event sessions
-        has_event_creation: True if event was created in period but no bookings
+        has_event_creation: True if event was created in period but no bookings (kept for compatibility)
         
     Returns:
-        str: Frequency classification (Continuous/Regular/Seasonal/Annual/New/Inactive)
+        str: Frequency classification (Continuous/Regular/Seasonal/Annual/Inactive)
     """
+    # Note: "New" classification is now handled in activity_rating.py based on account creation date
     if month_count == 0:
-        if has_event_creation:
-            return "New"  # Event created but no activity yet
         return "Inactive"
     elif month_count == 1:
         return "Annual"

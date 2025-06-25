@@ -135,7 +135,7 @@ def process_accounts(account_metrics, account_lookup=None):
     print(f"Total accounts to process: {len(metrics_df)}")
     
     results = []
-    event_freq_summary = {'Continuous': 0, 'Regular': 0, 'Seasonal': 0, 'Annual': 0, 'Inactive': 0, 'New': 0}
+    event_freq_summary = {'Continuous': 0, 'Regular': 0, 'Seasonal': 0, 'Annual': 0, 'Inactive': 0}
     
     for _, row in metrics_df.iterrows():
         # Calculate current tier
@@ -181,11 +181,18 @@ def process_accounts(account_metrics, account_lookup=None):
         has_event_creation_previous = False
         industry = None
         account_postcode = None
+        account_created_date = None
         if account_lookup and account_name in account_lookup:
             account_info = account_lookup[account_name]
             last_creation = account_info.get('LastEventCreation')
             industry = account_info.get('Industry')
             account_postcode = account_info.get('Postcode')
+            
+            # Get account creation date
+            date_time_created = account_info.get('DateTimeCreated')
+            if date_time_created and pd.notna(date_time_created):
+                account_created_date = pd.to_datetime(date_time_created).date()
+            
             if last_creation and pd.notna(last_creation):
                 last_creation_date = pd.to_datetime(last_creation).date()
                 if last_creation_date >= EVENT_FREQ_CUTOFF_CURRENT:
@@ -229,7 +236,8 @@ def process_accounts(account_metrics, account_lookup=None):
             revenue_previous=row.get('revenue_prev', 0),
             industry=industry,
             current_tier=tier_current,
-            account_postcode=account_postcode
+            account_postcode=account_postcode,
+            account_created_date=account_created_date
         )
             
         results.append({

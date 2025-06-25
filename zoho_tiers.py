@@ -51,12 +51,12 @@ def main():
         print(f"Loading Account report from: {key_account}")
         account_df = download_s3_file_cached(s3_client, key_account)
         
-        # Create lookup dictionary: AccountId -> {LastEventCreation, Industry}
+        # Create lookup dictionary: AccountId -> {LastEventCreation, Industry, DateTimeCreated}
         account_lookup = {}
-        required_cols = ['Id', 'LastEventCreation', 'Industry', 'Postcode']
+        required_cols = ['Id', 'LastEventCreation', 'Industry', 'Postcode', 'DateTimeCreated']
         if all(col in account_df.columns for col in required_cols):
-            account_lookup = account_df.set_index('Id')[['LastEventCreation', 'Industry', 'Postcode']].to_dict('index')
-            print(f"Loaded {len(account_lookup):,} accounts with LastEventCreation, Industry and Postcode data")
+            account_lookup = account_df.set_index('Id')[['LastEventCreation', 'Industry', 'Postcode', 'DateTimeCreated']].to_dict('index')
+            print(f"Loaded {len(account_lookup):,} accounts with LastEventCreation, Industry, Postcode and DateTimeCreated data")
         else:
             missing_cols = [col for col in required_cols if col not in account_df.columns]
             print(f"WARNING: Account report missing columns: {missing_cols}")
@@ -106,14 +106,14 @@ def main():
     print(f"Annual accounts (current): {annual_count}")
     print(f"Annual accounts (previous): {annual_prev_count}")
     
-    # Show revenue filter impact
-    annual_with_revenue = len(updates[
+    # Show tier filter impact
+    tier_3_plus = ['Key Account', 'High Value', 'Tier 4', 'Tier 3']
+    annual_tier_3_plus = len(updates[
         ((updates['Event_Frequency_Current'] == 'Annual') | 
          (updates['Event_Frequency_Previous'] == 'Annual')) &
-        ((updates.get('_revenue_current', 0) >= 100) | 
-         (updates.get('_revenue_prev', 0) >= 100))
+        (updates['Current_Tier'].isin(tier_3_plus))
     ])
-    print(f"Annual accounts with £100+ revenue: {annual_with_revenue}")
+    print(f"Annual accounts that are Tier 3+: {annual_tier_3_plus}")
     
     annual_report = generate_upcoming_annual_events_report(updates)
     if not annual_report.empty:

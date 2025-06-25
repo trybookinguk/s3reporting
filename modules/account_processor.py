@@ -280,8 +280,11 @@ def process_accounts(account_metrics, account_lookup=None):
         
         # Months Active patterns summary
         print("\nMonths Active Patterns (Top 10):")
-        month_patterns = results_df['Months_Active'].value_counts().head(10)
-        for pattern, count in month_patterns.items():
+        # Convert lists to strings for value_counts
+        month_patterns_str = results_df['Months_Active'].apply(
+            lambda x: ','.join(x) if isinstance(x, list) else str(x)
+        ).value_counts().head(10)
+        for pattern, count in month_patterns_str.items():
             if pattern:  # Skip empty patterns
                 print(f"  {pattern}: {count:,} accounts")
     

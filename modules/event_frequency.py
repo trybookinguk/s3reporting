@@ -178,10 +178,10 @@ def format_months_active_for_zoho(months_list):
         months_list: List of month numbers (1-12)
         
     Returns:
-        str: Comma-separated full month names (e.g., "January,March,July,December")
+        list: List of full month names (e.g., ["January", "March", "July", "December"])
     """
     if not months_list:
-        return ""
+        return []
     
     # Map month numbers to full names
     month_names = {
@@ -190,10 +190,10 @@ def format_months_active_for_zoho(months_list):
         9: "September", 10: "October", 11: "November", 12: "December"
     }
     
-    # Convert month numbers to names and join
+    # Convert month numbers to names and return as list
     month_name_list = [month_names[month] for month in sorted(months_list) if month in month_names]
     
-    return ",".join(month_name_list)
+    return month_name_list
 
 
 def get_frequency_summary(accounts_df, current_col='event_months_current', previous_col='event_months_previous'):

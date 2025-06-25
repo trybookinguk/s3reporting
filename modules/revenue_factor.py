@@ -833,7 +833,7 @@ def get_revenue_factor(
 def calculate_new_account_thresholds(
     account_data: pd.DataFrame,
     tier_cohort_data: Optional[pd.DataFrame] = None
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """
     Special handling for new accounts based on their lifecycle stage.
     

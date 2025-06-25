@@ -99,12 +99,12 @@ Our platform provides several reports via S3 that can be used for data analysis.
 
 ### Booking Data Reports
 | **Field** | **Description** |
-| BookingID | **Internal platform use only** |
-| BookingTransactionID | **Internal platform use only** |
-| AccountID | The ID of the account on TryBooking. |
+| BookingId | **Internal platform use only** |
+| BookingTransactionId | **Internal platform use only** |
+| AccountId | The ID of the account on TryBooking. |
 | AccountName | The name of the account on TryBooking. |
 | DateTimeCreated | The date and time the account was created on TryBooking. |
-| EventID | The ID of the event within TryBooking |
+| EventId | The ID of the event within TryBooking |
 | EventName | The name of the event within TryBooking |
 | DonationCampaignId | **Not used in UK** |
 | DonationCampaignName | **Not used in UK** |
@@ -132,9 +132,9 @@ Our platform provides several reports via S3 that can be used for data analysis.
 | Status | The status of the transaction, either Successful, Failed or Unknown. |
 | Wallet | **Stripe only**. The type of mobile wallet (Apple Pay/Google Pay) used. |
 | GatewayName | The payment gateway used for the transaction. |
-| GatewayID | The payment reference used within Stripe/PayPal. |
+| GatewayId | The payment reference used within Stripe/PayPal. |
 | GatewayReference | **Not used in UK** |
 | GiftCertificateTypeName | The name of the gift certificate used for the transaction. |
-| GiftCertificateID | The unique ID for the gift certificate used for the transaction (if applicable) |
+| GiftCertificateId | The unique ID for the gift certificate used for the transaction (if applicable) |
 | BookingCountryCode | Always GBR - internal region code. |
 

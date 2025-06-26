@@ -309,7 +309,11 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         avg_lead_days = int(sum(lead_times) / len(lead_times)) if lead_times else 60
         
         event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]
-        last_event_date = max(event_dates).date() if event_dates else None
+        if event_dates:
+            max_event = max(event_dates)
+            last_event_date = max_event.date() if hasattr(max_event, 'date') else max_event
+        else:
+            last_event_date = None
         
         return avg_lead_days, last_event_date
     
@@ -328,7 +332,11 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         avg_lead_days = int(sum(lead_times) / len(lead_times)) if lead_times else 60
         
         event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]
-        last_event_date = max(event_dates).date() if event_dates else None
+        if event_dates:
+            max_event = max(event_dates)
+            last_event_date = max_event.date() if hasattr(max_event, 'date') else max_event
+        else:
+            last_event_date = None
         
         avg_lead_list.append(avg_lead_days)
         last_event_list.append(last_event_date)
@@ -339,7 +347,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     # Vectorized days since last activity calculation
     last_booking_list = metrics_df['last_booking_date'].tolist()
     days_since_list = [
-        (TODAY - x.date()).days if x else 999 
+        (TODAY - (x.date() if hasattr(x, 'date') else x)).days if x else 999 
         for x in last_booking_list
     ]
     metrics_df['days_since_last'] = days_since_list

@@ -94,8 +94,9 @@ def calculate_activity_ratings(df):
         # Calculate expected dates (vectorized)
         avg_leads = subset['avg_lead_days'].fillna(60)
         expected_next_with_grace = (last_event_ts + pd.Timedelta(days=365+30)).dt.date
-        expected_sale_start = (last_event_ts + pd.Timedelta(days=365) - pd.to_timedelta(avg_leads, unit='D')).dt.date
-        outreach_date = (expected_sale_start - pd.Timedelta(days=30)).dt.date
+        expected_sale_start_ts = (last_event_ts + pd.Timedelta(days=365) - pd.to_timedelta(avg_leads, unit='D'))
+        expected_sale_start = expected_sale_start_ts.dt.date
+        outreach_date = (expected_sale_start_ts - pd.Timedelta(days=30)).dt.date
         
         # Apply conditions (vectorized)
         churned_high_tier = today >= expected_next_with_grace

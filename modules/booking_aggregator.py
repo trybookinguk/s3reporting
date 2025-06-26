@@ -250,7 +250,9 @@ class BookingAggregator:
                     if pd.notna(event_id):
                         first_booking = event_group['TransactionDate'].min()
                         event_date = event_group['EventDate'].iloc[0]
-                        lead_days = (event_date.date() - first_booking.date()).days
+                        event_date_clean = event_date.date() if hasattr(event_date, 'date') else event_date
+                        first_booking_clean = first_booking.date() if hasattr(first_booking, 'date') else first_booking
+                        lead_days = (event_date_clean - first_booking_clean).days
                         
                         event_creation_info[int(event_id)] = {
                             'first_booking': first_booking,

@@ -9,10 +9,17 @@ Rapid Drop Alert Boosting:
 - Alert level 2+: Ensures minimum priority score of 70 (High priority)
 - Alert level 3 for Key/High Value accounts: Sets priority to 90 (Very High priority)
 
+Annual Reachout Boosting:
+- Annual accounts approaching their typical booking window get High priority for proactive outreach
+- Based on months_active pattern and event creation tracking
+
 Note: Accounts with "Churned" rating are automatically excluded from standard CS workflows
 regardless of their tier or revenue drop. These accounts receive a negative priority score
 and are categorized as "Excluded" to prevent them from appearing in retention priority lists.
 """
+
+from datetime import datetime
+import calendar
 
 
 def get_tier_weight(tier_name):
@@ -135,7 +142,8 @@ def calculate_revenue_drop_category(current_revenue, previous_revenue):
         return "Stable"
 
 
-def calculate_retention_priority(tier, activity_rating, revenue_drop_score, rapid_drop_alert=0, previous_tier=None):
+def calculate_retention_priority(tier, activity_rating, revenue_drop_score, rapid_drop_alert=0, previous_tier=None, 
+                               event_frequency=None, months_active=None, has_created_event_this_period=False):
     """
     Calculate the retention priority score.
     
@@ -148,8 +156,11 @@ def calculate_retention_priority(tier, activity_rating, revenue_drop_score, rapi
     Tier drop boost:
     - Accounts that dropped tiers get priority boost (indicates declining performance)
     
+    Annual reachout boost:
+    - Annual accounts approaching their typical booking window without event creation get High priority
+    
     Additional logic for rapid drop alerts:
-    - If rapid_drop_alert >= 2: Minimum score of 70 (High priority)
+    - If rapid_drop_alert >= 2: Minimum score of 70 (High priority)  
     - If rapid_drop_alert == 3 and tier in ['Key Account', 'High Value']: Score set to 90 (Very High)
     
     Args:
@@ -158,6 +169,9 @@ def calculate_retention_priority(tier, activity_rating, revenue_drop_score, rapi
         revenue_drop_score: Revenue drop score (0-3) or category string
         rapid_drop_alert: Rapid drop alert level (0-3, where 0=no alert, 3=severe rapid drop)
         previous_tier: Previous tier classification (optional, for tier drop detection)
+        event_frequency: Event frequency classification (for annual reachout detection)
+        months_active: List of typical active months (for annual reachout detection)
+        has_created_event_this_period: Whether account has created event in current period
         
     Returns:
         int: Priority score (higher = higher priority)
@@ -222,6 +236,33 @@ def calculate_retention_priority(tier, activity_rating, revenue_drop_score, rapi
         except ValueError:
             # Unknown tier names - skip boost
             pass
+    
+    # Annual reachout boost - proactive outreach for annual accounts approaching their window
+    if (event_frequency == 'Annual' and 
+        months_active and 
+        not has_created_event_this_period and
+        activity_rating != 'Churned'):
+        
+        # Check if we're approaching their typical booking month
+        current_month = datetime.now().month
+        current_month_name = calendar.month_name[current_month]
+        
+        # Convert months_active to month numbers for comparison
+        month_name_to_number = {calendar.month_name[i]: i for i in range(1, 13)}
+        
+        for active_month_name in months_active:
+            if active_month_name in month_name_to_number:
+                active_month_num = month_name_to_number[active_month_name]
+                
+                # Check if we're within 1-2 months of their typical booking month
+                # Handle year boundary (e.g., November event, checking in September/October)
+                months_until_event = (active_month_num - current_month) % 12
+                
+                # If we're 1-2 months before their typical booking month
+                if months_until_event in [1, 2]:
+                    # Boost to High priority (minimum score 18 to reach "High" band)
+                    priority = max(priority, 18)
+                    break
     
     # Apply rapid drop alert boosting logic
     # Rapid drops indicate immediate attention needed regardless of other factors

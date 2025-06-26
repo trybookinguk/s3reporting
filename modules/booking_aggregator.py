@@ -34,13 +34,6 @@ class BookingAggregator:
         self.processed_chunks = 0
         self.total_rows = 0
         
-    def calculate_revenue(self, row: pd.Series) -> float:
-        """Calculate total revenue from fee columns."""
-        return (row['BookingFee'].fillna(0) + 
-                row['CardFee'].fillna(0) + 
-                row['ProcessingFee'].fillna(0) + 
-                row['TicketFee'].fillna(0))
-    
     def process_chunk(self, chunk: pd.DataFrame) -> None:
         """
         Process a single chunk of booking data.
@@ -51,8 +44,19 @@ class BookingAggregator:
         if chunk.empty:
             return
             
-        # Calculate revenue column
-        chunk['Revenue'] = chunk.apply(self.calculate_revenue, axis=1)
+        # Ensure fee columns exist and have no nulls for revenue calculation
+        fee_columns = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+        for col in fee_columns:
+            if col not in chunk.columns:
+                chunk[col] = 0.0
+            else:
+                chunk[col] = chunk[col].fillna(0.0)
+        
+        # Calculate revenue column vectorized (faster than apply)
+        chunk['Revenue'] = (chunk['BookingFee'] + 
+                           chunk['CardFee'] + 
+                           chunk['ProcessingFee'] + 
+                           chunk['TicketFee'])
         chunk['Year'] = chunk['TransactionDate'].dt.year
         
         # Drop duplicates within chunk

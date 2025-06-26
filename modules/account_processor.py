@@ -535,11 +535,14 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     
     metrics_df['retention_priority_score'] = metrics_df.apply(
         lambda row: calculate_retention_priority(
-            row.get('Current_Tier'),
-            row.get('Rating'), 
-            row.get('revenue_drop_score', 0),
-            row.get('rapid_drop_alert', 0),
-            row.get('Previous_Tier')  # Include previous tier for tier drop detection
+            tier=row.get('Current_Tier'),
+            activity_rating=row.get('Rating'), 
+            revenue_drop_score=row.get('revenue_drop_score', 0),
+            rapid_drop_alert=row.get('rapid_drop_alert', 0),
+            previous_tier=row.get('Previous_Tier'),
+            event_frequency=row.get('Event_Frequency_Current'),
+            months_active=row.get('months_active_current', []),
+            has_created_event_this_period=row.get('has_event_creation_current', False)
         ), axis=1
     )
     
@@ -630,10 +633,21 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                     print(f"  Significant (Level 2): {significant_alerts:,} accounts - Immediate attention required")
                 if moderate_alerts > 0:
                     print(f"  Moderate (Level 1): {moderate_alerts:,} accounts - Monitor closely")
-                
-                # Show how many high-value accounts were checked
-                high_value_count = results_df[
-                    results_df['Current_Tier'].isin(["Key Account", "High Value", "Tier 4", "Tier 3"])
+        
+        # Annual Reachout summary
+        annual_accounts = results_df[results_df['Event_Frequency_Current'] == 'Annual']
+        if len(annual_accounts) > 0:
+            # Check which annual accounts got priority boost (score 18+ but not from other sources)
+            annual_high_priority = annual_accounts[
+                (annual_accounts['_retention_priority_score'] >= 18) & 
+                (annual_accounts['Rating'].isin(['Active', 'Inactive', 'New'])) &  # Not already flagged for other issues
+                (annual_accounts['_rapid_drop_alert'] == 0)  # Not rapid drop
+            ]
+            
+            if len(annual_high_priority) > 0:
+                print(f"\nAnnual Event Reachouts:")
+                print(f"  {len(annual_high_priority):,} Annual accounts boosted to High priority for proactive outreach")
+                print(f"  Total Annual accounts: {len(annual_accounts):,}")
                 ].shape[0]
                 print(f"\n  Total high-value accounts checked: {high_value_count:,}")
     

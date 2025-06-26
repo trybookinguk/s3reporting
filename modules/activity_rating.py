@@ -79,8 +79,12 @@ def calculate_activity_ratings(df):
     has_last_event = df['last_event_date'].notna()
     has_historical_activity = df['Event_Frequency_Previous'] != 'Inactive'
     
+    # Only check annual/seasonal patterns for accounts that are currently inactive
+    currently_inactive = df['Event_Frequency_Current'] == 'Inactive'
+    
     high_tier_annual_seasonal = (
         high_tier_mask & annual_seasonal_mask & has_last_event & has_historical_activity &
+        currently_inactive &  # Only check if currently inactive
         (~new_account_mask) & (~recently_created_inactive) & (~returned_mask)
     )
     
@@ -228,6 +232,11 @@ def calculate_activity_ratings(df):
     )
     if potential_issues.any():
         ratings[potential_issues] = 'Dormant'  # More appropriate than 'Active'
+    
+    # CRITICAL: Override any rating to 'Active' if account has current activity
+    # This prevents incorrect 'Churned' or 'At Risk' ratings for active accounts
+    has_current_activity = df['Event_Frequency_Current'] != 'Inactive'
+    ratings[has_current_activity] = 'Active'
     
     return ratings
 

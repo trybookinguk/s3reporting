@@ -1,8 +1,13 @@
 """
 Retention priority scoring for TryBooking accounts.
-Combines tier, activity rating, and revenue drop to prioritize retention efforts.
+Combines tier, activity rating, revenue drop, and rapid drop alerts to prioritize retention efforts.
 
 Priority Formula: Priority = Tier Weight × (Rating Severity + Revenue Drop Score)
+
+Rapid Drop Alert Boosting:
+- Rapid drop alerts (0-3) indicate sudden revenue declines requiring immediate attention
+- Alert level 2+: Ensures minimum priority score of 70 (High priority)
+- Alert level 3 for Key/High Value accounts: Sets priority to 90 (Very High priority)
 
 Note: Accounts with "Churned" rating are automatically excluded from standard CS workflows
 regardless of their tier or revenue drop. These accounts receive a negative priority score
@@ -51,7 +56,7 @@ def get_rating_severity(rating):
         "New": 3,
         "Returned": 1,
         "Active": 0,
-        "Inactive": 0
+        "Inactive": 0   # Truly inactive accounts shouldn't be high-tier anyway
     }
     
     # Default to 0 for unknown ratings
@@ -77,6 +82,27 @@ def get_revenue_drop_score(revenue_drop_category):
     
     # Default to 0 for unknown categories
     return revenue_scores.get(revenue_drop_category, 0)
+
+
+def get_rapid_drop_alert_description(alert_level):
+    """
+    Get a description for a rapid drop alert level.
+    
+    Args:
+        alert_level: Rapid drop alert level (0-3)
+        
+    Returns:
+        str: Description of the alert level
+    """
+    alert_descriptions = {
+        0: "No rapid drop detected",
+        1: "Minor rapid drop - monitoring recommended",
+        2: "Significant rapid drop - immediate attention required",
+        3: "Severe rapid drop - critical intervention needed"
+    }
+    
+    # Default to unknown for invalid levels
+    return alert_descriptions.get(alert_level, "Unknown alert level")
 
 
 def calculate_revenue_drop_category(current_revenue, previous_revenue):
@@ -109,34 +135,103 @@ def calculate_revenue_drop_category(current_revenue, previous_revenue):
         return "Stable"
 
 
-def calculate_retention_priority(tier, activity_rating, revenue_drop_score):
+def calculate_retention_priority(tier, activity_rating, revenue_drop_score, rapid_drop_alert=0, previous_tier=None):
     """
     Calculate the retention priority score.
     
-    Priority = Tier Weight × (Rating Severity + Revenue Drop Score)
+    Base Priority = Tier Weight × (Rating Severity + Revenue Drop Score)
+    
+    Minimum priority thresholds:
+    - High-value accounts (Key Account, High Value, Tier 4, Tier 3): Minimum Medium priority
+    - Unless they are Churned (excluded from workflows)
+    
+    Tier drop boost:
+    - Accounts that dropped tiers get priority boost (indicates declining performance)
+    
+    Additional logic for rapid drop alerts:
+    - If rapid_drop_alert >= 2: Minimum score of 70 (High priority)
+    - If rapid_drop_alert == 3 and tier in ['Key Account', 'High Value']: Score set to 90 (Very High)
     
     Args:
         tier: Tier classification string (e.g., "Key Account", "High Value")
         activity_rating: Activity rating string (e.g., "Churned", "At Risk")
         revenue_drop_score: Revenue drop score (0-3) or category string
+        rapid_drop_alert: Rapid drop alert level (0-3, where 0=no alert, 3=severe rapid drop)
+        previous_tier: Previous tier classification (optional, for tier drop detection)
         
     Returns:
         int: Priority score (higher = higher priority)
     """
-    # Get tier weight
-    tier_weight = get_tier_weight(tier)
+    # Validate inputs and apply defaults for robustness
+    try:
+        # Get tier weight with validation
+        tier_weight = get_tier_weight(tier) if tier else 1
+        
+        # Get rating severity with validation  
+        rating_severity = get_rating_severity(activity_rating) if activity_rating else 0
+        
+        # Handle revenue drop score - could be int or string
+        if isinstance(revenue_drop_score, str):
+            revenue_score = get_revenue_drop_score(revenue_drop_score)
+        elif isinstance(revenue_drop_score, (int, float)):
+            revenue_score = max(0, min(3, int(revenue_drop_score)))  # Clamp to 0-3
+        else:
+            revenue_score = 0  # Default for invalid input
+        
+        # Validate rapid drop alert
+        if not isinstance(rapid_drop_alert, (int, float)):
+            rapid_drop_alert = 0
+        else:
+            rapid_drop_alert = max(0, min(3, int(rapid_drop_alert)))  # Clamp to 0-3
+        
+        # Calculate base priority
+        priority = tier_weight * (rating_severity + revenue_score)
+        
+    except Exception as e:
+        # Fallback calculation if anything fails
+        logger.warning(f"Error in retention priority calculation for tier={tier}, rating={activity_rating}: {e}")
+        priority = 10  # Safe default - Medium priority
     
-    # Get rating severity
-    rating_severity = get_rating_severity(activity_rating)
+    # High-value tiers (Tier 3 and above)
+    HIGH_VALUE_TIERS = ['Key Account', 'High Value', 'Tier 4', 'Tier 3']
     
-    # Handle revenue drop score - could be int or string
-    if isinstance(revenue_drop_score, str):
-        revenue_score = get_revenue_drop_score(revenue_drop_score)
-    else:
-        revenue_score = revenue_drop_score
+    # Apply minimum priority for high-value accounts (unless churned)
+    if tier in HIGH_VALUE_TIERS and activity_rating != 'Churned':
+        # Ensure minimum Medium priority (score of 10)
+        priority = max(priority, 10)
     
-    # Calculate priority
-    priority = tier_weight * (rating_severity + revenue_score)
+    # Tier drop boost - indicates declining performance
+    if previous_tier and previous_tier != tier:
+        tier_hierarchy = ["NIL", "Tier 1", "Tier 2", "Tier 3", "Tier 4", "High Value", "Key Account"]
+        
+        try:
+            prev_index = tier_hierarchy.index(previous_tier)
+            current_index = tier_hierarchy.index(tier)
+            
+            # If current tier is lower in hierarchy (declined)
+            if current_index < prev_index:
+                tier_drop_severity = prev_index - current_index
+                # Add boost based on severity of drop
+                if tier_drop_severity >= 3:  # Major drop (e.g., Key Account -> Tier 3)
+                    priority += 15
+                elif tier_drop_severity >= 2:  # Significant drop (e.g., High Value -> Tier 3)
+                    priority += 10
+                else:  # Minor drop (e.g., Tier 4 -> Tier 3)
+                    priority += 5
+                    
+        except ValueError:
+            # Unknown tier names - skip boost
+            pass
+    
+    # Apply rapid drop alert boosting logic
+    # Rapid drops indicate immediate attention needed regardless of other factors
+    if rapid_drop_alert >= 2:
+        # Ensure minimum score of 70 for significant rapid drops
+        priority = max(priority, 70)
+        
+        # Critical accounts with severe rapid drops get maximum priority
+        if rapid_drop_alert == 3 and tier in ['Key Account', 'High Value']:
+            priority = 90
     
     return priority
 
@@ -144,6 +239,10 @@ def calculate_retention_priority(tier, activity_rating, revenue_drop_score):
 def categorize_priority(priority_score):
     """
     Categorize the priority score into actionable categories.
+    
+    Thresholds aligned to allow Tier 3/4 to reach Very High:
+    - Tier 3 maximum: 2×(7+3) = 20
+    - Tier 4 maximum: 3×(7+3) = 30
     
     Args:
         priority_score: Numeric priority score
@@ -154,9 +253,9 @@ def categorize_priority(priority_score):
     # Negative scores indicate churned accounts - exclude from workflows
     if priority_score < 0:
         return "Excluded"
-    elif priority_score >= 40:
+    elif priority_score >= 20:
         return "Very High"
-    elif priority_score >= 25:
+    elif priority_score >= 15:
         return "High"
     elif priority_score >= 10:
         return "Medium"
@@ -164,7 +263,7 @@ def categorize_priority(priority_score):
         return "Low"
 
 
-def get_priority_action(priority_category, activity_rating, tier):
+def get_priority_action(priority_category, activity_rating, tier, rapid_drop_alert=0):
     """
     Get recommended action based on priority category.
     
@@ -172,6 +271,7 @@ def get_priority_action(priority_category, activity_rating, tier):
         priority_category: Priority category (Very High/High/Medium/Low)
         activity_rating: Activity rating string
         tier: Tier classification string
+        rapid_drop_alert: Rapid drop alert level (0-3), optional
         
     Returns:
         str: Recommended action
@@ -201,8 +301,17 @@ def get_priority_action(priority_category, activity_rating, tier):
         }
     }
     
+    # Get base action
     category_actions = actions.get(priority_category, actions["Low"])
-    return category_actions.get(activity_rating, category_actions.get("default", "Monitor"))
+    base_action = category_actions.get(activity_rating, category_actions.get("default", "Monitor"))
+    
+    # Enhance action based on rapid drop alert
+    if rapid_drop_alert >= 3:
+        base_action = f"CRITICAL RAPID DROP - {base_action}. Immediate executive escalation required."
+    elif rapid_drop_alert == 2:
+        base_action = f"RAPID DROP ALERT - {base_action}. Prioritize within 24 hours."
+    
+    return base_action
 
 
 def analyze_portfolio_priorities(accounts_df):
@@ -236,7 +345,8 @@ def analyze_portfolio_priorities(accounts_df):
         lambda row: calculate_retention_priority(
             row.get('tier', 'Tier 1'),
             row.get('activity_rating', 'Active'),
-            row.get('revenue_drop_category', 'Stable')
+            row.get('revenue_drop_category', 'Stable'),
+            row.get('rapid_drop_alert', 0)  # Include rapid drop alert if present
         ),
         axis=1
     )
@@ -249,7 +359,8 @@ def analyze_portfolio_priorities(accounts_df):
         lambda row: get_priority_action(
             row['priority_category'],
             row.get('activity_rating', 'Active'),
-            row.get('tier', 'Tier 1')
+            row.get('tier', 'Tier 1'),
+            row.get('rapid_drop_alert', 0)
         ),
         axis=1
     )
@@ -277,6 +388,9 @@ def get_priority_summary(accounts_df):
     excluded_accounts = accounts_df[accounts_df['priority_category'] == 'Excluded']
     active_accounts = accounts_df[accounts_df['priority_category'] != 'Excluded']
     
+    # Check for rapid drop alerts
+    rapid_drop_accounts = accounts_df[accounts_df.get('rapid_drop_alert', 0) >= 2] if 'rapid_drop_alert' in accounts_df.columns else accounts_df[accounts_df['rapid_drop_alert'] >= 2] if 'rapid_drop_alert' in accounts_df else None
+    
     summary = {
         'total_accounts': len(accounts_df),
         'active_accounts': len(active_accounts),
@@ -293,7 +407,12 @@ def get_priority_summary(accounts_df):
         'accounts_needing_action': len(accounts_df[
             accounts_df['priority_category'].isin(['Very High', 'High'])
         ]),
-        'churned_accounts': len(accounts_df[accounts_df['activity_rating'] == 'Churned'])
+        'churned_accounts': len(accounts_df[accounts_df['activity_rating'] == 'Churned']),
+        'rapid_drop_alerts': {
+            'total': len(rapid_drop_accounts) if rapid_drop_accounts is not None else 0,
+            'critical': len(accounts_df[accounts_df.get('rapid_drop_alert', 0) == 3]) if 'rapid_drop_alert' in accounts_df.columns else 0,
+            'significant': len(accounts_df[accounts_df.get('rapid_drop_alert', 0) == 2]) if 'rapid_drop_alert' in accounts_df.columns else 0
+        }
     }
     
     return summary

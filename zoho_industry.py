@@ -5,9 +5,9 @@ import requests
 from datetime import datetime
 
 # Import shared modules
-from modules.config import S3_BUCKET, ZOHO_DOMAIN
-from modules.s3_data_loader import get_s3_client, download_s3_file_cached
-from modules.zoho_api import get_access_token, upsert_to_zoho
+from modules.utils.config import S3_BUCKET, ZOHO_DOMAIN
+from modules.utils.s3_data_loader import get_s3_client, download_s3_file_cached
+from modules.utils.zoho_api import get_access_token, upsert_to_zoho
 
 # === S3 Download ===
 def fetch_s3_report():
@@ -118,7 +118,7 @@ def prepare_upserts(s3_df, zoho_map):
 
 
 # === Zoho Upsert ===
-# Now uses shared upsert_to_zoho from modules.zoho_api
+# Now uses shared upsert_to_zoho from modules.utils.zoho_api
 
 # === Main ===
 def main():

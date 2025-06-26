@@ -4,6 +4,9 @@ Analyzes patterns of event activity based on months with sessions.
 """
 from datetime import datetime
 import pandas as pd
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # Frequency thresholds (months with events)
@@ -196,6 +199,60 @@ def format_months_active_for_zoho(months_list):
     return month_name_list
 
 
+def batch_classify_frequencies(event_months_data, batch_size=50000):
+    """
+    Process event frequency classifications in batches with progress logging.
+    
+    Args:
+        event_months_data: List of event month sets
+        batch_size: Number of accounts to process per batch
+        
+    Returns:
+        List of frequency classifications
+    """
+    import time
+    
+    total_accounts = len(event_months_data)
+    classifications = []
+    
+    logger.info(f"Starting frequency classification for {total_accounts:,} accounts")
+    start_time = time.time()
+    
+    for i in range(0, total_accounts, batch_size):
+        batch_start_time = time.time()
+        batch_end = min(i + batch_size, total_accounts)
+        batch = event_months_data[i:batch_end]
+        
+        # Process batch
+        batch_classifications = [classify_event_frequency(len(months) if isinstance(months, set) else 0) 
+                                 for months in batch]
+        classifications.extend(batch_classifications)
+        
+        # Log progress with timing
+        batch_time = time.time() - batch_start_time
+        progress_pct = (batch_end / total_accounts) * 100
+        accounts_per_sec = len(batch) / batch_time if batch_time > 0 else 0
+        
+        logger.info(f"Classified {batch_end:,} of {total_accounts:,} accounts ({progress_pct:.1f}%) - "
+                   f"{accounts_per_sec:,.0f} accounts/sec")
+    
+    # Log summary statistics
+    total_time = time.time() - start_time
+    freq_counts = {}
+    for freq in classifications:
+        freq_counts[freq] = freq_counts.get(freq, 0) + 1
+    
+    logger.info(f"Frequency classification complete in {total_time:.1f}s ({total_accounts/total_time:,.0f} accounts/sec)")
+    logger.info("Frequency distribution:")
+    for freq_type in ['Continuous', 'Regular', 'Seasonal', 'Annual', 'Inactive']:
+        if freq_type in freq_counts:
+            count = freq_counts[freq_type]
+            pct = (count / total_accounts) * 100
+            logger.info(f"  {freq_type}: {count:,} accounts ({pct:.1f}%)")
+    
+    return classifications
+
+
 def get_frequency_summary(accounts_df, current_col='event_months_current', previous_col='event_months_previous'):
     """
     Generate a summary of event frequency patterns across all accounts.
@@ -208,26 +265,88 @@ def get_frequency_summary(accounts_df, current_col='event_months_current', previ
     Returns:
         dict: Summary statistics by frequency type
     """
+    import time
+    
     summary = {
         'current_period': {},
         'previous_period': {},
         'transitions': {}
     }
     
-    # Current period distribution
-    current_freq = accounts_df[current_col].apply(
-        lambda x: classify_event_frequency(len(x) if isinstance(x, set) else 0)
-    )
-    summary['current_period'] = current_freq.value_counts().to_dict()
+    total_accounts = len(accounts_df)
+    logger.info(f"Analyzing event frequency patterns for {total_accounts:,} accounts")
+    start_time = time.time()
     
-    # Previous period distribution
-    previous_freq = accounts_df[previous_col].apply(
-        lambda x: classify_event_frequency(len(x) if isinstance(x, set) else 0)
-    )
+    # Process in chunks for large datasets
+    chunk_size = 10000
+    current_freq_list = []
+    previous_freq_list = []
+    
+    for i in range(0, total_accounts, chunk_size):
+        chunk_end = min(i + chunk_size, total_accounts)
+        chunk = accounts_df.iloc[i:chunk_end]
+        
+        # Current period distribution
+        chunk_current = chunk[current_col].apply(
+            lambda x: classify_event_frequency(len(x) if isinstance(x, set) else 0)
+        )
+        current_freq_list.extend(chunk_current.tolist())
+        
+        # Previous period distribution
+        chunk_previous = chunk[previous_col].apply(
+            lambda x: classify_event_frequency(len(x) if isinstance(x, set) else 0)
+        )
+        previous_freq_list.extend(chunk_previous.tolist())
+        
+        if (i + chunk_size) % 50000 == 0 or chunk_end == total_accounts:
+            progress_pct = (chunk_end / total_accounts) * 100
+            logger.info(f"Analyzed {chunk_end:,} of {total_accounts:,} accounts ({progress_pct:.1f}%)")
+    
+    # Create Series from lists
+    current_freq = pd.Series(current_freq_list)
+    previous_freq = pd.Series(previous_freq_list)
+    
+    summary['current_period'] = current_freq.value_counts().to_dict()
     summary['previous_period'] = previous_freq.value_counts().to_dict()
     
     # Transitions (e.g., Annual -> Seasonal)
     transitions = pd.crosstab(previous_freq, current_freq)
     summary['transitions'] = transitions.to_dict()
+    
+    # Log frequency distribution
+    logger.info("Current period frequency distribution:")
+    for freq_type in ['Continuous', 'Regular', 'Seasonal', 'Annual', 'Inactive']:
+        if freq_type in summary['current_period']:
+            count = summary['current_period'][freq_type]
+            pct = (count / total_accounts) * 100
+            logger.info(f"  {freq_type}: {count:,} accounts ({pct:.1f}%)")
+    
+    # Count significant transitions
+    significant_transitions = 0
+    improved_accounts = 0  # Moved to higher frequency
+    declined_accounts = 0  # Moved to lower frequency
+    
+    freq_order = ['Inactive', 'Annual', 'Seasonal', 'Regular', 'Continuous']
+    
+    for prev_type in transitions.index:
+        for curr_type in transitions.columns:
+            if prev_type != curr_type:
+                count = transitions.loc[prev_type, curr_type]
+                if count > 0:
+                    significant_transitions += count
+                    
+                    prev_idx = freq_order.index(prev_type) if prev_type in freq_order else -1
+                    curr_idx = freq_order.index(curr_type) if curr_type in freq_order else -1
+                    
+                    if curr_idx > prev_idx:
+                        improved_accounts += count
+                    elif curr_idx < prev_idx:
+                        declined_accounts += count
+    
+    total_time = time.time() - start_time
+    logger.info(f"Analysis complete in {total_time:.1f}s")
+    logger.info(f"Found {significant_transitions:,} accounts with frequency pattern changes:")
+    logger.info(f"  Improved frequency: {improved_accounts:,} accounts")
+    logger.info(f"  Declined frequency: {declined_accounts:,} accounts")
     
     return summary

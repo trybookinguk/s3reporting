@@ -13,12 +13,12 @@ from email.message import EmailMessage
 from datetime import datetime, timedelta
 
 # Import shared modules
-from modules.config import (
+from modules.utils.config import (
     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET,
     MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN,
     SMTP_HOST, SMTP_PORT, TEST_MODE, UK_TZ
 )
-from modules.s3_data_loader import get_s3_client, download_s3_file_cached
+from modules.utils.s3_data_loader import get_s3_client, download_s3_file_cached
 
 
 def calculate_time_windows():

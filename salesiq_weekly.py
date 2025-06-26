@@ -6,12 +6,12 @@ from collections import Counter
 import os
 
 # Import shared modules
-from modules.config import (
+from modules.utils.config import (
     ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN,
     MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN,
     SMTP_HOST, SMTP_PORT, TEST_MODE
 )
-from modules.zoho_api import get_access_token
+from modules.utils.zoho_api import get_access_token
 
 # Additional environment variable specific to this script
 PORTAL_NAME = os.environ["ZOHO_PORTAL_NAME"]
@@ -27,7 +27,7 @@ last_sunday = last_monday + timedelta(days=6)
 last_sunday = last_sunday.replace(hour=23, minute=59, second=59, microsecond=999999)
 
 # === Step 1: Get access token === 
-# Now using shared get_access_token from modules.zoho_api
+# Now using shared get_access_token from modules.utils.zoho_api
 
 # === Step 2: Fetch all conversations (stop early when past range) ===
 def fetch_conversations(token):

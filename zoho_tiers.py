@@ -5,20 +5,32 @@ Calculates account tiers, event frequencies, and activity ratings.
 """
 import time
 import pandas as pd
+import logging
 from datetime import datetime
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
 # Import from our modules
-from modules.config import UK_TZ
-from modules.s3_data_loader import get_s3_client, process_booking_data_optimized, download_s3_file_cached
+from modules.utils.config import UK_TZ
+from modules.utils.s3_data_loader import get_s3_client, load_multiple_booking_files, download_s3_file_cached
+from modules.booking_aggregator import BookingAggregator
+from modules.utils.config import CUTOFF_365, CUTOFF_730, EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS
 from modules.account_processor import process_accounts
-from modules.zoho_api import get_access_token, upsert_to_zoho
-from modules.report_generator import generate_upcoming_annual_events_report, email_upcoming_events_report, email_tier_updates_report
+from modules.utils.zoho_api import get_access_token, upsert_to_zoho
+from modules.utils.report_generator import generate_upcoming_annual_events_report, email_upcoming_events_report, email_tier_updates_report
 
 
 def main():
     """Main execution function."""
     start_time = time.time()
     
+    logger.info(f"Zoho Tier Update Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}")
     print(f"\n=== Zoho Tier Update Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')} ===")
     
     # Determine report date
@@ -36,6 +48,7 @@ def main():
     year = report_date.strftime("%Y")
     month = report_date.strftime("%m")
 
+    logger.info(f"Processing data for: {report_date.strftime('%Y-%m-%d')}")
     print(f"Processing data for: {report_date.strftime('%Y-%m-%d')}")
     
     # S3 keys
@@ -49,6 +62,7 @@ def main():
         
         # Load Account report for LastEventCreation data
         print(f"Loading Account report from: {key_account}")
+        logger.info(f"Loading Account report from S3: {key_account}")
         account_df = download_s3_file_cached(s3_client, key_account)
         
         # Create lookup dictionary: AccountId -> {LastEventCreation, Industry, DateTimeCreated}
@@ -56,22 +70,39 @@ def main():
         required_cols = ['Id', 'LastEventCreation', 'Industry', 'Postcode', 'DateTimeCreated']
         if all(col in account_df.columns for col in required_cols):
             account_lookup = account_df.set_index('Id')[['LastEventCreation', 'Industry', 'Postcode', 'DateTimeCreated']].to_dict('index')
+            logger.info(f"Loaded {len(account_lookup):,} accounts with metadata")
             print(f"Loaded {len(account_lookup):,} accounts with LastEventCreation, Industry, Postcode and DateTimeCreated data")
         else:
             missing_cols = [col for col in required_cols if col not in account_df.columns]
+            logger.warning(f"Account report missing columns: {missing_cols}")
             print(f"WARNING: Account report missing columns: {missing_cols}")
         
         # Process data using optimized chunked approach
-        account_metrics = process_booking_data_optimized(s3_client, key_all, key_month)
+        logger.info("Starting optimized booking data processing")
+        # Process booking data using the new clean API
+        print("\nProcessing booking data...")
+        aggregator = BookingAggregator(
+            cutoff_365=CUTOFF_365,
+            cutoff_730=CUTOFF_730,
+            event_freq_cutoff_current=EVENT_FREQ_CUTOFF_CURRENT,
+            event_freq_cutoff_previous=EVENT_FREQ_CUTOFF_PREVIOUS
+        )
         
+        # Load and process chunks from both files
+        chunks = load_multiple_booking_files(s3_client, [key_all, key_month])
+        account_metrics = aggregator.aggregate_bookings(chunks)
+        
+        logger.info(f"Total unique accounts found: {len(account_metrics):,}")
         print(f"\nTotal unique accounts found: {len(account_metrics):,}")
         
         # Load full booking data for revenue factor calculations
         print("\nLoading full booking data for revenue analysis...")
+        logger.info("Starting revenue analysis data loading")
         booking_data_df = None
         try:
             # Load both BookingDataAll and current month BookingData
             print(f"Loading BookingDataAll from: {key_all}")
+            logger.info(f"Loading BookingDataAll for revenue analysis")
             booking_all_df = download_s3_file_cached(s3_client, key_all)
             
             print(f"Loading BookingData from: {key_month}")
@@ -79,10 +110,13 @@ def main():
             
             # Combine and remove duplicates based on BookingTransactionId
             print("Combining booking data and removing duplicates...")
+            logger.info("Combining booking data files")
             booking_data_df = pd.concat([booking_all_df, booking_month_df], ignore_index=True)
             initial_count = len(booking_data_df)
             booking_data_df = booking_data_df.drop_duplicates(subset='BookingTransactionId')
-            print(f"Removed {initial_count - len(booking_data_df):,} duplicate transactions")
+            duplicates_removed = initial_count - len(booking_data_df)
+            logger.info(f"Removed {duplicates_removed:,} duplicate transactions, {len(booking_data_df):,} remaining")
+            print(f"Removed {duplicates_removed:,} duplicate transactions")
             
             # Only keep necessary columns for revenue analysis to save memory
             revenue_cols = ['AccountId', 'TransactionDate', 'PaymentReceived', 'BookingFee', 
@@ -137,27 +171,34 @@ def main():
                 two_years_ago = pd.Timestamp.now() - pd.DateOffset(years=2)
                 original_count = len(booking_data_df)
                 booking_data_df = booking_data_df[booking_data_df['TransactionDate'] >= two_years_ago]
-                print(f"Filtered to last 2 years: {len(booking_data_df):,} transactions (removed {original_count - len(booking_data_df):,})")
+                removed_count = original_count - len(booking_data_df)
+                logger.info(f"Filtered to last 2 years: {len(booking_data_df):,} transactions (removed {removed_count:,})")
+                print(f"Filtered to last 2 years: {len(booking_data_df):,} transactions (removed {removed_count:,})")
             
+            logger.info(f"Prepared {len(booking_data_df):,} transactions for revenue analysis")
             print(f"Prepared booking data: {len(booking_data_df):,} transactions for revenue analysis")
             
         except Exception as e:
+            logger.warning(f"Failed to load full booking data for revenue analysis: {str(e)}")
             print(f"WARNING: Failed to load full booking data for revenue analysis: {str(e)}")
             print("Will proceed with basic revenue calculations only")
             booking_data_df = None
         
     except Exception as e:
+        logger.error(f"Failed to process S3 files: {str(e)}")
         print(f"ERROR: Failed to process S3 files: {str(e)}")
         import traceback
         traceback.print_exc()
         return
     
     # Process accounts: calculate tiers, event frequencies, and activity ratings
+    logger.info("Starting main account processing")
     updates = process_accounts(account_metrics, account_lookup, booking_data_df)
     
     # Save results to CSV for audit
     csv_filename = f"tier_updates_{datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')}.csv"
     updates.to_csv(csv_filename, index=False)
+    logger.info(f"Saved tier calculations to: {csv_filename}")
     print(f"\nSaved tier calculations to: {csv_filename}")
     
     # Summary statistics
@@ -213,52 +254,61 @@ def main():
         
         try:
             # Check if email credentials are configured
-            from modules.config import MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN
+            from modules.utils.config import MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN
             if all([MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN]):
                 email_upcoming_events_report(annual_report, report_filename)
                 print(f"📧 Emailed upcoming annual events report")
             else:
                 print("Email credentials not configured - skipping email")
         except Exception as e:
+            logger.warning(f"Failed to email annual events report: {str(e)}")
             print(f"WARNING: Failed to email annual events report: {str(e)}")
     else:
+        logger.info("No upcoming annual events requiring outreach")
         print("No upcoming annual events requiring outreach in next 30 days")
     
     # Send tier updates email report
     try:
         # Check if email credentials are configured
-        from modules.config import MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN
+        from modules.utils.config import MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN
         if all([MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN]):
             email_tier_updates_report(updates, csv_filename)
             print(f"📧 Emailed tier updates report with retention priorities")
         else:
             print("Email credentials not configured - skipping tier updates email")
     except Exception as e:
+        logger.warning(f"Failed to email tier updates report: {str(e)}")
         print(f"WARNING: Failed to email tier updates report: {str(e)}")
     
     # Clean up hidden fields before Zoho upload
     hidden_cols = [col for col in updates.columns if col.startswith('_')]
     zoho_updates = updates.drop(columns=hidden_cols, errors='ignore')
+    logger.info(f"Removing {len(hidden_cols)} hidden columns before Zoho upload")
     print(f"\nRemoving {len(hidden_cols)} hidden columns before Zoho upload")
     
     if not zoho_updates.empty:
         # Get Zoho token and update
         try:
             print("\nAuthenticating with Zoho...")
+            logger.info("Authenticating with Zoho API")
             token = get_access_token()
             
             print("Updating Zoho CRM...")
+            logger.info(f"Updating {len(zoho_updates):,} records in Zoho CRM")
             upsert_to_zoho(token, zoho_updates)
             
         except Exception as e:
+            logger.error(f"Zoho update failed: {str(e)}")
             print(f"ERROR: Zoho update failed: {str(e)}")
             import traceback
             traceback.print_exc()
     else:
+        logger.info("No updates required")
         print("No updates required.")
     
     # Performance stats
     elapsed_time = time.time() - start_time
+    logger.info(f"Zoho Tier Update completed in {elapsed_time:.1f} seconds ({elapsed_time/60:.1f} minutes)")
     print(f"\n=== Completed at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')} ===")
     print(f"Total execution time: {elapsed_time:.1f} seconds ({elapsed_time/60:.1f} minutes)")
 

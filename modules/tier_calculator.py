@@ -2,7 +2,10 @@
 Tier calculation logic for TryBooking accounts.
 This module focuses solely on determining account tiers based on percentile rankings.
 """
-from .config import TIER_PERCENTILES, MIN_YEARS_BY_TIER
+import logging
+from .utils.config import TIER_PERCENTILES, MIN_YEARS_BY_TIER
+
+logger = logging.getLogger(__name__)
 
 
 def determine_tier_from_percentiles(a_pct, b_pct, c_years, d_pct, e_pct, has_activity):
@@ -51,3 +54,57 @@ def determine_tier_from_percentiles(a_pct, b_pct, c_years, d_pct, e_pct, has_act
                 break
     
     return best_tier
+
+
+def batch_determine_tiers(accounts_data, batch_size=10000):
+    """
+    Process tier calculations in batches with progress logging.
+    
+    Args:
+        accounts_data: List of tuples containing (a_pct, b_pct, c_years, d_pct, e_pct, has_activity)
+        batch_size: Number of accounts to process per batch
+        
+    Returns:
+        List of tier classifications
+    """
+    import time
+    
+    total_accounts = len(accounts_data)
+    tiers = []
+    
+    logger.info(f"Starting tier calculation for {total_accounts:,} accounts")
+    start_time = time.time()
+    
+    for i in range(0, total_accounts, batch_size):
+        batch_start_time = time.time()
+        batch_end = min(i + batch_size, total_accounts)
+        batch = accounts_data[i:batch_end]
+        
+        # Process batch
+        batch_tiers = [determine_tier_from_percentiles(*account) for account in batch]
+        tiers.extend(batch_tiers)
+        
+        # Log progress with timing
+        batch_time = time.time() - batch_start_time
+        progress_pct = (batch_end / total_accounts) * 100
+        accounts_per_sec = len(batch) / batch_time if batch_time > 0 else 0
+        
+        logger.info(f"Processed {batch_end:,} of {total_accounts:,} accounts ({progress_pct:.1f}%) - "
+                   f"{accounts_per_sec:,.0f} accounts/sec")
+    
+    # Log tier distribution summary
+    tier_counts = {}
+    for tier in tiers:
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
+    
+    total_time = time.time() - start_time
+    logger.info(f"Tier calculation complete in {total_time:.1f}s ({total_accounts/total_time:,.0f} accounts/sec)")
+    logger.info("Tier distribution:")
+    
+    for tier in ['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1', 'NIL']:
+        if tier in tier_counts:
+            count = tier_counts[tier]
+            pct = (count / total_accounts) * 100
+            logger.info(f"  {tier}: {count:,} accounts ({pct:.1f}%)")
+    
+    return tiers

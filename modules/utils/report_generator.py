@@ -3,6 +3,7 @@ Report generation and email functionality for TryBooking tier system.
 """
 import pandas as pd
 import smtplib
+import logging
 from datetime import datetime
 from email.message import EmailMessage
 from .config import (
@@ -10,9 +11,15 @@ from .config import (
     MAILGUN_DOMAIN, SMTP_HOST, SMTP_PORT, TEST_MODE, DEFAULT_RECIPIENT, CC_RECIPIENT, UK_TZ
 )
 
+logger = logging.getLogger(__name__)
+
 
 def generate_upcoming_annual_events_report(results_df):
     """Generate report for annual events needing outreach."""
+    import time
+    
+    logger.info(f"Generating upcoming annual events report from {len(results_df):,} accounts")
+    start_time = time.time()
     
     # Filter for annual pattern accounts that are Tier 3 or higher
     tier_3_plus = ['Key Account', 'High Value', 'Tier 4', 'Tier 3']
@@ -22,8 +29,17 @@ def generate_upcoming_annual_events_report(results_df):
         (results_df['Current_Tier'].isin(tier_3_plus))
     ].copy()
     
+    logger.info(f"Found {len(annual_accounts):,} annual accounts in Tier 3+")
+    
     upcoming = []
-    for _, account in annual_accounts.iterrows():
+    processed = 0
+    
+    for idx, (_, account) in enumerate(annual_accounts.iterrows()):
+        processed += 1
+        
+        # Log progress every 100 accounts
+        if processed % 100 == 0:
+            logger.info(f"Processing annual accounts: {processed}/{len(annual_accounts)} ({processed/len(annual_accounts)*100:.1f}%)")
         if pd.notna(account.get('_last_event_date')):
             # Predict next event (365 days from last)
             last_event = pd.to_datetime(account['_last_event_date'])
@@ -54,11 +70,19 @@ def generate_upcoming_annual_events_report(results_df):
                     'Status': account['Rating']
                 })
     
+    if upcoming:
+        total_time = time.time() - start_time
+        logger.info(f"Identified {len(upcoming)} accounts requiring outreach within 30 days (processed in {total_time:.1f}s)")
+    else:
+        logger.info("No annual accounts requiring immediate outreach")
+    
     return pd.DataFrame(upcoming).sort_values('Reach_Out_By') if upcoming else pd.DataFrame()
 
 
 def email_upcoming_events_report(report_df, filename):
     """Email the upcoming annual events report."""
+    
+    logger.info(f"Preparing upcoming events email with {len(report_df)} accounts")
     
     # Prepare email body
     body_plain = f"""Hi Alex,
@@ -117,18 +141,50 @@ allowing proactive outreach approximately 1 month before they usually set up the
         smtp.send_message(msg)
     
     recipients = DEFAULT_RECIPIENT if TEST_MODE else f"{DEFAULT_RECIPIENT}, {CC_RECIPIENT}"
+    logger.info(f"Email sent to {recipients} with {len(report_df)} upcoming annual events")
     print(f"Email sent to {recipients} with {len(report_df)} upcoming annual events")
 
 
 def email_tier_updates_report(updates_df, csv_filename):
     """Email the tier updates report with retention priority summary."""
+    import time
+    
+    logger.info(f"Preparing tier updates email report for {len(updates_df):,} accounts")
+    start_time = time.time()
     
     # Get summary statistics
+    logger.info("Calculating tier distribution...")
     tier_counts = updates_df['Current_Tier'].value_counts()
+    
+    logger.info("Identifying tier changes...")
     tier_changes = updates_df[updates_df['Current_Tier'] != updates_df['Previous_Tier']]
+    
+    logger.info("Calculating retention priority distribution...")
     priority_counts = updates_df['Retention_Priority'].value_counts()
     
+    logger.info(f"Found {len(tier_changes):,} tier changes")
+    
+    # Log tier change details
+    if len(tier_changes) > 0:
+        # Count upgrades vs downgrades
+        tier_order = ['NIL', 'Tier 1', 'Tier 2', 'Tier 3', 'Tier 4', 'High Value', 'Key Account']
+        upgrades = 0
+        downgrades = 0
+        
+        for _, change in tier_changes.iterrows():
+            prev_idx = tier_order.index(change['Previous_Tier']) if change['Previous_Tier'] in tier_order else -1
+            curr_idx = tier_order.index(change['Current_Tier']) if change['Current_Tier'] in tier_order else -1
+            
+            if curr_idx > prev_idx:
+                upgrades += 1
+            elif curr_idx < prev_idx:
+                downgrades += 1
+        
+        logger.info(f"  Upgrades: {upgrades:,} accounts")
+        logger.info(f"  Downgrades: {downgrades:,} accounts")
+    
     # Get top priority accounts (excluding churned accounts)
+    logger.info("Identifying high-priority accounts...")
     very_high_accounts = updates_df[
         (updates_df['Retention_Priority'] == 'Very High') & 
         (updates_df['Rating'] != 'Churned')
@@ -140,6 +196,12 @@ def email_tier_updates_report(updates_df, csv_filename):
     
     # Count churned accounts (they have empty retention priority)
     churned_count = len(updates_df[updates_df['Rating'] == 'Churned'])
+    
+    action_required = priority_counts.get('Very High', 0) + priority_counts.get('High', 0)
+    logger.info(f"Action required for {action_required:,} accounts (Very High + High priority)")
+    
+    prep_time = time.time() - start_time
+    logger.info(f"Report preparation complete in {prep_time:.1f}s")
     
     # Create HTML table for very high priority accounts
     very_high_table_html = ""
@@ -320,4 +382,5 @@ TryBooking Reporting System
         smtp.send_message(msg)
     
     recipients = DEFAULT_RECIPIENT if TEST_MODE else f"{DEFAULT_RECIPIENT}, {CC_RECIPIENT}"
+    logger.info(f"Email sent to {recipients} with tier updates and retention priorities")
     print(f"Email sent to {recipients} with tier updates and retention priorities")

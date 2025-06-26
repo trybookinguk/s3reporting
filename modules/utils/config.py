@@ -81,3 +81,43 @@ CC_RECIPIENT = "louise@trybooking.co.uk" if not TEST_MODE else ""
 # === REPORT SETTINGS ===
 ANNUAL_EVENT_MIN_REVENUE = 100  # Minimum revenue for annual event filtering
 ANNUAL_EVENT_OUTREACH_DAYS = 30  # Days before typical creation to reach out
+
+# === REVENUE FACTOR SETTINGS ===
+# Minimum accounts required for valid industry quintiles
+MIN_ACCOUNTS_FOR_QUINTILES = 100
+
+# Account maturity threshold (days)
+MATURE_ACCOUNT_AGE_DAYS = 180
+
+# Revenue drop thresholds (unified for all account types)
+REVENUE_DROP_THRESHOLDS = {
+    "severe": 0.25,      # <25% of comparison period
+    "significant": 0.5,  # <50% of comparison period
+    "moderate": 0.75     # <75% of comparison period
+}
+
+# Quintile drop thresholds
+QUINTILE_DROP_SCORING = {
+    "severe": 4,         # Drop of 4+ quintiles
+    "significant": 3,    # Drop of 3 quintiles
+    "moderate": 2        # Drop of 2 quintiles
+}
+
+# Zero revenue tolerance threshold
+ZERO_REVENUE_COMMON_THRESHOLD = 0.3  # If >30% of industry has zero revenue
+
+# New account lifecycle stages (in weeks)
+ACCOUNT_LIFECYCLE_STAGES = {
+    "new_building": 4,      # Weeks 1-4
+    "new_expected": 8,      # Weeks 5-8
+    "establishing": 26,     # Up to 6 months
+    "maturing": 52,         # Up to 12 months
+    "established": 52       # 12+ months
+}
+
+# Comparison period types
+COMPARISON_PERIOD_DAYS = {
+    "current": 28,          # 4 weeks - current period for sudden drop detection
+    "rolling_average": 84,  # 12 weeks - 3 months rolling average
+    "yoy": 365             # Year over year for seasonal accounts
+}

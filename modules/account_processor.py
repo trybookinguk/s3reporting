@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 import logging
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from .utils.config import (
     CUTOFF_365, CUTOFF_730, TODAY, MIN_TICKETS_FOR_ACTIVE,
     EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS,
@@ -705,7 +705,6 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                     
                     # Calculate the date range when we expect ticket sales
                     # If avg_lead_days is 30, we expect sales 30 days before events
-                    from datetime import datetime, timedelta
                     today = pd.Timestamp(TODAY)
                     
                     # Check if Regular accounts are in or approaching their active months

@@ -671,26 +671,50 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             if edu_summer_mask.any():
                 logger.info(f"Skipping rapid drop detection for {edu_summer_mask.sum()} education accounts during summer")
             
-            # All other accounts (non-education or not summer) - normal percentage thresholds
+            # All other accounts (non-education or not summer) - check based on their patterns
             normal_mask = ~edu_summer_mask
             if normal_mask.any():
                 normal_indices = np.where(normal_mask)[0]
+                normal_accounts = eligible_accounts.iloc[normal_indices]
                 
-                # Vectorized severity scoring with minimum revenue threshold
-                revenue_meets_threshold = comparison_revenues[normal_indices] >= MIN_REVENUE_FOR_RAPID_DROP
+                # Track accounts skipped due to inactive period
+                skipped_inactive_period = 0
                 
-                normal_scores = np.where(
-                    revenue_meets_threshold,
-                    np.select(
-                        [drop_ratios[normal_indices] < 0.25, 
-                         drop_ratios[normal_indices] < 0.50, 
-                         drop_ratios[normal_indices] < 0.75],
-                        [3, 2, 1],
-                        default=0
-                    ),
-                    0  # No alert if revenue below threshold
-                )
-                eligible_scores[normal_indices] = normal_scores
+                # Check each account's typical active months
+                for idx, (orig_idx, account) in enumerate(normal_accounts.iterrows()):
+                    # Get the account's typical active months
+                    months_active = []
+                    if 'Months_Active' in account and isinstance(account['Months_Active'], list):
+                        # Convert month names to numbers
+                        month_name_to_num = {
+                            'January': 1, 'February': 2, 'March': 3, 'April': 4,
+                            'May': 5, 'June': 6, 'July': 7, 'August': 8,
+                            'September': 9, 'October': 10, 'November': 11, 'December': 12
+                        }
+                        months_active = [month_name_to_num.get(m, 0) for m in account['Months_Active'] if m in month_name_to_num]
+                    
+                    # For Regular/Seasonal accounts, only check if in or near active period
+                    event_freq = account.get('Event_Frequency_Current', '')
+                    if event_freq in ['Regular', 'Seasonal', 'Annual'] and months_active:
+                        previous_month = (current_month - 1) if current_month > 1 else 12
+                        if current_month not in months_active and previous_month not in months_active:
+                            # Not in active period - skip rapid drop detection
+                            skipped_inactive_period += 1
+                            continue
+                    
+                    # Check revenue drop for this account
+                    if comparison_revenues[normal_indices[idx]] >= MIN_REVENUE_FOR_RAPID_DROP:
+                        ratio = drop_ratios[normal_indices[idx]]
+                        if ratio < 0.25:
+                            eligible_scores[normal_indices[idx]] = 3
+                        elif ratio < 0.50:
+                            eligible_scores[normal_indices[idx]] = 2
+                        elif ratio < 0.75:
+                            eligible_scores[normal_indices[idx]] = 1
+                
+                # Log accounts skipped
+                if skipped_inactive_period > 0:
+                    logger.info(f"Skipped rapid drop detection for {skipped_inactive_period} accounts outside their active periods")
             
             # Assign scores back to main array
             rapid_drop_scores[eligible_indices] = eligible_scores

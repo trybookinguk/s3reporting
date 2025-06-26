@@ -189,12 +189,25 @@ def calculate_activity_ratings(df):
         continuous_accounts = subset['Event_Frequency_Previous'] == 'Continuous'
         regular_accounts = subset['Event_Frequency_Previous'] == 'Regular'
         
+        # Check current activity levels (if columns available)
+        has_minimal_activity = pd.Series(True, index=subset.index)  # Default to considering gap
+        
+        if 'tickets_current' in df.columns and 'revenue_current' in df.columns:
+            # Account has meaningful current activity if tickets >= 10 OR revenue >= £100
+            has_meaningful_activity = (
+                (subset['tickets_current'] >= 10) | 
+                (subset['revenue_current'] >= 100)
+            )
+            has_minimal_activity = ~has_meaningful_activity
+        
         # Continuous account thresholds
-        continuous_churned = continuous_accounts & (days_to_check >= 90)
+        # Only mark as churned if minimal/no current activity
+        continuous_churned = continuous_accounts & (days_to_check >= 90) & has_minimal_activity
         continuous_at_risk = continuous_accounts & (days_to_check >= 30) & (~continuous_churned)
         
         # Regular account thresholds  
-        regular_churned = regular_accounts & (days_to_check >= 180)
+        # Only mark as churned if minimal/no current activity
+        regular_churned = regular_accounts & (days_to_check >= 180) & has_minimal_activity
         regular_at_risk = regular_accounts & (days_to_check >= 90) & (~regular_churned)
         
         # Update ratings
@@ -211,7 +224,18 @@ def calculate_activity_ratings(df):
     )
     
     if other_patterns_mask.any():
-        other_churned = other_patterns_mask & (df['days_since_last'] >= 365)
+        # Check for meaningful current activity
+        has_minimal_activity_other = pd.Series(True, index=df.index)
+        
+        if 'tickets_current' in df.columns and 'revenue_current' in df.columns:
+            has_meaningful_activity_other = (
+                (df['tickets_current'] >= 10) | 
+                (df['revenue_current'] >= 100)
+            )
+            has_minimal_activity_other = ~has_meaningful_activity_other
+        
+        # Only mark as churned if minimal/no current activity
+        other_churned = other_patterns_mask & (df['days_since_last'] >= 365) & has_minimal_activity_other
         other_at_risk = other_patterns_mask & (df['days_since_last'] >= 180) & (~other_churned)
         
         ratings[other_churned] = 'Churned'
@@ -233,10 +257,54 @@ def calculate_activity_ratings(df):
     if potential_issues.any():
         ratings[potential_issues] = 'Dormant'  # More appropriate than 'Active'
     
-    # CRITICAL: Override any rating to 'Active' if account has current activity
-    # This prevents incorrect 'Churned' or 'At Risk' ratings for active accounts
-    has_current_activity = df['Event_Frequency_Current'] != 'Inactive'
-    ratings[has_current_activity] = 'Active'
+    # SAFETY NET: Override clearly incorrect 'Churned' ratings
+    # This should rarely trigger if the earlier logic is correct
+    # If this triggers frequently, it indicates a bug in the classification logic above
+    
+    # Check for accounts marked as 'Churned' but have significant current activity
+    if 'tickets_current' in df.columns and 'revenue_current' in df.columns:
+        # Only override if there's substantial current activity
+        MIN_TICKETS_FOR_ACTIVE_OVERRIDE = 10
+        MIN_REVENUE_FOR_ACTIVE_OVERRIDE = 100
+        
+        incorrectly_churned = (
+            (ratings == 'Churned') & 
+            ((df['tickets_current'] >= MIN_TICKETS_FOR_ACTIVE_OVERRIDE) |
+             (df['revenue_current'] >= MIN_REVENUE_FOR_ACTIVE_OVERRIDE))
+        )
+        
+        if incorrectly_churned.any():
+            # Log warning as this indicates a potential bug in the classification logic
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Safety net triggered: {incorrectly_churned.sum()} accounts marked as 'Churned' despite significant activity")
+            
+            # Vectorized determination of whether accounts should be 'Active' or 'At Risk'
+            subset = df[incorrectly_churned]
+            
+            # Calculate ratios where possible
+            has_prev_revenue = ('revenue_prev' in df.columns) & (subset['revenue_prev'] > 0)
+            has_prev_tickets = ('tickets_prev' in df.columns) & (subset['tickets_prev'] > 0)
+            
+            # Default to 'Active' for all incorrectly churned accounts
+            ratings[incorrectly_churned] = 'Active'
+            
+            # Mark as 'At Risk' if activity has dropped >50%
+            if 'revenue_prev' in df.columns:
+                # Check which of the incorrectly churned accounts have previous revenue
+                has_prev_revenue_mask = df.loc[incorrectly_churned, 'revenue_prev'] > 0
+                
+                if has_prev_revenue_mask.any():
+                    # Calculate revenue ratios for those accounts
+                    indices_with_prev = df[incorrectly_churned][has_prev_revenue_mask].index
+                    revenue_ratios = (
+                        df.loc[indices_with_prev, 'revenue_current'] / 
+                        df.loc[indices_with_prev, 'revenue_prev']
+                    )
+                    
+                    # Find which ones have dropped >50%
+                    at_risk_indices = indices_with_prev[revenue_ratios < 0.5]
+                    ratings[at_risk_indices] = 'At Risk'
     
     return ratings
 

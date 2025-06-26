@@ -197,7 +197,10 @@ def main():
     
     # Save results to CSV for audit
     csv_filename = f"tier_updates_{datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')}.csv"
-    updates.to_csv(csv_filename, index=False)
+    # Exclude internal/debugging columns from CSV
+    columns_to_exclude = ['rapid_drop_details', 'revenue_details', 'revenue_drop_details']
+    csv_columns = [col for col in updates.columns if col not in columns_to_exclude]
+    updates[csv_columns].to_csv(csv_filename, index=False)
     logger.info(f"Saved tier calculations to: {csv_filename}")
     print(f"\nSaved tier calculations to: {csv_filename}")
     

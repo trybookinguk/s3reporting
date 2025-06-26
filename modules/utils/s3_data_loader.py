@@ -409,8 +409,13 @@ def load_booking_data_chunks(s3_client, key, use_cache=True, chunk_size=100000):
                 if chunk_count % 10 == 0:
                     print(f"    Read {chunk_count * chunk_size:,} rows...")
             
-            # Save to cache
-            full_df = pd.concat(all_chunks, ignore_index=True)
+            # Save to cache - filter out empty chunks to avoid FutureWarning
+            non_empty_chunks = [chunk for chunk in all_chunks if not chunk.empty]
+            if non_empty_chunks:
+                full_df = pd.concat(non_empty_chunks, ignore_index=True)
+            else:
+                # Handle edge case where all chunks are empty
+                full_df = pd.DataFrame()
             print(f"  Saving to cache: {os.path.basename(cache_path)} ({len(full_df):,} rows)")
             with open(cache_path, 'wb') as f:
                 pickle.dump(full_df, f)

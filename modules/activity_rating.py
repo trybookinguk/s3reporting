@@ -65,23 +65,29 @@ def determine_activity_rating(current_freq, previous_freq, days_since_last, has_
         # Tier 3 and above get proactive outreach
         high_tier = current_tier in ["Key Account", "High Value", "Tier 4", "Tier 3"]
         if previous_freq in ["Annual", "Seasonal"] and high_tier and last_event_date:
-            today = pd.Timestamp.now()
+            today = pd.Timestamp.now().date()
+            
+            # Convert last_event_date to pandas Timestamp for calculations
+            if isinstance(last_event_date, pd.Timestamp):
+                last_event_ts = last_event_date
+            else:
+                last_event_ts = pd.Timestamp(last_event_date)
             
             # Calculate expected timeline with some flexibility
             # Allow 30-day window for annual events (might not be exactly 365 days)
-            expected_next_event = last_event_date + pd.Timedelta(days=365)
-            expected_sale_start = expected_next_event - pd.Timedelta(days=avg_lead_days)
-            outreach_date = expected_sale_start - pd.Timedelta(days=30)
+            expected_next_event = (last_event_ts + pd.Timedelta(days=365)).date()
+            expected_sale_start = (last_event_ts + pd.Timedelta(days=365-avg_lead_days)).date()
+            outreach_date = (last_event_ts + pd.Timedelta(days=365-avg_lead_days-30)).date()
             
-            # Add grace period for natural variation
-            grace_period = pd.Timedelta(days=30)
+            # Add grace period for natural variation (30 days)
+            expected_next_event_with_grace = (last_event_ts + pd.Timedelta(days=365+30)).date()
             
             # Determine stage with grace period
-            if today.date() >= (expected_next_event + grace_period).date():
+            if today >= expected_next_event_with_grace:
                 return "Churned"  # Event should have happened (with grace period)
-            elif today.date() >= expected_sale_start.date():
+            elif today >= expected_sale_start:
                 return "At Risk"  # Should be selling tickets
-            elif today.date() >= outreach_date.date():
+            elif today >= outreach_date:
                 return "Outreach"  # Time for proactive contact
             else:
                 return "Active"  # Too early to worry

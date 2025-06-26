@@ -297,9 +297,14 @@ def download_s3_file_cached(s3_client, key, use_cache=True):
         if (i + 1) % 10 == 0:
             print(f"  Processed {(i + 1) * chunk_size:,} rows...")
     
-    # Combine all chunks
+    # Combine all chunks - filter out empty chunks to avoid FutureWarning
     print("  Combining chunks...")
-    df = pd.concat(chunks, ignore_index=True)
+    non_empty_chunks = [chunk for chunk in chunks if not chunk.empty]
+    if non_empty_chunks:
+        df = pd.concat(non_empty_chunks, ignore_index=True)
+    else:
+        # Handle edge case where all chunks are empty
+        df = pd.DataFrame()
     print(f"  Total rows loaded: {len(df):,}")
     
     # Log memory usage

@@ -30,13 +30,16 @@ class BookingAggregator:
         self.cutoff_730 = cutoff_730
         self.event_freq_cutoff_current = event_freq_cutoff_current
         self.event_freq_cutoff_previous = event_freq_cutoff_previous
-        self.account_metrics: Dict[int, Dict[str, Any]] = {}
         self.processed_chunks = 0
         self.total_rows = 0
         
+        # OPTIMIZATION: Accumulate all data for bulk processing instead of dict updates
+        self.accumulated_chunks = []
+        
     def process_chunk(self, chunk: pd.DataFrame) -> None:
         """
-        Process a single chunk of booking data.
+        OPTIMIZED: Prepare chunk and accumulate for bulk processing.
+        Eliminates expensive row-by-row operations.
         
         Args:
             chunk: DataFrame chunk containing booking transactions
@@ -44,30 +47,11 @@ class BookingAggregator:
         if chunk.empty:
             return
             
-        # Ensure fee columns exist and have no nulls for revenue calculation
-        fee_columns = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
-        for col in fee_columns:
-            if col not in chunk.columns:
-                chunk[col] = 0.0
-            else:
-                chunk[col] = chunk[col].fillna(0.0)
+        # OPTIMIZATION: Vectorized preparation - all calculations at once
+        chunk = self._prepare_chunk_vectorized(chunk)
         
-        # Calculate revenue column vectorized (faster than apply)
-        chunk['Revenue'] = (chunk['BookingFee'] + 
-                           chunk['CardFee'] + 
-                           chunk['ProcessingFee'] + 
-                           chunk['TicketFee'])
-        chunk['Year'] = chunk['TransactionDate'].dt.year
-        
-        # Drop duplicates within chunk
-        chunk = chunk.drop_duplicates(subset='BookingTransactionId')
-        
-        # Aggregate by account
-        for account_id, group in chunk.groupby('AccountId'):
-            if account_id not in self.account_metrics:
-                self.account_metrics[account_id] = self._initialize_account_metrics()
-            
-            self._update_account_metrics(account_id, group)
+        # OPTIMIZATION: Just accumulate - no expensive dict operations
+        self.accumulated_chunks.append(chunk)
         
         self.processed_chunks += 1
         self.total_rows += len(chunk)
@@ -75,170 +59,214 @@ class BookingAggregator:
         # Log progress every 10 chunks
         if self.processed_chunks % 10 == 0:
             logger.info(f"Processed {self.processed_chunks} chunks "
-                       f"({self.total_rows:,} rows, {len(self.account_metrics):,} accounts)")
+                       f"({self.total_rows:,} rows)")
     
-    def _initialize_account_metrics(self) -> Dict[str, Any]:
-        """Initialize empty metrics dictionary for an account."""
-        return {
-            'tickets_current': 0,
-            'revenue_current': 0.0,
-            'tickets_prev': 0,
-            'revenue_prev': 0.0,
-            'tickets_lifetime': 0,
-            'revenue_lifetime': 0.0,
-            'years': set(),
-            'years_pre_cutoff': set(),
-            'seen_tx_ids': set(),
-            'event_months_current': set(),
-            'event_months_previous': set(),
-            'event_months_freq_current': set(),
-            'event_months_freq_previous': set(),
-            'event_creation_info': {},
-            'last_booking_date': None,
-            'first_booking_date': None
-        }
-    
-    def _update_account_metrics(self, account_id: int, transactions: pd.DataFrame) -> None:
+    def _prepare_chunk_vectorized(self, chunk: pd.DataFrame) -> pd.DataFrame:
         """
-        Update metrics for a specific account with new transactions.
-        
-        Args:
-            account_id: Account identifier
-            transactions: DataFrame of transactions for this account
+        OPTIMIZED: Vectorized chunk preparation with all calculations.
+        Replaces expensive row-by-row operations.
         """
-        metrics = self.account_metrics[account_id]
+        # Ensure fee columns exist and handle nulls
+        fee_columns = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+        for col in fee_columns:
+            if col not in chunk.columns:
+                chunk[col] = 0.0
+            else:
+                chunk[col] = chunk[col].fillna(0.0)
         
-        # Filter out already seen transactions
-        new_tx_mask = ~transactions['BookingTransactionId'].isin(metrics['seen_tx_ids'])
-        new_transactions = transactions[new_tx_mask]
+        # Vectorized calculations
+        chunk['Revenue'] = (chunk['BookingFee'] + chunk['CardFee'] + 
+                           chunk['ProcessingFee'] + chunk['TicketFee'])
+        chunk['Year'] = chunk['TransactionDate'].dt.year
+        chunk['tx_date'] = chunk['TransactionDate'].dt.date
         
-        if len(new_transactions) == 0:
-            return
-            
-        # Update seen transaction IDs
-        metrics['seen_tx_ids'].update(new_transactions['BookingTransactionId'].tolist())
+        # Period classification flags for efficient filtering later
+        chunk['is_current'] = chunk['tx_date'] >= self.cutoff_365
+        chunk['is_previous'] = (chunk['tx_date'] >= self.cutoff_730) & (~chunk['is_current'])
+        chunk['is_freq_current'] = chunk['tx_date'] >= self.event_freq_cutoff_current
+        chunk['is_freq_previous'] = ((chunk['tx_date'] >= self.event_freq_cutoff_previous) & 
+                                    (~chunk['is_freq_current']))
         
-        # Process each new transaction
-        for _, tx in new_transactions.iterrows():
-            self._process_transaction(metrics, tx)
+        # Drop duplicates
+        chunk = chunk.drop_duplicates(subset='BookingTransactionId')
         
-        # Process event data if available
-        if 'EventId' in new_transactions.columns and 'EventDate' in new_transactions.columns:
-            self._process_event_data(account_id, new_transactions)
-    
-    def _process_transaction(self, metrics: Dict[str, Any], tx: pd.Series) -> None:
-        """Process a single transaction and update metrics."""
-        tx_date = tx['TransactionDate'].date()
-        
-        # Update lifetime metrics
-        metrics['tickets_lifetime'] += tx['TicketQuantity']
-        metrics['revenue_lifetime'] += tx['Revenue']
-        metrics['years'].add(tx['Year'])
-        
-        # Update period-specific metrics
-        if tx_date >= self.cutoff_365:
-            metrics['tickets_current'] += tx['TicketQuantity']
-            metrics['revenue_current'] += tx['Revenue']
-        elif tx_date >= self.cutoff_730:
-            metrics['tickets_prev'] += tx['TicketQuantity']
-            metrics['revenue_prev'] += tx['Revenue']
-        
-        if tx_date < self.cutoff_365:
-            metrics['years_pre_cutoff'].add(tx['Year'])
-        
-        # Update booking dates
-        if metrics['last_booking_date'] is None or tx['TransactionDate'] > metrics['last_booking_date']:
-            metrics['last_booking_date'] = tx['TransactionDate']
-        if metrics['first_booking_date'] is None or tx['TransactionDate'] < metrics['first_booking_date']:
-            metrics['first_booking_date'] = tx['TransactionDate']
-    
-    def _process_event_data(self, account_id: int, transactions: pd.DataFrame) -> None:
-        """Process event-related data for frequency and lead time calculations."""
-        event_data = transactions[['EventId', 'TransactionDate', 'EventDate']].copy()
-        event_data = event_data[pd.notna(event_data['EventDate'])]
-        
-        if len(event_data) == 0:
-            return
-            
-        metrics = self.account_metrics[account_id]
-        
-        # Extract year-month tuples from EventDate
-        event_data['event_year_month'] = event_data['EventDate'].apply(
-            lambda x: (x.year, x.month)
-        )
-        
-        # Classify into periods for tier calculations
-        current_mask = event_data['TransactionDate'].dt.date >= self.cutoff_365
-        previous_mask = (event_data['TransactionDate'].dt.date >= self.cutoff_730) & (~current_mask)
-        
-        current_months = set(event_data[current_mask]['event_year_month'].unique())
-        previous_months = set(event_data[previous_mask]['event_year_month'].unique())
-        
-        metrics['event_months_current'].update(current_months)
-        metrics['event_months_previous'].update(previous_months)
-        
-        # For event frequency calculations
-        freq_current_mask = event_data['TransactionDate'].dt.date >= self.event_freq_cutoff_current
-        freq_previous_mask = (event_data['TransactionDate'].dt.date >= self.event_freq_cutoff_previous) & (~freq_current_mask)
-        
-        freq_current_months = set(event_data[freq_current_mask]['event_year_month'].unique())
-        freq_previous_months = set(event_data[freq_previous_mask]['event_year_month'].unique())
-        
-        metrics['event_months_freq_current'].update(freq_current_months)
-        metrics['event_months_freq_previous'].update(freq_previous_months)
-        
-        # Track event creation info for lead time calculations
-        self._update_event_creation_info(account_id, event_data)
-    
-    def _update_event_creation_info(self, account_id: int, event_data: pd.DataFrame) -> None:
-        """Update event creation information for lead time calculations."""
-        metrics = self.account_metrics[account_id]
-        event_groups = event_data[pd.notna(event_data['EventId'])].groupby('EventId')
-        
-        for event_id, group in event_groups:
-            event_id_key = int(event_id) if pd.notna(event_id) else None
-            if event_id_key and event_id_key not in metrics['event_creation_info']:
-                first_booking = group['TransactionDate'].min()
-                event_date = group['EventDate'].iloc[0]
-                lead_days = (event_date.date() - first_booking.date()).days
-                metrics['event_creation_info'][event_id_key] = {
-                    'first_booking': first_booking,
-                    'event_date': event_date,
-                    'lead_days': max(lead_days, 0)
-                }
+        return chunk
     
     def finalize_metrics(self) -> Dict[int, Dict[str, Any]]:
         """
-        Finalize metrics calculations and prepare for output.
+        OPTIMIZED: Bulk aggregation using vectorized pandas operations.
+        Replaces expensive dictionary updates with fast groupby operations.
         
         Returns:
             Dictionary of account metrics
         """
-        logger.info("Finalizing account metrics...")
+        if not self.accumulated_chunks:
+            logger.info("No data to process")
+            return {}
         
-        for account_id, metrics in self.account_metrics.items():
+        start_time = pd.Timestamp.now()
+        logger.info("Starting vectorized bulk aggregation...")
+        
+        # OPTIMIZATION: Combine all chunks into single DataFrame for bulk processing
+        logger.info("Combining accumulated chunks...")
+        # Filter out empty chunks to avoid FutureWarning
+        non_empty_chunks = [chunk for chunk in self.accumulated_chunks if not chunk.empty]
+        if non_empty_chunks:
+            all_data = pd.concat(non_empty_chunks, ignore_index=True)
+        else:
+            logger.warning("All chunks are empty")
+            return {}
+        logger.info(f"Combined {len(all_data):,} rows from {len(self.accumulated_chunks)} chunks")
+        
+        # Clear accumulated chunks to free memory
+        self.accumulated_chunks = []
+        
+        # OPTIMIZATION: Vectorized aggregations using pandas groupby (much faster)
+        logger.info("Computing vectorized aggregations...")
+        
+        # Basic lifetime metrics
+        basic_agg = all_data.groupby('AccountId').agg({
+            'TicketQuantity': 'sum',
+            'Revenue': 'sum', 
+            'Year': lambda x: len(set(x)),  # unique years
+            'TransactionDate': ['min', 'max']
+        }).round(2)
+        basic_agg.columns = ['tickets_lifetime', 'revenue_lifetime', 'years_loyalty', 
+                            'first_booking_date', 'last_booking_date']
+        
+        # Current period metrics
+        current_data = all_data[all_data['is_current']]
+        current_agg = current_data.groupby('AccountId').agg({
+            'TicketQuantity': 'sum',
+            'Revenue': 'sum'
+        }).round(2)
+        current_agg.columns = ['tickets_current', 'revenue_current']
+        
+        # Previous period metrics  
+        previous_data = all_data[all_data['is_previous']]
+        previous_agg = previous_data.groupby('AccountId').agg({
+            'TicketQuantity': 'sum',
+            'Revenue': 'sum'
+        }).round(2)
+        previous_agg.columns = ['tickets_prev', 'revenue_prev']
+        
+        # Previous period years
+        pre_cutoff_data = all_data[all_data['tx_date'] < self.cutoff_365]
+        years_prev_agg = pre_cutoff_data.groupby('AccountId')['Year'].apply(
+            lambda x: len(set(x))
+        ).to_frame('years_loyalty_prev')
+        
+        # Event metrics
+        event_metrics = self._calculate_event_metrics_vectorized(all_data)
+        
+        # OPTIMIZATION: Combine all results efficiently
+        logger.info("Combining aggregated results...")
+        all_accounts = set(basic_agg.index) | set(current_agg.index) | set(previous_agg.index)
+        
+        final_metrics = {}
+        for account_id in all_accounts:
+            # Get metrics with safe defaults
+            basic = basic_agg.loc[account_id] if account_id in basic_agg.index else pd.Series(
+                [0, 0.0, 0, None, None], 
+                index=['tickets_lifetime', 'revenue_lifetime', 'years_loyalty', 'first_booking_date', 'last_booking_date']
+            )
+            current = current_agg.loc[account_id] if account_id in current_agg.index else pd.Series(
+                [0, 0.0], index=['tickets_current', 'revenue_current']
+            )
+            previous = previous_agg.loc[account_id] if account_id in previous_agg.index else pd.Series(
+                [0, 0.0], index=['tickets_prev', 'revenue_prev']
+            )
+            years_prev = years_prev_agg.loc[account_id, 'years_loyalty_prev'] if account_id in years_prev_agg.index else 0
+            
             # Calculate derived metrics
-            metrics['years_loyalty'] = len(metrics['years'])
-            metrics['years_loyalty_prev'] = len(metrics['years_pre_cutoff'])
+            avg_revenue_per_year = basic['revenue_lifetime'] / basic['years_loyalty'] if basic['years_loyalty'] > 0 else 0.0
+            revenue_up_to_prev = basic['revenue_lifetime'] - current['revenue_current']
+            avg_revenue_prev = revenue_up_to_prev / years_prev if years_prev > 0 else 0.0
             
-            # Calculate average revenue per year
-            if metrics['years_loyalty'] > 0:
-                metrics['avg_revenue_per_year'] = metrics['revenue_lifetime'] / metrics['years_loyalty']
-            else:
-                metrics['avg_revenue_per_year'] = 0
-                
-            if metrics['years_loyalty_prev'] > 0:
-                # Revenue up to previous period
-                revenue_up_to_prev = metrics['revenue_lifetime'] - metrics['revenue_current']
-                metrics['avg_revenue_prev'] = revenue_up_to_prev / metrics['years_loyalty_prev']
-            else:
-                metrics['avg_revenue_prev'] = 0
-            
-            # Convert sets to counts for efficiency
-            metrics['seen_tx_ids'] = len(metrics['seen_tx_ids'])
+            final_metrics[account_id] = {
+                'tickets_lifetime': int(basic['tickets_lifetime']),
+                'revenue_lifetime': float(basic['revenue_lifetime']),
+                'years_loyalty': int(basic['years_loyalty']),
+                'first_booking_date': basic['first_booking_date'],
+                'last_booking_date': basic['last_booking_date'],
+                'tickets_current': int(current['tickets_current']),
+                'revenue_current': float(current['revenue_current']),
+                'tickets_prev': int(previous['tickets_prev']),
+                'revenue_prev': float(previous['revenue_prev']),
+                'years_loyalty_prev': int(years_prev),
+                'avg_revenue_per_year': round(avg_revenue_per_year, 2),
+                'avg_revenue_prev': round(avg_revenue_prev, 2),
+                'seen_tx_ids': 0,  # Not needed for new logic, set to 0
+                **event_metrics.get(account_id, {
+                    'event_months_current': set(),
+                    'event_months_previous': set(),
+                    'event_months_freq_current': set(),
+                    'event_months_freq_previous': set(),
+                    'event_creation_info': {}
+                })
+            }
         
-        logger.info(f"Finalized metrics for {len(self.account_metrics):,} accounts")
-        return self.account_metrics
+        elapsed = (pd.Timestamp.now() - start_time).total_seconds()
+        rate = self.total_rows / elapsed if elapsed > 0 else 0
+        
+        logger.info(f"Vectorized aggregation complete: {len(final_metrics):,} accounts in {elapsed:.1f}s "
+                   f"({rate:.0f} rows/sec)")
+        
+        return final_metrics
+    
+    def _calculate_event_metrics_vectorized(self, all_data: pd.DataFrame) -> Dict[int, Dict[str, Any]]:
+        """
+        OPTIMIZED: Calculate event metrics using vectorized operations.
+        """
+        if 'EventId' not in all_data.columns or 'EventDate' not in all_data.columns:
+            logger.info("EventId or EventDate columns missing - skipping event metrics")
+            return {}
+        
+        # Filter to valid event data
+        event_data = all_data[pd.notna(all_data['EventDate'])].copy()
+        if event_data.empty:
+            return {}
+        
+        # Add year-month tuples vectorized
+        event_data['event_year_month'] = list(zip(
+            event_data['EventDate'].dt.year,
+            event_data['EventDate'].dt.month
+        ))
+        
+        # Group by account and use vectorized aggregations
+        event_metrics = {}
+        
+        for account_id, group in event_data.groupby('AccountId'):
+            # Use boolean indexing for period filtering
+            current_months = set(group[group['is_current']]['event_year_month'].unique())
+            previous_months = set(group[group['is_previous']]['event_year_month'].unique())
+            freq_current_months = set(group[group['is_freq_current']]['event_year_month'].unique())
+            freq_previous_months = set(group[group['is_freq_previous']]['event_year_month'].unique())
+            
+            # Event creation info (vectorized per event)
+            event_creation_info = {}
+            if pd.notna(group['EventId']).any():
+                for event_id, event_group in group.groupby('EventId'):
+                    if pd.notna(event_id):
+                        first_booking = event_group['TransactionDate'].min()
+                        event_date = event_group['EventDate'].iloc[0]
+                        lead_days = (event_date.date() - first_booking.date()).days
+                        
+                        event_creation_info[int(event_id)] = {
+                            'first_booking': first_booking,
+                            'event_date': event_date,
+                            'lead_days': max(lead_days, 0)
+                        }
+            
+            event_metrics[account_id] = {
+                'event_months_current': current_months,
+                'event_months_previous': previous_months,
+                'event_months_freq_current': freq_current_months,
+                'event_months_freq_previous': freq_previous_months,
+                'event_creation_info': event_creation_info
+            }
+        
+        return event_metrics
     
     def aggregate_bookings(self, chunks_iterator: Iterator[pd.DataFrame]) -> Dict[int, Dict[str, Any]]:
         """

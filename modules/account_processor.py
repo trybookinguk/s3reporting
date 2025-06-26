@@ -11,8 +11,7 @@ from .utils.config import (
 )
 from .tier_calculator import determine_tier_from_percentiles, batch_determine_tiers
 from .event_frequency import classify_event_frequency, get_months_active_fingerprint, format_months_active_for_zoho, batch_classify_frequencies
-from .activity_rating import determine_activity_rating
-from .retention_priority import calculate_retention_priority, calculate_revenue_drop_category, categorize_priority, get_revenue_drop_score
+from .retention_priority import calculate_revenue_drop_category, get_revenue_drop_score
 from .revenue_factor import get_revenue_factor, calculate_industry_quintiles
 from .rapid_drop_detector import detect_rapid_drop
 
@@ -268,21 +267,24 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         metrics_df['has_event_creation_current'] = False
         metrics_df['has_event_creation_previous'] = False
     
-    # Vectorized event frequency classification
+    # VECTORIZED event frequency classification - major speedup
     print("  Classifying event frequencies...")
-    metrics_df['Event_Frequency_Current'] = metrics_df.apply(
-        lambda row: classify_event_frequency(
-            row['freq_month_count_current'], 
-            row['has_event_creation_current']
-        ), axis=1
-    )
     
-    metrics_df['Event_Frequency_Previous'] = metrics_df.apply(
-        lambda row: classify_event_frequency(
-            row['freq_month_count_previous'], 
-            row['has_event_creation_previous']
-        ), axis=1
-    )
+    # Vectorized current frequency classification
+    metrics_df['Event_Frequency_Current'] = pd.cut(
+        metrics_df['freq_month_count_current'],
+        bins=[-1, 0, 1, 4, 9, 12],
+        labels=['Inactive', 'Annual', 'Seasonal', 'Regular', 'Continuous'],
+        include_lowest=True
+    ).astype(str)
+    
+    # Vectorized previous frequency classification  
+    metrics_df['Event_Frequency_Previous'] = pd.cut(
+        metrics_df['freq_month_count_previous'],
+        bins=[-1, 0, 1, 4, 9, 12],
+        labels=['Inactive', 'Annual', 'Seasonal', 'Regular', 'Continuous'],
+        include_lowest=True
+    ).astype(str)
     
     # Event frequency summary
     event_freq_summary = metrics_df['Event_Frequency_Current'].value_counts().to_dict()
@@ -312,16 +314,34 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         lambda x: (TODAY - x.date()).days if x else 999
     )
     
-    # Calculate Months Active patterns
+    # VECTORIZED months active patterns processing
     print("  Processing months active patterns...")
-    metrics_df['months_active_current'] = metrics_df['event_months_freq_current'].apply(get_months_active_fingerprint)
-    metrics_df['Months_Active'] = metrics_df['months_active_current'].apply(format_months_active_for_zoho)
     
-    # Historical months for activity rating
-    metrics_df['all_freq_months'] = metrics_df.apply(
-        lambda row: row['event_months_freq_current'] | row['event_months_freq_previous'], axis=1
+    # Vectorized months active fingerprint extraction
+    def get_months_vectorized(event_months_series):
+        """Vectorized version of get_months_active_fingerprint"""
+        return event_months_series.apply(
+            lambda months_set: sorted(list({month for year, month in months_set})) if months_set else []
+        )
+    
+    def format_months_vectorized(months_list_series):
+        """Vectorized version of format_months_active_for_zoho"""
+        month_names = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+                      'July', 'August', 'September', 'October', 'November', 'December']
+        return months_list_series.apply(
+            lambda months: [month_names[m] for m in months if 1 <= m <= 12] if isinstance(months, list) else []
+        )
+    
+    # Apply vectorized functions
+    metrics_df['months_active_current'] = get_months_vectorized(metrics_df['event_months_freq_current'])
+    metrics_df['Months_Active'] = format_months_vectorized(metrics_df['months_active_current'])
+    
+    # Vectorized historical months combination
+    metrics_df['all_freq_months'] = metrics_df['event_months_freq_current'].combine(
+        metrics_df['event_months_freq_previous'], 
+        lambda x, y: (x if x else set()) | (y if y else set())
     )
-    metrics_df['months_active_historical'] = metrics_df['all_freq_months'].apply(get_months_active_fingerprint)
+    metrics_df['months_active_historical'] = get_months_vectorized(metrics_df['all_freq_months'])
     
     # Check if has historical data
     metrics_df['has_historical'] = (
@@ -329,24 +349,21 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         (metrics_df['event_months_previous'].apply(len) > 0)
     )
     
-    # Vectorized activity rating calculation
-    print("  Determining activity ratings...")
-    metrics_df['Rating'] = metrics_df.apply(
-        lambda row: determine_activity_rating(
-            current_freq=row['Event_Frequency_Current'],
-            previous_freq=row['Event_Frequency_Previous'],
-            days_since_last=row['days_since_last'],
-            has_historical=row['has_historical'],
-            avg_lead_days=row['avg_lead_days'],
-            last_event_date=row['last_event_date'],
-            months_active_list=row['months_active_historical'],
-            revenue_previous=row.get('revenue_prev', 0),
-            industry=row.get('Industry'),
-            current_tier=row['Current_Tier'],
-            account_postcode=row.get('Postcode'),
-            account_created_date=row.get('account_created_date')
-        ), axis=1
-    )
+    # VECTORIZED activity rating calculation - massive performance improvement
+    print(f"  Determining activity ratings for {len(metrics_df):,} accounts...")
+    logger.info(f"Starting VECTORIZED activity rating calculation for {len(metrics_df):,} accounts")
+    
+    activity_start_time = time.time()
+    
+    # Import vectorized function
+    from .activity_rating import calculate_activity_ratings
+    
+    # Apply vectorized calculation (replaces slow row-by-row processing)
+    metrics_df['Rating'] = calculate_activity_ratings(metrics_df)
+    
+    elapsed = time.time() - activity_start_time
+    rate = len(metrics_df) / elapsed if elapsed > 0 else 0
+    logger.info(f"VECTORIZED activity rating completed in {elapsed:.1f}s ({rate:.0f} accounts/sec) - MAJOR speedup!")
     
     # Initialize revenue drop fields
     metrics_df['revenue_drop_category'] = 'None'
@@ -375,59 +392,83 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             total_with_industry = has_industry.sum()
             processed = 0
             
-            # Vectorized revenue factor calculation for accounts with industry
-            def calculate_revenue_factor_vectorized(row):
-                """Calculate revenue factor for a single row."""
-                try:
-                    # Determine account pattern
-                    account_pattern = 'continuous'  # Default
-                    if row['Event_Frequency_Current'] == 'Annual' or row['Event_Frequency_Previous'] == 'Annual':
-                        account_pattern = 'annual'
-                    elif row['Event_Frequency_Current'] == 'Seasonal' or row['Event_Frequency_Previous'] == 'Seasonal':
-                        account_pattern = 'seasonal'
-                    
-                    # Get account's transaction history
-                    account_history = booking_data_df[
-                        booking_data_df['AccountId'] == row['Account_Name_Clean']
-                    ].copy()
-                    
-                    # Get industry data
-                    industry_data = booking_data_df[
-                        booking_data_df['Industry'] == row['Industry']
-                    ]
-                    
-                    # Prepare account info
-                    account_info = {}
-                    if accounts_df is not None:
-                        account_info['accounts_df'] = accounts_df
-                    
-                    # Calculate revenue factor
-                    revenue_result = get_revenue_factor(
-                        current_revenue=row.get('revenue_current', 0),
-                        historical_revenue=account_history,
-                        industry_data=industry_data,
-                        account_type=account_pattern,
-                        account_info=account_info
-                    )
-                    
-                    return (
-                        revenue_result['severity'].capitalize(),
-                        revenue_result['score'],
-                        revenue_result.get('details', {})
-                    )
-                except Exception as e:
-                    # Fallback to simple calculation
-                    category = calculate_revenue_drop_category(
-                        row.get('revenue_current', 0),
-                        row.get('revenue_prev', 0)
-                    )
-                    score = get_revenue_drop_score(category)
-                    return category, score, {}
-            
-            # Apply revenue factor calculation to accounts with industry
+            # VECTORIZED revenue factor calculation - major performance improvement
             print(f"    Processing {has_industry.sum()} accounts with industry data...")
-            revenue_results = metrics_df.loc[has_industry].apply(
-                calculate_revenue_factor_vectorized, axis=1
+            
+            # Determine account patterns vectorized
+            accounts_with_industry = metrics_df.loc[has_industry].copy()
+            
+            # Vectorized pattern classification
+            is_annual = (
+                (accounts_with_industry['Event_Frequency_Current'] == 'Annual') |
+                (accounts_with_industry['Event_Frequency_Previous'] == 'Annual')
+            )
+            is_seasonal = (
+                (accounts_with_industry['Event_Frequency_Current'] == 'Seasonal') |
+                (accounts_with_industry['Event_Frequency_Previous'] == 'Seasonal')
+            ) & (~is_annual)
+            
+            accounts_with_industry['account_pattern'] = 'continuous'  # Default
+            accounts_with_industry.loc[is_annual, 'account_pattern'] = 'annual'
+            accounts_with_industry.loc[is_seasonal, 'account_pattern'] = 'seasonal'
+            
+            # Process by industry groups for efficiency (batch processing)
+            revenue_results_list = []
+            
+            for industry, industry_accounts in accounts_with_industry.groupby('Industry'):
+                if pd.isna(industry):
+                    continue
+                
+                # Get industry data once for all accounts in this industry
+                industry_data = booking_data_df[booking_data_df['Industry'] == industry]
+                
+                # Process accounts in this industry batch
+                for _, account in industry_accounts.iterrows():
+                    try:
+                        # Get account history
+                        account_history = booking_data_df[
+                            booking_data_df['AccountId'] == account['Account_Name_Clean']
+                        ].copy()
+                        
+                        # Prepare account info
+                        account_info = {}
+                        if accounts_df is not None:
+                            account_info['accounts_df'] = accounts_df
+                        
+                        # Calculate revenue factor
+                        revenue_result = get_revenue_factor(
+                            current_revenue=account.get('revenue_current', 0),
+                            historical_revenue=account_history,
+                            industry_data=industry_data,
+                            account_type=account['account_pattern'],
+                            account_info=account_info
+                        )
+                        
+                        revenue_results_list.append((
+                            account.name,  # DataFrame index
+                            revenue_result['severity'].capitalize(),
+                            revenue_result['score'],
+                            revenue_result.get('details', {})
+                        ))
+                        
+                    except Exception as e:
+                        # Fallback to simple calculation
+                        category = calculate_revenue_drop_category(
+                            account.get('revenue_current', 0),
+                            account.get('revenue_prev', 0)
+                        )
+                        score = get_revenue_drop_score(category)
+                        revenue_results_list.append((
+                            account.name,
+                            category,
+                            score,
+                            {}
+                        ))
+            
+            # Convert results to format expected by downstream code
+            revenue_results = pd.Series(
+                [(row[1], row[2], row[3]) for row in revenue_results_list],
+                index=[row[0] for row in revenue_results_list]
             )
             
             # Unpack results
@@ -533,20 +574,13 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                       f"Missing Rating: {missing_rating}, "
                       f"Missing revenue_drop_score: {missing_revenue_score}")
     
-    metrics_df['retention_priority_score'] = metrics_df.apply(
-        lambda row: calculate_retention_priority(
-            tier=row.get('Current_Tier'),
-            activity_rating=row.get('Rating'), 
-            revenue_drop_score=row.get('revenue_drop_score', 0),
-            rapid_drop_alert=row.get('rapid_drop_alert', 0),
-            previous_tier=row.get('Previous_Tier'),
-            event_frequency=row.get('Event_Frequency_Current'),
-            months_active=row.get('months_active_current', []),
-            has_created_event_this_period=row.get('has_event_creation_current', False)
-        ), axis=1
-    )
+    # VECTORIZED retention priority calculation - major performance improvement  
+    from .retention_priority import calculate_retention_priorities, categorize_priorities
     
-    metrics_df['Retention_Priority'] = metrics_df['retention_priority_score'].apply(categorize_priority)
+    priority_scores = calculate_retention_priorities(metrics_df)
+    priority_categories = categorize_priorities(priority_scores)
+    metrics_df['retention_priority_score'] = priority_scores
+    metrics_df['Retention_Priority'] = priority_categories
     
     # Clear retention priority for churned accounts
     metrics_df.loc[metrics_df['Rating'] == 'Churned', 'Retention_Priority'] = ''

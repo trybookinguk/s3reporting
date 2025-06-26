@@ -677,45 +677,71 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                 normal_indices = np.where(normal_mask)[0]
                 normal_accounts = eligible_accounts.iloc[normal_indices].copy()
                 
-                # Vectorized check for seasonal patterns
-                # For Regular/Seasonal/Annual accounts, check if in active period
+                # Rapid drop detection only makes sense for Continuous and Regular accounts
+                # These are accounts that have consistent activity throughout the year
+                is_continuous = normal_accounts['Event_Frequency_Current'] == 'Continuous'
                 is_regular = normal_accounts['Event_Frequency_Current'] == 'Regular'
-                is_seasonal = normal_accounts['Event_Frequency_Current'] == 'Seasonal'
-                is_annual = normal_accounts['Event_Frequency_Current'] == 'Annual'
-                is_seasonal_pattern = is_regular | is_seasonal | is_annual
                 
-                # Vectorized month checking
-                previous_month = (current_month - 1) if current_month > 1 else 12
+                # Only check rapid drops for continuous/regular accounts
+                eligible_for_rapid_check = is_continuous | is_regular
                 
-                # Check if current or previous month is in Months_Active list
-                # This is tricky to vectorize with lists, so we'll use a different approach
-                in_active_period = pd.Series(True, index=normal_accounts.index)
+                # For Regular accounts, also check if we're in their active selling period
+                in_active_period = is_continuous  # Continuous always active
                 
-                if is_seasonal_pattern.any() and 'Months_Active' in normal_accounts.columns:
-                    # Create month lookup strings for current and previous month
+                if is_regular.any() and 'Months_Active' in normal_accounts.columns:
+                    # Get avg_lead_days from the parent metrics_df
+                    # Match by Account_Name_Clean since that's the common identifier
+                    avg_lead_days = pd.Series(30, index=normal_accounts.index)  # Default 30 days
+                    
+                    if 'avg_lead_days' in metrics_df.columns:
+                        # Map avg_lead_days using account names
+                        for idx in normal_accounts.index:
+                            account_name = eligible_accounts.loc[idx, 'Account_Name_Clean']
+                            parent_rows = metrics_df[metrics_df['Account_Name_Clean'] == account_name]
+                            if len(parent_rows) > 0:
+                                lead_days_value = parent_rows.iloc[0]['avg_lead_days']
+                                if pd.notna(lead_days_value) and lead_days_value > 0:
+                                    avg_lead_days[idx] = lead_days_value
+                    
+                    # Calculate the date range when we expect ticket sales
+                    # If avg_lead_days is 30, we expect sales 30 days before events
+                    from datetime import datetime, timedelta
+                    today = pd.Timestamp(TODAY)
+                    
+                    # Check if Regular accounts are in or approaching their active months
                     month_names = ['', 'January', 'February', 'March', 'April', 'May', 'June',
                                   'July', 'August', 'September', 'October', 'November', 'December']
-                    current_month_name = month_names[current_month]
-                    previous_month_name = month_names[previous_month]
                     
-                    # Vectorized check if Months_Active contains current or previous month
-                    # Convert lists to strings for vectorized operations
-                    months_active_str = normal_accounts['Months_Active'].fillna('[]').astype(str)
+                    # For each Regular account, check if we're in the selling window
+                    regular_in_active = pd.Series(False, index=normal_accounts.index)
                     
-                    has_current_month = months_active_str.str.contains(current_month_name, na=False)
-                    has_previous_month = months_active_str.str.contains(previous_month_name, na=False)
+                    for idx in normal_accounts[is_regular].index:
+                        lead_days = avg_lead_days[idx] if avg_lead_days[idx] > 0 else 30  # Default 30 days
+                        months_active_str = str(normal_accounts.loc[idx, 'Months_Active'])
+                        
+                        # Check if any active month falls within current date + lead days
+                        future_date = today + timedelta(days=lead_days)
+                        current_month_num = today.month
+                        future_month_num = future_date.month
+                        
+                        # Get list of months we should be checking (from now until lead days in future)
+                        months_to_check = []
+                        if future_month_num >= current_month_num:
+                            months_to_check = list(range(current_month_num, future_month_num + 1))
+                        else:
+                            # Wrap around year
+                            months_to_check = list(range(current_month_num, 13)) + list(range(1, future_month_num + 1))
+                        
+                        # Check if any of these months are in the account's active months
+                        for month_num in months_to_check:
+                            if month_names[month_num] in months_active_str:
+                                regular_in_active[idx] = True
+                                break
                     
-                    # Different logic for different patterns:
-                    # - Annual: Only check in the event month (not after)
-                    # - Regular/Seasonal: Check if in or near active period
-                    annual_in_active = is_annual & has_current_month  # Annual only during event month
-                    regular_seasonal_in_active = (is_regular | is_seasonal) & (has_current_month | has_previous_month)
-                    continuous_always_active = ~is_seasonal_pattern  # Continuous accounts always active
-                    
-                    in_active_period = annual_in_active | regular_seasonal_in_active | continuous_always_active
+                    in_active_period = in_active_period | regular_in_active
                 
-                # Apply revenue drop checks only to accounts in active period
-                check_drops_mask = in_active_period & (comparison_revenues[normal_indices] >= MIN_REVENUE_FOR_RAPID_DROP)
+                # Apply revenue drop checks only to eligible accounts with sufficient revenue
+                check_drops_mask = eligible_for_rapid_check & in_active_period & (comparison_revenues[normal_indices] >= MIN_REVENUE_FOR_RAPID_DROP)
                 
                 # Vectorized severity scoring
                 drop_ratios_subset = drop_ratios[normal_indices]
@@ -731,16 +757,13 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                 eligible_scores[normal_indices] = np.select(conditions, choices, default=0)
                 
                 # Log accounts skipped
-                skipped_count = is_seasonal_pattern.sum() - in_active_period[is_seasonal_pattern].sum()
-                if skipped_count > 0:
-                    logger.info(f"Skipped rapid drop detection for {skipped_count} accounts outside their active periods")
-                    # Log specific breakdown
-                    annual_skipped = (is_annual & ~annual_in_active).sum()
-                    regular_seasonal_skipped = ((is_regular | is_seasonal) & ~regular_seasonal_in_active).sum()
-                    if annual_skipped > 0:
-                        logger.info(f"  - {annual_skipped} annual accounts not in event month")
-                    if regular_seasonal_skipped > 0:
-                        logger.info(f"  - {regular_seasonal_skipped} regular/seasonal accounts outside active periods")
+                seasonal_annual_count = (~is_continuous & ~is_regular).sum()
+                regular_outside_window = (is_regular & ~regular_in_active).sum()
+                
+                if seasonal_annual_count > 0:
+                    logger.info(f"Skipped rapid drop detection for {seasonal_annual_count} seasonal/annual accounts (not applicable)")
+                if regular_outside_window > 0:
+                    logger.info(f"Skipped rapid drop detection for {regular_outside_window} regular accounts outside selling window")
             
             # Assign scores back to main array
             rapid_drop_scores[eligible_indices] = eligible_scores

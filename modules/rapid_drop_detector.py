@@ -21,12 +21,17 @@ def detect_rapid_drop(account_data, account_info):
     """
     Main entry point for rapid revenue drop detection.
     
+    NOTE: Rapid drop detection is only applicable to Continuous and Regular accounts
+    that have consistent activity patterns. Seasonal and Annual accounts are excluded
+    as they naturally have long inactive periods.
+    
     Args:
         account_data: DataFrame with booking data for the account
         account_info: Dict with account metadata including:
             - tier: Account tier classification
             - event_frequency: Event frequency pattern (Continuous/Regular/Seasonal/Annual)
             - months_active: List of months (1-12) when account typically has events
+            - avg_lead_days: Average days between ticket sale and event (optional)
             
     Returns:
         dict: {
@@ -47,19 +52,24 @@ def detect_rapid_drop(account_data, account_info):
             'details': 'Account tier too low for rapid drop detection'
         }
     
-    # Get event frequency and months active
+    # Get event frequency
     event_frequency = account_info.get('event_frequency', 'Unknown')
-    months_active = account_info.get('months_active', [])
     
-    # Route to appropriate detection method based on event frequency
+    # Rapid drop detection only applies to Continuous and Regular accounts
+    if event_frequency not in ['Continuous', 'Regular']:
+        return {
+            'score': 0,
+            'severity': 'none',
+            'details': f'Rapid drop detection not applicable to {event_frequency} accounts'
+        }
+    
+    # Route to appropriate detection method
     if event_frequency == 'Continuous':
         return check_continuous_drop(account_data)
     elif event_frequency == 'Regular':
-        return check_regular_drop(account_data, months_active)
-    elif event_frequency == 'Seasonal':
-        return check_seasonal_drop(account_data, months_active)
-    elif event_frequency == 'Annual':
-        return check_annual_drop(account_data, months_active)
+        months_active = account_info.get('months_active', [])
+        avg_lead_days = account_info.get('avg_lead_days', 30)
+        return check_regular_drop(account_data, months_active, avg_lead_days)
     else:
         return {
             'score': 0,
@@ -89,28 +99,44 @@ def check_continuous_drop(account_data):
     return result
 
 
-def check_regular_drop(account_data, months_active):
+def check_regular_drop(account_data, months_active, avg_lead_days=30):
     """
     Check for revenue drops in regular accounts (events most months).
-    Only checks if we're in or near an active month.
+    Only checks if we're within the typical selling window for their active months.
     
     Args:
         account_data: DataFrame with booking data
         months_active: List of months (1-12) when account typically has events
+        avg_lead_days: Average days between ticket sale and event
         
     Returns:
         dict: Drop detection results
     """
-    # Check if we should expect activity in the current period
-    current_month = datetime.now().month
-    previous_month = (current_month - 1) if current_month > 1 else 12
+    # Check if we should expect activity based on selling window
+    from datetime import datetime, timedelta
+    today = datetime.now()
+    current_month = today.month
     
-    # Check if current or previous month is typically active
-    if current_month not in months_active and previous_month not in months_active:
+    # Calculate the date range when we expect ticket sales
+    future_date = today + timedelta(days=avg_lead_days)
+    future_month = future_date.month
+    
+    # Get list of months we should be checking (from now until lead days in future)
+    months_to_check = []
+    if future_month >= current_month:
+        months_to_check = list(range(current_month, future_month + 1))
+    else:
+        # Wrap around year
+        months_to_check = list(range(current_month, 13)) + list(range(1, future_month + 1))
+    
+    # Check if any of these months overlap with active months
+    in_selling_window = any(month in months_active for month in months_to_check)
+    
+    if not in_selling_window:
         return {
             'score': 0,
             'severity': 'none',
-            'details': f'Not in active period (active months: {months_active})'
+            'details': f'Not in selling window (active months: {months_active}, lead time: {avg_lead_days} days)'
         }
     
     # Calculate current and comparison period revenue
@@ -121,99 +147,13 @@ def check_regular_drop(account_data, months_active):
     result = calculate_drop_severity(current_revenue, comparison_revenue)
     result['detection_method'] = 'regular'
     result['active_months'] = months_active
+    result['avg_lead_days'] = avg_lead_days
     
     return result
 
 
-def check_seasonal_drop(account_data, months_active):
-    """
-    Check for revenue drops in seasonal accounts.
-    Only checks during their active season.
-    
-    Args:
-        account_data: DataFrame with booking data
-        months_active: List of months (1-12) when account typically has events
-        
-    Returns:
-        dict: Drop detection results
-    """
-    # Check if we're in the active season
-    current_month = datetime.now().month
-    
-    # Allow for season boundaries (check adjacent months too)
-    extended_active_months = set(months_active)
-    for month in months_active:
-        # Add month before
-        prev_month = (month - 1) if month > 1 else 12
-        extended_active_months.add(prev_month)
-        # Add month after  
-        next_month = (month + 1) if month < 12 else 1
-        extended_active_months.add(next_month)
-    
-    if current_month not in extended_active_months:
-        return {
-            'score': 0,
-            'severity': 'none',
-            'details': f'Not in active season (active months: {months_active})'
-        }
-    
-    # For seasonal accounts, compare to same period last year
-    current_revenue = calculate_period_revenue(account_data, CURRENT_PERIOD_WEEKS)
-    
-    # Get revenue from same period last year (52 weeks ago)
-    yoy_revenue = calculate_period_revenue(account_data, COMPARISON_PERIOD_WEEKS, offset=52)
-    
-    # Calculate drop severity
-    result = calculate_drop_severity(current_revenue, yoy_revenue)
-    result['detection_method'] = 'seasonal_yoy'
-    result['active_months'] = months_active
-    
-    return result
-
-
-def check_annual_drop(account_data, months_active):
-    """
-    Check for revenue drops in annual accounts.
-    Only checks during their specific event month.
-    
-    Args:
-        account_data: DataFrame with booking data
-        months_active: List of months (1-12) when account typically has events
-        
-    Returns:
-        dict: Drop detection results
-    """
-    # Annual accounts should have exactly one active month
-    if not months_active or len(months_active) != 1:
-        return {
-            'score': 0,
-            'severity': 'none',
-            'details': 'Annual account without clear single month pattern'
-        }
-    
-    event_month = months_active[0]
-    current_month = datetime.now().month
-    
-    # Check if we're in or just after the event month
-    if current_month != event_month and current_month != (event_month % 12) + 1:
-        return {
-            'score': 0,
-            'severity': 'none',
-            'details': f'Not in event period (event month: {event_month})'
-        }
-    
-    # For annual accounts, compare current month to same month last year
-    current_revenue = calculate_period_revenue(account_data, 8)  # 8 weeks to capture full event
-    
-    # Get revenue from same period last year
-    yoy_revenue = calculate_period_revenue(account_data, 8, offset=52)
-    
-    # Calculate drop severity
-    result = calculate_drop_severity(current_revenue, yoy_revenue)
-    result['detection_method'] = 'annual_yoy'
-    result['event_month'] = event_month
-    
-    return result
+# Seasonal and Annual drop detection functions removed
+# Rapid drop detection is only applicable to Continuous and Regular accounts
 
 
 def calculate_period_revenue(account_data, weeks, offset=0):

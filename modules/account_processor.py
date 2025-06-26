@@ -679,7 +679,10 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                 
                 # Vectorized check for seasonal patterns
                 # For Regular/Seasonal/Annual accounts, check if in active period
-                is_seasonal_pattern = normal_accounts['Event_Frequency_Current'].isin(['Regular', 'Seasonal', 'Annual'])
+                is_regular = normal_accounts['Event_Frequency_Current'] == 'Regular'
+                is_seasonal = normal_accounts['Event_Frequency_Current'] == 'Seasonal'
+                is_annual = normal_accounts['Event_Frequency_Current'] == 'Annual'
+                is_seasonal_pattern = is_regular | is_seasonal | is_annual
                 
                 # Vectorized month checking
                 previous_month = (current_month - 1) if current_month > 1 else 12
@@ -702,8 +705,14 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                     has_current_month = months_active_str.str.contains(current_month_name, na=False)
                     has_previous_month = months_active_str.str.contains(previous_month_name, na=False)
                     
-                    # Only check drops if in or near active period
-                    in_active_period = ~is_seasonal_pattern | has_current_month | has_previous_month
+                    # Different logic for different patterns:
+                    # - Annual: Only check in the event month (not after)
+                    # - Regular/Seasonal: Check if in or near active period
+                    annual_in_active = is_annual & has_current_month  # Annual only during event month
+                    regular_seasonal_in_active = (is_regular | is_seasonal) & (has_current_month | has_previous_month)
+                    continuous_always_active = ~is_seasonal_pattern  # Continuous accounts always active
+                    
+                    in_active_period = annual_in_active | regular_seasonal_in_active | continuous_always_active
                 
                 # Apply revenue drop checks only to accounts in active period
                 check_drops_mask = in_active_period & (comparison_revenues[normal_indices] >= MIN_REVENUE_FOR_RAPID_DROP)
@@ -725,6 +734,13 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                 skipped_count = is_seasonal_pattern.sum() - in_active_period[is_seasonal_pattern].sum()
                 if skipped_count > 0:
                     logger.info(f"Skipped rapid drop detection for {skipped_count} accounts outside their active periods")
+                    # Log specific breakdown
+                    annual_skipped = (is_annual & ~annual_in_active).sum()
+                    regular_seasonal_skipped = ((is_regular | is_seasonal) & ~regular_seasonal_in_active).sum()
+                    if annual_skipped > 0:
+                        logger.info(f"  - {annual_skipped} annual accounts not in event month")
+                    if regular_seasonal_skipped > 0:
+                        logger.info(f"  - {regular_seasonal_skipped} regular/seasonal accounts outside active periods")
             
             # Assign scores back to main array
             rapid_drop_scores[eligible_indices] = eligible_scores

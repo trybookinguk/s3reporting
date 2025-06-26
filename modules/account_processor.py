@@ -652,19 +652,48 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                     1.0  # No drop if no comparison revenue
                 )
             
-            # Vectorized severity scoring with minimum revenue threshold
-            # Only flag drops if comparison revenue meets minimum threshold
-            revenue_meets_threshold = comparison_revenues >= MIN_REVENUE_FOR_RAPID_DROP
+            # Check for education accounts during summer months
+            # Education accounts get special handling during expected quiet periods
+            current_month = pd.Timestamp(TODAY).month
+            is_summer = current_month in [7, 8]  # July, August
             
-            eligible_scores = np.where(
-                revenue_meets_threshold,
-                np.select(
-                    [drop_ratios < 0.25, drop_ratios < 0.50, drop_ratios < 0.75],
-                    [3, 2, 1],
-                    default=0
-                ),
-                0  # No alert if revenue below threshold
-            )
+            # Safely check for education industry
+            is_education = pd.Series(False, index=eligible_accounts.index)
+            if 'Industry' in eligible_accounts.columns:
+                is_education = eligible_accounts['Industry'].fillna('').str.lower() == 'education'
+            
+            # For education accounts in summer, only flag complete revenue drops
+            # For all others, use normal percentage thresholds
+            eligible_scores = np.zeros(len(eligible_accounts), dtype=int)
+            
+            # Education accounts in summer - only flag if revenue completely stopped
+            edu_summer_mask = is_education & is_summer
+            if edu_summer_mask.any():
+                edu_indices = np.where(edu_summer_mask)[0]
+                for idx in edu_indices:
+                    if current_revenues[idx] == 0 and comparison_revenues[idx] >= MIN_REVENUE_FOR_RAPID_DROP:
+                        eligible_scores[idx] = 2  # Moderate alert for complete stop
+            
+            # All other accounts (non-education or not summer) - normal percentage thresholds
+            normal_mask = ~edu_summer_mask
+            if normal_mask.any():
+                normal_indices = np.where(normal_mask)[0]
+                
+                # Vectorized severity scoring with minimum revenue threshold
+                revenue_meets_threshold = comparison_revenues[normal_indices] >= MIN_REVENUE_FOR_RAPID_DROP
+                
+                normal_scores = np.where(
+                    revenue_meets_threshold,
+                    np.select(
+                        [drop_ratios[normal_indices] < 0.25, 
+                         drop_ratios[normal_indices] < 0.50, 
+                         drop_ratios[normal_indices] < 0.75],
+                        [3, 2, 1],
+                        default=0
+                    ),
+                    0  # No alert if revenue below threshold
+                )
+                eligible_scores[normal_indices] = normal_scores
             
             # Assign scores back to main array
             rapid_drop_scores[eligible_indices] = eligible_scores

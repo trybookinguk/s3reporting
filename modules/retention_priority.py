@@ -174,12 +174,22 @@ def calculate_retention_priorities(df):
     severe_rapid_mask = rapid_drop_alerts == 3
     priority_scores[severe_rapid_mask] = np.maximum(priority_scores[severe_rapid_mask], 20)
     
-    # High-value accounts with significant drops (score 2) - boost to High/Very High boundary
+    # High-value accounts with significant drops (score 2) - boost but check other factors
     high_value_significant_mask = (
         (rapid_drop_alerts == 2) & 
         df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4'])
     )
-    priority_scores[high_value_significant_mask] = np.maximum(priority_scores[high_value_significant_mask], 19)
+    # Only push to Very High if they also have other risk factors
+    # Otherwise keep in High priority
+    at_risk_mask = df['Rating'].isin(['At Risk', 'Outreach'])
+    
+    # If At Risk/Outreach + rapid drop = Very High
+    high_value_sig_at_risk = high_value_significant_mask & at_risk_mask
+    priority_scores[high_value_sig_at_risk] = np.maximum(priority_scores[high_value_sig_at_risk], 19)
+    
+    # If Active but rapid drop = High priority  
+    high_value_sig_active = high_value_significant_mask & (~at_risk_mask)
+    priority_scores[high_value_sig_active] = np.maximum(priority_scores[high_value_sig_active], 16)
     
     # Critical rapid drops for top accounts (score 3) - definitely Very High
     critical_rapid_mask = (
@@ -210,7 +220,7 @@ def categorize_priorities(priority_scores):
     # Adjusted thresholds for better distribution
     categories = pd.cut(
         priority_scores,
-        bins=[-np.inf, 0, 5, 10, 18, np.inf],
+        bins=[-np.inf, 0, 5, 10, 20, np.inf],
         labels=['Excluded', 'Low', 'Medium', 'High', 'Very High'],
         include_lowest=True
     ).astype(str)

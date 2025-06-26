@@ -9,7 +9,8 @@ import time
 from datetime import timedelta
 from .utils.config import (
     CUTOFF_365, CUTOFF_730, TODAY, MIN_TICKETS_FOR_ACTIVE,
-    EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS
+    EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS,
+    MIN_REVENUE_FOR_RAPID_DROP
 )
 from .tier_calculator import determine_tier_from_percentiles, batch_determine_tiers
 from .event_frequency import classify_event_frequency, get_months_active_fingerprint, format_months_active_for_zoho, batch_classify_frequencies
@@ -647,11 +648,18 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                     1.0  # No drop if no comparison revenue
                 )
             
-            # Vectorized severity scoring
-            eligible_scores = np.select(
-                [drop_ratios < 0.25, drop_ratios < 0.50, drop_ratios < 0.75],
-                [3, 2, 1],
-                default=0
+            # Vectorized severity scoring with minimum revenue threshold
+            # Only flag drops if comparison revenue meets minimum threshold
+            revenue_meets_threshold = comparison_revenues >= MIN_REVENUE_FOR_RAPID_DROP
+            
+            eligible_scores = np.where(
+                revenue_meets_threshold,
+                np.select(
+                    [drop_ratios < 0.25, drop_ratios < 0.50, drop_ratios < 0.75],
+                    [3, 2, 1],
+                    default=0
+                ),
+                0  # No alert if revenue below threshold
             )
             
             # Assign scores back to main array

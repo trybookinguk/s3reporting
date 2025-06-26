@@ -5,7 +5,7 @@ Focuses on detecting sudden revenue drops within 4-8 week windows for Tier 3+ ac
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
-from .utils.config import REVENUE_DROP_THRESHOLDS
+from .utils.config import REVENUE_DROP_THRESHOLDS, MIN_REVENUE_FOR_RAPID_DROP
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +269,17 @@ def calculate_drop_severity(current_revenue, comparison_revenue):
     Returns:
         dict: Drop detection results with score and severity
     """
+    # Check if revenue meets minimum threshold
+    if comparison_revenue < MIN_REVENUE_FOR_RAPID_DROP:
+        return {
+            'score': 0,
+            'severity': 'none',
+            'current_revenue': round(current_revenue, 2),
+            'comparison_revenue': round(comparison_revenue, 2),
+            'drop_percentage': 0,
+            'details': f'Revenue below threshold (£{MIN_REVENUE_FOR_RAPID_DROP})'
+        }
+    
     # Handle edge cases
     if comparison_revenue == 0:
         if current_revenue == 0:

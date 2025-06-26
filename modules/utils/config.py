@@ -96,6 +96,9 @@ REVENUE_DROP_THRESHOLDS = {
     "moderate": 0.75     # <75% of comparison period
 }
 
+# Minimum revenue threshold for rapid drop detection (£)
+MIN_REVENUE_FOR_RAPID_DROP = 200
+
 # Quintile drop thresholds
 QUINTILE_DROP_SCORING = {
     "severe": 4,         # Drop of 4+ quintiles

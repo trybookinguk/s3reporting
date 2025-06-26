@@ -190,7 +190,9 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         except (ValueError, TypeError):
             return None
     
-    metrics_df['Account_Name_Clean'] = metrics_df['Account_Name'].apply(convert_account_name)
+    # Vectorized account name conversion (faster than .apply())
+    account_names_list = metrics_df['Account_Name'].tolist()
+    metrics_df['Account_Name_Clean'] = [convert_account_name(name) for name in account_names_list]
     
     # Filter out invalid account names
     valid_mask = metrics_df['Account_Name_Clean'].notna()
@@ -210,18 +212,24 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     logger.info("Extracting event data components")
     event_start = time.time()
     
-    metrics_df['event_months_current'] = metrics_df['_event_data'].apply(lambda x: x.get('event_months_current', set()))
-    metrics_df['event_months_previous'] = metrics_df['_event_data'].apply(lambda x: x.get('event_months_previous', set()))
-    metrics_df['event_months_freq_current'] = metrics_df['_event_data'].apply(lambda x: x.get('event_months_freq_current', set()))
-    metrics_df['event_months_freq_previous'] = metrics_df['_event_data'].apply(lambda x: x.get('event_months_freq_previous', set()))
-    metrics_df['event_creation_info'] = metrics_df['_event_data'].apply(lambda x: x.get('event_creation_info', {}))
-    metrics_df['last_booking_date'] = metrics_df['_event_data'].apply(lambda x: x.get('last_booking_date'))
+    # Vectorized event data extraction (much faster than .apply())
+    event_data_list = metrics_df['_event_data'].tolist()
+    
+    metrics_df['event_months_current'] = [x.get('event_months_current', set()) for x in event_data_list]
+    metrics_df['event_months_previous'] = [x.get('event_months_previous', set()) for x in event_data_list]
+    metrics_df['event_months_freq_current'] = [x.get('event_months_freq_current', set()) for x in event_data_list]
+    metrics_df['event_months_freq_previous'] = [x.get('event_months_freq_previous', set()) for x in event_data_list]
+    metrics_df['event_creation_info'] = [x.get('event_creation_info', {}) for x in event_data_list]
+    metrics_df['last_booking_date'] = [x.get('last_booking_date') for x in event_data_list]
     
     logger.info(f"Event data extraction completed in {time.time() - event_start:.1f}s")
     
-    # Calculate month counts
-    metrics_df['freq_month_count_current'] = metrics_df['event_months_freq_current'].apply(len)
-    metrics_df['freq_month_count_previous'] = metrics_df['event_months_freq_previous'].apply(len)
+    # Vectorized month count calculations (much faster than .apply(len))
+    freq_current_list = metrics_df['event_months_freq_current'].tolist()
+    freq_previous_list = metrics_df['event_months_freq_previous'].tolist()
+    
+    metrics_df['freq_month_count_current'] = [len(x) if x else 0 for x in freq_current_list]
+    metrics_df['freq_month_count_previous'] = [len(x) if x else 0 for x in freq_previous_list]
     
     # Process account lookup data if available
     if account_lookup:
@@ -305,48 +313,77 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         
         return avg_lead_days, last_event_date
     
-    event_metrics = metrics_df['event_creation_info'].apply(calculate_event_metrics)
-    metrics_df['avg_lead_days'] = event_metrics.apply(lambda x: x[0])
-    metrics_df['last_event_date'] = event_metrics.apply(lambda x: x[1])
+    # Vectorized event metrics calculation (replaces slow .apply() chain)
+    event_creation_list = metrics_df['event_creation_info'].tolist()
+    avg_lead_list = []
+    last_event_list = []
     
-    # Calculate days since last activity
-    metrics_df['days_since_last'] = metrics_df['last_booking_date'].apply(
-        lambda x: (TODAY - x.date()).days if x else 999
-    )
+    for event_creation_info in event_creation_list:
+        if not event_creation_info:
+            avg_lead_list.append(60)
+            last_event_list.append(None)
+            continue
+        
+        lead_times = [info['lead_days'] for info in event_creation_info.values() if info['lead_days'] > 0]
+        avg_lead_days = int(sum(lead_times) / len(lead_times)) if lead_times else 60
+        
+        event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]
+        last_event_date = max(event_dates).date() if event_dates else None
+        
+        avg_lead_list.append(avg_lead_days)
+        last_event_list.append(last_event_date)
+    
+    metrics_df['avg_lead_days'] = avg_lead_list
+    metrics_df['last_event_date'] = last_event_list
+    
+    # Vectorized days since last activity calculation
+    last_booking_list = metrics_df['last_booking_date'].tolist()
+    days_since_list = [
+        (TODAY - x.date()).days if x else 999 
+        for x in last_booking_list
+    ]
+    metrics_df['days_since_last'] = days_since_list
     
     # VECTORIZED months active patterns processing
     print("  Processing months active patterns...")
     
-    # Vectorized months active fingerprint extraction
-    def get_months_vectorized(event_months_series):
-        """Vectorized version of get_months_active_fingerprint"""
-        return event_months_series.apply(
-            lambda months_set: sorted(list({month for year, month in months_set})) if months_set else []
-        )
+    # Truly vectorized months active fingerprint extraction
+    def get_months_vectorized(event_months_list):
+        """Fully vectorized version of get_months_active_fingerprint"""
+        return [
+            sorted(list({month for year, month in months_set})) if months_set else []
+            for months_set in event_months_list
+        ]
     
-    def format_months_vectorized(months_list_series):
-        """Vectorized version of format_months_active_for_zoho"""
+    def format_months_vectorized(months_list):
+        """Fully vectorized version of format_months_active_for_zoho"""
         month_names = ['', 'January', 'February', 'March', 'April', 'May', 'June',
                       'July', 'August', 'September', 'October', 'November', 'December']
-        return months_list_series.apply(
-            lambda months: [month_names[m] for m in months if 1 <= m <= 12] if isinstance(months, list) else []
-        )
+        return [
+            [month_names[m] for m in months if 1 <= m <= 12] if isinstance(months, list) else []
+            for months in months_list
+        ]
     
     # Apply vectorized functions
-    metrics_df['months_active_current'] = get_months_vectorized(metrics_df['event_months_freq_current'])
-    metrics_df['Months_Active'] = format_months_vectorized(metrics_df['months_active_current'])
+    metrics_df['months_active_current'] = get_months_vectorized(metrics_df['event_months_freq_current'].tolist())
+    metrics_df['Months_Active'] = format_months_vectorized(metrics_df['months_active_current'].tolist())
     
     # Vectorized historical months combination
-    metrics_df['all_freq_months'] = metrics_df['event_months_freq_current'].combine(
-        metrics_df['event_months_freq_previous'], 
-        lambda x, y: (x if x else set()) | (y if y else set())
-    )
-    metrics_df['months_active_historical'] = get_months_vectorized(metrics_df['all_freq_months'])
+    current_months_list = metrics_df['event_months_freq_current'].tolist()
+    previous_months_list = metrics_df['event_months_freq_previous'].tolist()
     
-    # Check if has historical data
+    all_freq_months_list = [
+        (current if current else set()) | (previous if previous else set())
+        for current, previous in zip(current_months_list, previous_months_list)
+    ]
+    metrics_df['all_freq_months'] = all_freq_months_list
+    metrics_df['months_active_historical'] = get_months_vectorized(all_freq_months_list)
+    
+    # Check if has historical data (vectorized)
+    previous_months_lengths = [len(x) if x else 0 for x in metrics_df['event_months_previous'].tolist()]
     metrics_df['has_historical'] = (
         (metrics_df['years_loyalty'] > 0) | 
-        (metrics_df['event_months_previous'].apply(len) > 0)
+        (pd.Series(previous_months_lengths, index=metrics_df.index) > 0)
     )
     
     # VECTORIZED activity rating calculation - massive performance improvement
@@ -471,35 +508,45 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                 index=[row[0] for row in revenue_results_list]
             )
             
-            # Unpack results
-            metrics_df.loc[has_industry, 'revenue_drop_category'] = revenue_results.apply(lambda x: x[0])
-            metrics_df.loc[has_industry, 'revenue_drop_score'] = revenue_results.apply(lambda x: x[1])
-            metrics_df.loc[has_industry, 'revenue_drop_details'] = revenue_results.apply(lambda x: x[2])
+            # Vectorized results unpacking (much faster than .apply())
+            revenue_list = revenue_results.tolist()
+            metrics_df.loc[has_industry, 'revenue_drop_category'] = [x[0] for x in revenue_list]
+            metrics_df.loc[has_industry, 'revenue_drop_score'] = [x[1] for x in revenue_list]
+            metrics_df.loc[has_industry, 'revenue_drop_details'] = [x[2] for x in revenue_list]
         
         # Apply simple revenue drop calculation for accounts without industry data
         no_industry = ~has_industry
         if no_industry.any():
             print(f"    Processing {no_industry.sum()} accounts without industry data...")
-            metrics_df.loc[no_industry, 'revenue_drop_category'] = metrics_df.loc[no_industry].apply(
-                lambda row: calculate_revenue_drop_category(
-                    row.get('revenue_current', 0),
-                    row.get('revenue_prev', 0)
-                ), axis=1
-            )
-            metrics_df.loc[no_industry, 'revenue_drop_score'] = metrics_df.loc[no_industry, 'revenue_drop_category'].apply(
-                get_revenue_drop_score
-            )
+            # Vectorized revenue drop calculation for accounts without industry
+            no_industry_subset = metrics_df.loc[no_industry]
+            revenue_current_list = no_industry_subset['revenue_current'].tolist()
+            revenue_prev_list = no_industry_subset['revenue_prev'].tolist()
+            
+            drop_categories = [
+                calculate_revenue_drop_category(current, prev)
+                for current, prev in zip(revenue_current_list, revenue_prev_list)
+            ]
+            drop_scores = [get_revenue_drop_score(cat) for cat in drop_categories]
+            
+            metrics_df.loc[no_industry, 'revenue_drop_category'] = drop_categories
+            metrics_df.loc[no_industry, 'revenue_drop_score'] = drop_scores
             metrics_df.loc[no_industry, 'revenue_drop_details'] = {}
     else:
         # No booking data or no Industry column - apply simple calculation to all
         print("  Applying simple revenue drop calculation to all accounts...")
-        metrics_df['revenue_drop_category'] = metrics_df.apply(
-            lambda row: calculate_revenue_drop_category(
-                row.get('revenue_current', 0),
-                row.get('revenue_prev', 0)
-            ), axis=1
-        )
-        metrics_df['revenue_drop_score'] = metrics_df['revenue_drop_category'].apply(get_revenue_drop_score)
+        # Vectorized revenue drop calculation for all accounts
+        revenue_current_list = metrics_df['revenue_current'].tolist()
+        revenue_prev_list = metrics_df['revenue_prev'].tolist()
+        
+        drop_categories = [
+            calculate_revenue_drop_category(current, prev)
+            for current, prev in zip(revenue_current_list, revenue_prev_list)
+        ]
+        drop_scores = [get_revenue_drop_score(cat) for cat in drop_categories]
+        
+        metrics_df['revenue_drop_category'] = drop_categories
+        metrics_df['revenue_drop_score'] = drop_scores
         metrics_df['revenue_drop_details'] = None
     
     # Calculate rapid drop alerts for Tier 3+ accounts
@@ -603,7 +650,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         '_retention_priority_score': metrics_df['retention_priority_score'],
         '_avg_lead_days': metrics_df['avg_lead_days'],
         '_last_event_date': metrics_df['last_event_date'],
-        '_month_count_current': metrics_df['event_months_current'].apply(len),
+        '_month_count_current': [len(x) if x else 0 for x in metrics_df['event_months_current'].tolist()],
         '_months_active_list': metrics_df['months_active_current'],
         '_revenue_current': metrics_df['revenue_current'],
         '_revenue_prev': metrics_df['revenue_prev'],

@@ -22,6 +22,12 @@ def calculate_retention_priorities(df):
     Returns:
         pd.Series: Retention priority scores for all accounts
     """
+    # Input validation
+    required_columns = ['Current_Tier', 'Rating', 'revenue_drop_score', 'rapid_drop_alert']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+    
     # Initialize result series
     priority_scores = pd.Series(0, index=df.index, dtype='int64')
     
@@ -56,15 +62,15 @@ def calculate_retention_priorities(df):
     # Vectorized revenue score handling
     revenue_scores = pd.Series(0, index=df.index)
     
-    # Handle string revenue scores
-    string_revenue_mask = df['revenue_drop_score'].astype(str).str.contains('evere|ignificant|oderate', na=False)
+    # Handle string revenue scores first (takes precedence)
+    string_revenue_mask = df['revenue_drop_score'].astype(str).str.match(r'^(Severe|Significant|Moderate|Stable)$', na=False)
     revenue_score_map = {'Severe': 3, 'Significant': 2, 'Moderate': 1, 'Stable': 0}
     
     if string_revenue_mask.any():
         revenue_scores[string_revenue_mask] = df.loc[string_revenue_mask, 'revenue_drop_score'].map(revenue_score_map).fillna(0)
     
-    # Handle numeric revenue scores
-    numeric_revenue_mask = pd.to_numeric(df['revenue_drop_score'], errors='coerce').notna()
+    # Handle numeric revenue scores only for non-string values
+    numeric_revenue_mask = (~string_revenue_mask) & pd.to_numeric(df['revenue_drop_score'], errors='coerce').notna()
     if numeric_revenue_mask.any():
         revenue_scores[numeric_revenue_mask] = pd.to_numeric(
             df.loc[numeric_revenue_mask, 'revenue_drop_score'], errors='coerce'
@@ -103,22 +109,20 @@ def calculate_retention_priorities(df):
             
             indices_with_drops = has_previous_tier[has_previous_tier].index
             
-            # Major drop boost
-            if major_drop_mask.any():
-                major_drop_indices = indices_with_drops[major_drop_mask[tier_drop_mask]]
-                priority_scores[major_drop_indices] += 15
+            # Create full boolean masks for safe indexing
+            full_major_mask = has_previous_tier.copy()
+            full_major_mask.loc[has_previous_tier] = tier_drop_mask & major_drop_mask
+            full_significant_mask = has_previous_tier.copy()
+            full_significant_mask.loc[has_previous_tier] = tier_drop_mask & significant_drop_mask
+            full_minor_mask = has_previous_tier.copy()
+            full_minor_mask.loc[has_previous_tier] = tier_drop_mask & minor_drop_mask
             
-            # Significant drop boost
-            if significant_drop_mask.any():
-                significant_drop_indices = indices_with_drops[significant_drop_mask[tier_drop_mask]]
-                priority_scores[significant_drop_indices] += 10
-            
-            # Minor drop boost
-            if minor_drop_mask.any():
-                minor_drop_indices = indices_with_drops[minor_drop_mask[tier_drop_mask]]
-                priority_scores[minor_drop_indices] += 5
+            # Apply boosts using full boolean masks
+            priority_scores[full_major_mask] += 15
+            priority_scores[full_significant_mask] += 10
+            priority_scores[full_minor_mask] += 5
     
-    # Annual reachout boost (vectorized)
+    # Annual reachout boost (fully vectorized)
     annual_mask = (
         (df['Event_Frequency_Current'] == 'Annual') &
         df['months_active_current'].notna() &
@@ -130,18 +134,33 @@ def calculate_retention_priorities(df):
         current_month = datetime.now().month
         month_name_to_number = {calendar.month_name[i]: i for i in range(1, 13)}
         
-        # Check each annual account
-        for idx in df[annual_mask].index:
-            months_active = df.loc[idx, 'months_active_current']
-            if isinstance(months_active, list):
-                for active_month_name in months_active:
-                    if active_month_name in month_name_to_number:
-                        active_month_num = month_name_to_number[active_month_name]
-                        months_until_event = (active_month_num - current_month) % 12
-                        
-                        if months_until_event in [1, 2]:
-                            priority_scores[idx] = max(priority_scores[idx], 18)
-                            break
+        # Optimized annual reachout boost
+        annual_boost_mask = pd.Series(False, index=df.index)
+        
+        # Process annual accounts with optimized list comprehensions
+        annual_accounts = df[annual_mask]
+        months_to_check = {1, 2}  # Months away to trigger boost
+        
+        # Vectorized processing using list comprehension for efficiency
+        for idx in annual_accounts.index:
+            months_active = annual_accounts.loc[idx, 'months_active_current']
+            if isinstance(months_active, list) and months_active:
+                # Efficient month conversion and timing check
+                month_numbers = [
+                    month_name_to_number[month_name] 
+                    for month_name in months_active 
+                    if isinstance(month_name, str) and month_name in month_name_to_number
+                ]
+                
+                if month_numbers:
+                    # Check if any event is 1-2 months away (vectorized calculation)
+                    months_until = {(month_num - current_month) % 12 for month_num in month_numbers}
+                    if months_until & months_to_check:  # Set intersection for efficiency
+                        annual_boost_mask[idx] = True
+        
+        # Apply boost using vectorized maximum
+        if annual_boost_mask.any():
+            priority_scores[annual_boost_mask] = np.maximum(priority_scores[annual_boost_mask], 18)
     
     # Rapid drop alert boosting (vectorized)
     rapid_drop_high_mask = rapid_drop_alerts >= 2

@@ -35,9 +35,12 @@ def calculate_activity_ratings(df):
         created_dates = pd.to_datetime(df.loc[valid_created_dates, 'account_created_date'], errors='coerce')
         valid_dates_mask = created_dates.notna()
         if valid_dates_mask.any():
-            days_since_created[created_dates[valid_dates_mask].index] = (
-                today - created_dates[valid_dates_mask].dt.date
+            calculated_days = (
+                pd.Timestamp(today) - created_dates[valid_dates_mask]
             ).dt.days
+            # Prevent future dates from creating negative days
+            calculated_days = calculated_days.clip(lower=0)
+            days_since_created[created_dates[valid_dates_mask].index] = calculated_days
     
     # 1. NEW ACCOUNTS (vectorized)
     new_account_mask = (
@@ -60,7 +63,7 @@ def calculate_activity_ratings(df):
     ratings[churned_recent] = 'Churned'
     
     # At Risk: Created 15-28 days ago, no activity  
-    at_risk_recent = recently_created_inactive & (days_since_created > 14) & (days_since_created <= 28)
+    at_risk_recent = recently_created_inactive & (days_since_created >= 15) & (days_since_created <= 28)
     ratings[at_risk_recent] = 'At Risk'
     
     # 3. RETURNED ACCOUNTS (vectorized)
@@ -115,18 +118,61 @@ def calculate_activity_ratings(df):
     if regular_continuous_mask.any():
         subset = df[regular_continuous_mask].copy()
         
-        # Education industry detection (vectorized)
-        is_education = (subset['Industry'] == 'Education') | subset['months_active_historical'].apply(
-            lambda x: is_education_pattern(x) if isinstance(x, list) and x else False
-        )
+        # Education industry detection (optimized vectorized)
+        is_education_industry = (subset['Industry'] == 'Education')
         
-        # Scottish postcode detection (vectorized)
-        is_scottish = subset['Postcode'].apply(lambda x: is_scottish_postcode(x) if pd.notna(x) else False)
+        # Optimized education pattern detection
+        is_education_pattern_vec = pd.Series(False, index=subset.index)
+        valid_months_mask = subset['months_active_historical'].notna()
         
-        # Summer programs detection (vectorized)
-        runs_summer_programs = subset['months_active_historical'].apply(
-            lambda x: any(month in [7, 8] for month in x) if isinstance(x, list) and x else False
-        )
+        if valid_months_mask.any():
+            # Pre-define sets for efficient intersection
+            term_months = frozenset(range(9, 13)) | frozenset(range(1, 7))  # Sept-Dec, Jan-June
+            summer_months = frozenset([7, 8])  # July, August
+            
+            # Vectorized pattern check using list comprehension
+            months_data = subset.loc[valid_months_mask, 'months_active_historical']
+            pattern_results = [
+                (len(set(months) & term_months) >= 4 and len(set(months) & summer_months) <= 1)
+                if isinstance(months, list) and months else False
+                for months in months_data
+            ]
+            is_education_pattern_vec.loc[valid_months_mask] = pattern_results
+        
+        is_education = is_education_industry | is_education_pattern_vec
+        
+        # Scottish postcode detection (fully vectorized)
+        scottish_areas = {'AB', 'DD', 'DG', 'EH', 'FK', 'G', 'HS', 'IV', 'KA', 
+                         'KW', 'KY', 'ML', 'PA', 'PH', 'TD', 'ZE'}
+        
+        # Vectorized postcode processing
+        valid_postcodes = subset['Postcode'].notna() & (subset['Postcode'] != '')
+        is_scottish = pd.Series(False, index=subset.index)
+        
+        if valid_postcodes.any():
+            # Extract letter portion using vectorized string operations
+            letter_portions = (
+                subset.loc[valid_postcodes, 'Postcode']
+                .str.upper()
+                .str.extract(r'^([A-Z]{1,2})', expand=False)
+                .fillna('')
+            )
+            is_scottish[valid_postcodes] = letter_portions.isin(scottish_areas)
+        
+        # Summer programs detection (optimized vectorized)
+        runs_summer_programs = pd.Series(False, index=subset.index)
+        valid_months_mask = subset['months_active_historical'].notna()
+        
+        if valid_months_mask.any():
+            summer_months = frozenset([7, 8])
+            # Vectorized summer detection using list comprehension
+            months_data = subset.loc[valid_months_mask, 'months_active_historical']
+            summer_results = [
+                bool(set(months) & summer_months)
+                if isinstance(months, list) and months else False
+                for months in months_data
+            ]
+            runs_summer_programs.loc[valid_months_mask] = summer_results
         
         # Calculate adjusted days for education accounts
         days_to_check = subset['days_since_last'].copy()
@@ -173,6 +219,15 @@ def calculate_activity_ratings(df):
     )
     ratings[inactive_mask] = 'Inactive'
     
+    # Final validation: check for accounts that remained 'Active' without proper classification
+    potential_issues = (
+        (ratings == 'Active') &
+        (df['Event_Frequency_Current'] == 'Inactive') & 
+        df['has_historical']
+    )
+    if potential_issues.any():
+        ratings[potential_issues] = 'Dormant'  # More appropriate than 'Active'
+    
     return ratings
 
 
@@ -206,4 +261,4 @@ def is_scottish_postcode(postcode):
     area = postcode.strip().upper()
     letter_portion = ''.join(char for char in area if char.isalpha())[:2]
     
-    return letter_portion in scottish_areas or letter_portion == 'G'
+    return letter_portion in scottish_areas

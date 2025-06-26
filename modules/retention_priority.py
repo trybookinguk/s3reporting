@@ -45,9 +45,9 @@ def calculate_retention_priorities(df):
     # Define rating severity (vectorized mapping)
     rating_severity = {
         "Churned": -1,
-        "At Risk": 7,
-        "Outreach": 4,
-        "New": 3,
+        "At Risk": 5,     # Reduced from 7
+        "Outreach": 3,    # Reduced from 4
+        "New": 2,         # Reduced from 3
         "Returned": 1,
         "Active": 0,
         "Inactive": 0
@@ -83,9 +83,14 @@ def calculate_retention_priorities(df):
     priority_scores = (tier_weight_series * (rating_severity_series + revenue_scores)).astype('int64')
     
     # High-value tier minimum priority (vectorized)
+    # Only boost if they have actual risk factors
     high_value_tiers = ['Key Account', 'High Value', 'Tier 4', 'Tier 3']
-    high_value_mask = df['Current_Tier'].isin(high_value_tiers) & (df['Rating'] != 'Churned')
-    priority_scores[high_value_mask] = np.maximum(priority_scores[high_value_mask], 10)
+    high_value_at_risk = (
+        df['Current_Tier'].isin(high_value_tiers) & 
+        (df['Rating'].isin(['At Risk', 'Outreach'])) &
+        (df['Rating'] != 'Churned')
+    )
+    priority_scores[high_value_at_risk] = np.maximum(priority_scores[high_value_at_risk], 8)
     
     # Tier drop boost (vectorized)
     tier_hierarchy = ["NIL", "Tier 1", "Tier 2", "Tier 3", "Tier 4", "High Value", "Key Account"]
@@ -117,10 +122,10 @@ def calculate_retention_priorities(df):
             full_minor_mask = has_previous_tier.copy()
             full_minor_mask.loc[has_previous_tier] = tier_drop_mask & minor_drop_mask
             
-            # Apply boosts using full boolean masks
-            priority_scores[full_major_mask] += 15
-            priority_scores[full_significant_mask] += 10
-            priority_scores[full_minor_mask] += 5
+            # Apply boosts using full boolean masks (reduced values)
+            priority_scores[full_major_mask] += 8      # Reduced from 15
+            priority_scores[full_significant_mask] += 5  # Reduced from 10
+            priority_scores[full_minor_mask] += 3       # Reduced from 5
     
     # Annual reachout boost (fully vectorized)
     annual_mask = (
@@ -158,20 +163,25 @@ def calculate_retention_priorities(df):
                     if months_until & months_to_check:  # Set intersection for efficiency
                         annual_boost_mask[idx] = True
         
-        # Apply boost using vectorized maximum
+        # Apply boost using vectorized maximum (reduced value)
         if annual_boost_mask.any():
-            priority_scores[annual_boost_mask] = np.maximum(priority_scores[annual_boost_mask], 18)
+            priority_scores[annual_boost_mask] = np.maximum(priority_scores[annual_boost_mask], 12)
     
     # Rapid drop alert boosting (vectorized)
-    rapid_drop_high_mask = rapid_drop_alerts >= 2
-    priority_scores[rapid_drop_high_mask] = np.maximum(priority_scores[rapid_drop_high_mask], 70)
+    # Moderate rapid drops (score 2)
+    moderate_rapid_mask = rapid_drop_alerts == 2
+    priority_scores[moderate_rapid_mask] = np.maximum(priority_scores[moderate_rapid_mask], 15)
+    
+    # Severe rapid drops (score 3)
+    severe_rapid_mask = rapid_drop_alerts == 3
+    priority_scores[severe_rapid_mask] = np.maximum(priority_scores[severe_rapid_mask], 20)
     
     # Critical rapid drops for key accounts
     critical_rapid_mask = (
         (rapid_drop_alerts == 3) & 
         df['Current_Tier'].isin(['Key Account', 'High Value'])
     )
-    priority_scores[critical_rapid_mask] = 90
+    priority_scores[critical_rapid_mask] = 25  # Reduced from 90
     
     return priority_scores
 
@@ -187,9 +197,10 @@ def categorize_priorities(priority_scores):
         pd.Series: Priority categories
     """
     # Use pd.cut for efficient categorization
+    # Adjusted thresholds for better distribution
     categories = pd.cut(
         priority_scores,
-        bins=[-np.inf, 0, 10, 15, 20, np.inf],
+        bins=[-np.inf, 0, 5, 10, 18, np.inf],
         labels=['Excluded', 'Low', 'Medium', 'High', 'Very High'],
         include_lowest=True
     ).astype(str)

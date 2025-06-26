@@ -31,9 +31,13 @@ def calculate_activity_ratings(df):
     days_since_created = pd.Series(None, index=df.index, dtype='float64')
     valid_created_dates = df['account_created_date'].notna()
     if valid_created_dates.any():
-        days_since_created[valid_created_dates] = (
-            today - df.loc[valid_created_dates, 'account_created_date']
-        ).dt.days
+        # Ensure account_created_date is in datetime format
+        created_dates = pd.to_datetime(df.loc[valid_created_dates, 'account_created_date'], errors='coerce')
+        valid_dates_mask = created_dates.notna()
+        if valid_dates_mask.any():
+            days_since_created[created_dates[valid_dates_mask].index] = (
+                today - created_dates[valid_dates_mask].dt.date
+            ).dt.days
     
     # 1. NEW ACCOUNTS (vectorized)
     new_account_mask = (

@@ -648,7 +648,5 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                 print(f"\nAnnual Event Reachouts:")
                 print(f"  {len(annual_high_priority):,} Annual accounts boosted to High priority for proactive outreach")
                 print(f"  Total Annual accounts: {len(annual_accounts):,}")
-                ].shape[0]
-                print(f"\n  Total high-value accounts checked: {high_value_count:,}")
     
     return results_df

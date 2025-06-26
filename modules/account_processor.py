@@ -662,17 +662,14 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             if 'Industry' in eligible_accounts.columns:
                 is_education = eligible_accounts['Industry'].fillna('').str.lower() == 'education'
             
-            # For education accounts in summer, only flag complete revenue drops
+            # For education accounts in summer, disable rapid drop detection entirely
             # For all others, use normal percentage thresholds
             eligible_scores = np.zeros(len(eligible_accounts), dtype=int)
             
-            # Education accounts in summer - only flag if revenue completely stopped
+            # Education accounts in summer - no rapid drop alerts at all
             edu_summer_mask = is_education & is_summer
             if edu_summer_mask.any():
-                edu_indices = np.where(edu_summer_mask)[0]
-                for idx in edu_indices:
-                    if current_revenues[idx] == 0 and comparison_revenues[idx] >= MIN_REVENUE_FOR_RAPID_DROP:
-                        eligible_scores[idx] = 2  # Moderate alert for complete stop
+                logger.info(f"Skipping rapid drop detection for {edu_summer_mask.sum()} education accounts during summer")
             
             # All other accounts (non-education or not summer) - normal percentage thresholds
             normal_mask = ~edu_summer_mask

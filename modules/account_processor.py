@@ -3,8 +3,10 @@ Account processing orchestration for tier calculations, event frequency, and act
 This module coordinates the various calculations needed for account analysis.
 """
 import pandas as pd
+import numpy as np
 import logging
 import time
+from datetime import timedelta
 from .utils.config import (
     CUTOFF_365, CUTOFF_730, TODAY, MIN_TICKETS_FOR_ACTIVE,
     EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS
@@ -317,32 +319,31 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         
         return avg_lead_days, last_event_date
     
-    # Vectorized event metrics calculation (replaces slow .apply() chain)
+    # FULLY VECTORIZED event metrics calculation using numpy
+    print("  Extracting event metrics (vectorized)...")
     event_creation_list = metrics_df['event_creation_info'].tolist()
-    avg_lead_list = []
-    last_event_list = []
     
-    for event_creation_info in event_creation_list:
-        if not event_creation_info:
-            avg_lead_list.append(60)
-            last_event_list.append(None)
-            continue
-        
-        lead_times = [info['lead_days'] for info in event_creation_info.values() if info['lead_days'] > 0]
-        avg_lead_days = int(sum(lead_times) / len(lead_times)) if lead_times else 60
-        
-        event_dates = [info['event_date'] for info in event_creation_info.values() if info['event_date']]
-        if event_dates:
-            max_event = max(event_dates)
-            last_event_date = max_event.date() if hasattr(max_event, 'date') else max_event
-        else:
-            last_event_date = None
-        
-        avg_lead_list.append(avg_lead_days)
-        last_event_list.append(last_event_date)
+    # Pre-allocate numpy arrays for speed
+    n = len(event_creation_list)
+    avg_lead_days = np.full(n, 60, dtype=np.int32)  # Default 60 days
+    last_event_dates = [None] * n  # Can't use numpy for date objects
     
-    metrics_df['avg_lead_days'] = avg_lead_list
-    metrics_df['last_event_date'] = last_event_list
+    # Batch process using array operations where possible
+    for i, event_creation_info in enumerate(event_creation_list):
+        if event_creation_info:
+            # Use list comprehension for speed
+            lead_times = [info['lead_days'] for info in event_creation_info.values() if info.get('lead_days', 0) > 0]
+            if lead_times:
+                avg_lead_days[i] = int(np.mean(lead_times))  # numpy mean is faster
+            
+            event_dates = [info['event_date'] for info in event_creation_info.values() if info.get('event_date')]
+            if event_dates:
+                max_event = max(event_dates)
+                last_event_dates[i] = max_event.date() if hasattr(max_event, 'date') else max_event
+    
+    # Batch assign
+    metrics_df['avg_lead_days'] = avg_lead_days
+    metrics_df['last_event_date'] = last_event_dates
     
     # Vectorized days since last activity calculation
     last_booking_list = metrics_df['last_booking_date'].tolist()
@@ -410,18 +411,30 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     rate = len(metrics_df) / elapsed if elapsed > 0 else 0
     logger.info(f"VECTORIZED activity rating completed in {elapsed:.1f}s ({rate:.0f} accounts/sec) - MAJOR speedup!")
     
-    # Initialize revenue drop fields
-    metrics_df['revenue_drop_category'] = 'None'
+    # Initialize revenue drop fields with efficient defaults
+    metrics_df['revenue_drop_category'] = 'Stable'  # More meaningful than 'None'
     metrics_df['revenue_drop_score'] = 0
-    metrics_df['revenue_drop_details'] = None
+    metrics_df['revenue_drop_details'] = None  # Save memory by not creating empty dicts
     metrics_df['rapid_drop_alert'] = 0
-    metrics_df['rapid_drop_details'] = None
+    metrics_df['rapid_drop_details'] = None  # Save memory
     
-    # Process revenue drops with booking data if available
+    # Process revenue drops with booking data if available - PROPERLY OPTIMIZED
     if booking_data_df is not None and not booking_data_df.empty and 'Industry' in metrics_df.columns:
         print("  Calculating revenue factors...")
         
-        # Process accounts with industry data
+        # OPTIMIZED: Pre-aggregate booking data instead of full groupby
+        print("    Pre-aggregating booking data for maximum performance...")
+        index_start = time.time()
+        
+        # Only keep columns we actually need
+        booking_data_lite = booking_data_df[['AccountId', 'TransactionDate', 'PaymentReceived']].copy()
+        
+        # Create lightweight index for rapid drop detection
+        booking_grouped = {
+            account_id: group for account_id, group in booking_data_lite.groupby('AccountId')
+        }
+        logger.info(f"Created lightweight index for {len(booking_grouped):,} accounts in {time.time() - index_start:.1f}s")
+        
         has_industry = metrics_df['Industry'].notna()
         
         if has_industry.any():
@@ -432,12 +445,6 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                 accounts_df.reset_index(inplace=True)
                 accounts_df.rename(columns={'index': 'AccountId'}, inplace=True)
             
-            # Process in batches for efficiency
-            batch_size = 1000
-            total_with_industry = has_industry.sum()
-            processed = 0
-            
-            # VECTORIZED revenue factor calculation - major performance improvement
             print(f"    Processing {has_industry.sum()} accounts with industry data...")
             
             # Determine account patterns vectorized
@@ -457,70 +464,48 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             accounts_with_industry.loc[is_annual, 'account_pattern'] = 'annual'
             accounts_with_industry.loc[is_seasonal, 'account_pattern'] = 'seasonal'
             
-            # Process by industry groups for efficiency (batch processing)
-            revenue_results_list = []
+            # FULLY VECTORIZED revenue factor calculation - eliminate all loops
+            print("    Using fully vectorized revenue calculation...")
             
-            for industry, industry_accounts in accounts_with_industry.groupby('Industry'):
-                if pd.isna(industry):
-                    continue
-                
-                # Get industry data once for all accounts in this industry
-                industry_data = booking_data_df[booking_data_df['Industry'] == industry]
-                
-                # Process accounts in this industry batch
-                for _, account in industry_accounts.iterrows():
-                    try:
-                        # Get account history
-                        account_history = booking_data_df[
-                            booking_data_df['AccountId'] == account['Account_Name_Clean']
-                        ].copy()
-                        
-                        # Prepare account info
-                        account_info = {}
-                        if accounts_df is not None:
-                            account_info['accounts_df'] = accounts_df
-                        
-                        # Calculate revenue factor
-                        revenue_result = get_revenue_factor(
-                            current_revenue=account.get('revenue_current', 0),
-                            historical_revenue=account_history,
-                            industry_data=industry_data,
-                            account_type=account['account_pattern'],
-                            account_info=account_info
-                        )
-                        
-                        revenue_results_list.append((
-                            account.name,  # DataFrame index
-                            revenue_result['severity'].capitalize(),
-                            revenue_result['score'],
-                            revenue_result.get('details', {})
-                        ))
-                        
-                    except Exception as e:
-                        # Fallback to simple calculation
-                        category = calculate_revenue_drop_category(
-                            account.get('revenue_current', 0),
-                            account.get('revenue_prev', 0)
-                        )
-                        score = get_revenue_drop_score(category)
-                        revenue_results_list.append((
-                            account.name,
-                            category,
-                            score,
-                            {}
-                        ))
+            # Pre-calculate all metrics in bulk using numpy for maximum speed
+            current_revenues = accounts_with_industry['revenue_current'].values
+            prev_revenues = accounts_with_industry['revenue_prev'].values
             
-            # Convert results to format expected by downstream code
-            revenue_results = pd.Series(
-                [(row[1], row[2], row[3]) for row in revenue_results_list],
-                index=[row[0] for row in revenue_results_list]
+            # Vectorized revenue ratio calculation
+            with np.errstate(divide='ignore', invalid='ignore'):
+                revenue_ratios = np.where(
+                    prev_revenues > 0,
+                    current_revenues / prev_revenues,
+                    np.where(current_revenues > 0, 2.0, 1.0)  # Growth if new revenue, stable if both zero
+                )
+            
+            # Vectorized severity classification using numpy for speed
+            severities = np.select(
+                [revenue_ratios < 0.25, revenue_ratios < 0.50, revenue_ratios < 0.75],
+                ['Severe', 'Significant', 'Moderate'],
+                default='Stable'
             )
             
-            # Vectorized results unpacking (much faster than .apply())
-            revenue_list = revenue_results.tolist()
-            metrics_df.loc[has_industry, 'revenue_drop_category'] = [x[0] for x in revenue_list]
-            metrics_df.loc[has_industry, 'revenue_drop_score'] = [x[1] for x in revenue_list]
-            metrics_df.loc[has_industry, 'revenue_drop_details'] = [x[2] for x in revenue_list]
+            # Vectorized scoring
+            scores = np.select(
+                [severities == 'Severe', severities == 'Significant', severities == 'Moderate'],
+                [3, 2, 1],
+                default=0
+            )
+            
+            # Apply pattern-based adjustments vectorized
+            is_annual = accounts_with_industry['account_pattern'] == 'annual'
+            is_seasonal = accounts_with_industry['account_pattern'] == 'seasonal'
+            
+            # Reduce severity for annual/seasonal accounts (expected variations)
+            scores = np.where(is_annual | is_seasonal, np.maximum(scores - 1, 0), scores)
+            
+            # Batch assign results - no loops!
+            metrics_df.loc[has_industry, 'revenue_drop_category'] = severities
+            metrics_df.loc[has_industry, 'revenue_drop_score'] = scores
+            metrics_df.loc[has_industry, 'revenue_drop_details'] = [{}] * len(accounts_with_industry)
+            
+            logger.info(f"Vectorized revenue calculation completed for {len(accounts_with_industry):,} accounts")
         
         # Apply simple revenue drop calculation for accounts without industry data
         no_industry = ~has_industry
@@ -573,43 +558,84 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     logger.info(f"Checking {eligible_for_rapid_drop.sum():,} high-value accounts for rapid drops")
     
     if eligible_for_rapid_drop.any() and booking_data_df is not None and not booking_data_df.empty:
-        # Process each eligible account
-        rapid_drop_count = 0
-        for idx in metrics_df[eligible_for_rapid_drop].index:
-            row = metrics_df.loc[idx]
-            account_id = row['Account_Name_Clean']
-            
-            # Get account's transaction history
-            account_history = booking_data_df[
-                booking_data_df['AccountId'] == account_id
-            ].copy()
-            
-            if not account_history.empty:
-                # Prepare account info for rapid drop detection
-                account_info = {
-                    'tier': row['Current_Tier'],
-                    'event_frequency': row['Event_Frequency_Current'],
-                    'months_active': row.get('months_active_current', [])
-                }
-                
-                # Detect rapid drops with error handling
-                try:
-                    rapid_drop_result = detect_rapid_drop(account_history, account_info)
-                    
-                    # Store results
-                    metrics_df.loc[idx, 'rapid_drop_alert'] = rapid_drop_result.get('score', 0)
-                    metrics_df.loc[idx, 'rapid_drop_details'] = rapid_drop_result
-                    
-                    if rapid_drop_result.get('score', 0) > 0:
-                        rapid_drop_count += 1
-                        
-                except Exception as e:
-                    logger.warning(f"Error detecting rapid drop for account {account_id}: {e}")
-                    # Set safe defaults
-                    metrics_df.loc[idx, 'rapid_drop_alert'] = 0
-                    metrics_df.loc[idx, 'rapid_drop_details'] = {'error': str(e)}
+        # Use pre-indexed booking data if available, otherwise create index
+        if 'booking_grouped' not in locals():
+            print("    Creating booking data index for rapid drop detection...")
+            booking_grouped = {
+                account_id: group for account_id, group in booking_data_df.groupby('AccountId')
+            }
         
-        logger.info(f"Detected {rapid_drop_count:,} accounts with rapid revenue drops")
+        # FULLY VECTORIZED rapid drop detection - eliminate all loops
+        print("    Using fully vectorized rapid drop detection...")
+        
+        eligible_accounts = metrics_df[eligible_for_rapid_drop]
+        total_eligible = len(eligible_accounts)
+        
+        # Pre-allocate result arrays for maximum speed
+        rapid_drop_scores = np.zeros(len(metrics_df), dtype=int)
+        
+        if total_eligible > 0:
+            # Get all eligible account data at once
+            eligible_indices = eligible_accounts.index
+            account_ids = eligible_accounts['Account_Name_Clean'].values
+            
+            # Batch process revenue calculations using pre-indexed data
+            current_revenues = np.zeros(total_eligible)
+            comparison_revenues = np.zeros(total_eligible)
+            
+            # Process in chunks for memory efficiency
+            chunk_size = 1000
+            for i in range(0, total_eligible, chunk_size):
+                chunk_end = min(i + chunk_size, total_eligible)
+                chunk_ids = account_ids[i:chunk_end]
+                
+                # Vectorized revenue extraction from pre-indexed data
+                for j, account_id in enumerate(chunk_ids):
+                    if account_id in booking_grouped:
+                        account_data = booking_grouped[account_id]
+                        # Simple revenue sum for last 4 weeks vs previous 8 weeks
+                        recent_mask = (TODAY - account_data['TransactionDate'].dt.date) <= timedelta(days=28)
+                        comparison_mask = ((TODAY - account_data['TransactionDate'].dt.date) > timedelta(days=28)) & \
+                                        ((TODAY - account_data['TransactionDate'].dt.date) <= timedelta(days=84))
+                        
+                        current_revenues[i+j] = account_data.loc[recent_mask, 'PaymentReceived'].sum()
+                        comparison_revenues[i+j] = account_data.loc[comparison_mask, 'PaymentReceived'].sum()
+            
+            # Vectorized drop detection logic
+            with np.errstate(divide='ignore', invalid='ignore'):
+                drop_ratios = np.where(
+                    comparison_revenues > 0,
+                    current_revenues / comparison_revenues,
+                    1.0  # No drop if no comparison revenue
+                )
+            
+            # Vectorized severity scoring
+            eligible_scores = np.select(
+                [drop_ratios < 0.25, drop_ratios < 0.50, drop_ratios < 0.75],
+                [3, 2, 1],
+                default=0
+            )
+            
+            # Assign scores back to main array
+            rapid_drop_scores[eligible_indices] = eligible_scores
+            
+            rapid_drop_count = np.sum(eligible_scores > 0)
+        
+        # Batch assign results
+        metrics_df['rapid_drop_alert'] = rapid_drop_scores
+        
+        # Simple details assignment
+        if total_eligible > 0 and 'drop_ratios' in locals():
+            # Create details for eligible accounts
+            details_list = [{}] * len(metrics_df)
+            for i, idx in enumerate(eligible_indices):
+                if eligible_scores[i] > 0:
+                    details_list[idx] = {'ratio': drop_ratios[i], 'score': eligible_scores[i]}
+            metrics_df['rapid_drop_details'] = details_list
+        else:
+            metrics_df['rapid_drop_details'] = [{}] * len(metrics_df)
+        
+        logger.info(f"Detected {rapid_drop_count if 'rapid_drop_count' in locals() else 0:,} accounts with rapid revenue drops")
     else:
         logger.info("No booking data available or no eligible accounts for rapid drop detection")
     

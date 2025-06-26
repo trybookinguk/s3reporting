@@ -158,7 +158,7 @@ def calculate_activity_ratings(df):
                 .str.extract(r'^([A-Z]{1,2})', expand=False)
                 .fillna('')
             )
-            is_scottish[valid_postcodes] = letter_portions.isin(scottish_areas)
+            is_scottish.loc[valid_postcodes] = letter_portions.isin(scottish_areas).astype(bool)
         
         # Summer programs detection (optimized vectorized)
         runs_summer_programs = pd.Series(False, index=subset.index)

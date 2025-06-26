@@ -414,8 +414,11 @@ def load_booking_data_chunks(s3_client, key, use_cache=True, chunk_size=100000):
                 if chunk_count % 10 == 0:
                     print(f"    Read {chunk_count * chunk_size:,} rows...")
             
-            # Save to cache - filter out empty chunks to avoid FutureWarning
-            non_empty_chunks = [chunk for chunk in all_chunks if not chunk.empty]
+            # Save to cache - filter out empty chunks and all-NA chunks to avoid FutureWarning
+            non_empty_chunks = [
+                chunk for chunk in all_chunks 
+                if not chunk.empty and not chunk.isna().all().all()
+            ]
             if non_empty_chunks:
                 full_df = pd.concat(non_empty_chunks, ignore_index=True)
             else:

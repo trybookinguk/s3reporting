@@ -110,7 +110,11 @@ class BookingAggregator:
         # OPTIMIZATION: Combine all chunks into single DataFrame for bulk processing
         logger.info("Combining accumulated chunks...")
         # Filter out empty chunks to avoid FutureWarning
-        non_empty_chunks = [chunk for chunk in self.accumulated_chunks if not chunk.empty]
+        # Filter out empty and all-NA chunks to avoid FutureWarning
+        non_empty_chunks = [
+            chunk for chunk in self.accumulated_chunks 
+            if not chunk.empty and not chunk.isna().all().all()
+        ]
         if non_empty_chunks:
             all_data = pd.concat(non_empty_chunks, ignore_index=True)
         else:

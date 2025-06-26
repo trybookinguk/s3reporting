@@ -27,18 +27,16 @@ Based on the number of unique months with events:
 | Months Active | Classification | Description |
 |--------------|----------------|-------------|
 | 0 | Inactive | No events with ticket sales in the period |
-| 0 (with creation) | New | Event created but no ticket sales yet |
 | 1 | Annual | Events in only one month of the year |
 | 2-4 | Seasonal | Events in specific seasons/quarters |
 | 5-9 | Regular | Events throughout most of the year |
 | 10-12 | Continuous | Year-round event activity |
 
-### 4. Special Case: "New" Status
-An account is classified as "New" when:
-- They have 0 months with ticket sales (no bookings in BookingDataAll)
-- BUT they have created an event (detected via LastEventCreation date in Accounts report)
-- This classification is used during event frequency analysis
-- Note: The Activity Rating system has its own "New" logic based on DateTimeCreated field
+### 4. Important Note About "New" Classification
+"New" is NOT an event frequency classification. It is only used in the Activity Rating field:
+- Activity Rating "New" = Account created in last 14 days with no bookings
+- Event Frequency for new accounts = "Inactive" (0 months of activity)
+- This distinction is important: Event Frequency measures historical patterns, while Activity Rating considers account lifecycle
 
 ## Key Design Decisions
 
@@ -78,7 +76,8 @@ The system exports which specific months have activity to Zoho CRM:
 - Created their first event last week
 - No ticket sales yet
 - **Current Period**: 0 unique months
-- **Classification**: New (because LastEventCreation is recent)
+- **Event Frequency Classification**: Inactive
+- **Activity Rating**: Active (because account is >14 days old and has created an event)
 
 ### Example 4: Annual Charity Gala
 - One big event each November
@@ -105,9 +104,9 @@ The logic is split across several files:
    - `get_months_active_fingerprint()`: Extracts unique months from event data
 
 4. **account_processor.py**: Orchestrates the classification
-   - Uses Account report data to detect "New" accounts (via LastEventCreation)
    - Combines all logic to assign final classifications
    - Separates current period months for Zoho export
+   - Note: "New" classification only exists in Activity Rating, not Event Frequency
 
 ## Edge Cases Handled
 

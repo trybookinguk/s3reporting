@@ -324,17 +324,9 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     # Fill any remaining NaN with 'Inactive' as safe default
     metrics_df['Event_Frequency_Current'] = current_freq.fillna('Inactive').astype(str)
     
-    # Special handling for "New" classification
-    # Accounts with 0 months of activity BUT have created an event should be marked as "New"
-    # This indicates they've set up an event but haven't sold tickets yet
-    new_event_mask = (
-        (metrics_df['Event_Frequency_Current'] == 'Inactive') &
-        (metrics_df['has_event_creation_current'] == True)
-    )
-    
-    if new_event_mask.any():
-        metrics_df.loc[new_event_mask, 'Event_Frequency_Current'] = 'New'
-        logger.info(f"Marked {new_event_mask.sum()} accounts as 'New' (event created but no tickets sold)")
+    # Note: "New" is an Activity Rating, not an Event Frequency
+    # Event Frequency only has: Continuous, Regular, Seasonal, Annual, Inactive
+    # Accounts that created events but haven't sold tickets remain "Inactive" in frequency
     
     # Vectorized previous frequency classification  
     previous_freq = pd.cut(

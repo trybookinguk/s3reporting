@@ -43,8 +43,10 @@ def calculate_activity_ratings(df):
             days_since_created[created_dates[valid_dates_mask].index] = calculated_days
     
     # 1. NEW ACCOUNTS (vectorized)
+    # Accounts created in the last 14 days with no bookings
     new_account_mask = (
         (days_since_created <= 14) & 
+        (days_since_created >= 0) &  # Exclude invalid/future dates
         (df['Event_Frequency_Current'] == 'Inactive') & 
         (~df['has_historical'])
     )

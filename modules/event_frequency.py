@@ -15,8 +15,7 @@ FREQUENCY_THRESHOLDS = {
     'Regular': (5, 9),         # 5-9 months  
     'Seasonal': (2, 4),        # 2-4 months
     'Annual': (1, 1),          # 1 month
-    'Inactive': (0, 0),        # 0 months
-    'New': (0, 0)             # 0 months but event created (handled in account_processor)
+    'Inactive': (0, 0)         # 0 months
 }
 
 
@@ -245,7 +244,7 @@ def batch_classify_frequencies(event_months_data, batch_size=50000):
     
     logger.info(f"Frequency classification complete in {total_time:.1f}s ({total_accounts/total_time:,.0f} accounts/sec)")
     logger.info("Frequency distribution:")
-    for freq_type in ['Continuous', 'Regular', 'Seasonal', 'Annual', 'New', 'Inactive']:
+    for freq_type in ['Continuous', 'Regular', 'Seasonal', 'Annual', 'Inactive']:
         if freq_type in freq_counts:
             count = freq_counts[freq_type]
             pct = (count / total_accounts) * 100
@@ -316,7 +315,7 @@ def get_frequency_summary(accounts_df, current_col='event_months_current', previ
     
     # Log frequency distribution
     logger.info("Current period frequency distribution:")
-    for freq_type in ['Continuous', 'Regular', 'Seasonal', 'Annual', 'New', 'Inactive']:
+    for freq_type in ['Continuous', 'Regular', 'Seasonal', 'Annual', 'Inactive']:
         if freq_type in summary['current_period']:
             count = summary['current_period'][freq_type]
             pct = (count / total_accounts) * 100
@@ -327,7 +326,7 @@ def get_frequency_summary(accounts_df, current_col='event_months_current', previ
     improved_accounts = 0  # Moved to higher frequency
     declined_accounts = 0  # Moved to lower frequency
     
-    freq_order = ['Inactive', 'New', 'Annual', 'Seasonal', 'Regular', 'Continuous']
+    freq_order = ['Inactive', 'Annual', 'Seasonal', 'Regular', 'Continuous']
     
     for prev_type in transitions.index:
         for curr_type in transitions.columns:

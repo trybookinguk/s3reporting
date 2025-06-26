@@ -671,50 +671,60 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             if edu_summer_mask.any():
                 logger.info(f"Skipping rapid drop detection for {edu_summer_mask.sum()} education accounts during summer")
             
-            # All other accounts (non-education or not summer) - check based on their patterns
+            # All other accounts (non-education or not summer) - vectorized check based on patterns
             normal_mask = ~edu_summer_mask
             if normal_mask.any():
                 normal_indices = np.where(normal_mask)[0]
-                normal_accounts = eligible_accounts.iloc[normal_indices]
+                normal_accounts = eligible_accounts.iloc[normal_indices].copy()
                 
-                # Track accounts skipped due to inactive period
-                skipped_inactive_period = 0
+                # Vectorized check for seasonal patterns
+                # For Regular/Seasonal/Annual accounts, check if in active period
+                is_seasonal_pattern = normal_accounts['Event_Frequency_Current'].isin(['Regular', 'Seasonal', 'Annual'])
                 
-                # Check each account's typical active months
-                for idx, (orig_idx, account) in enumerate(normal_accounts.iterrows()):
-                    # Get the account's typical active months
-                    months_active = []
-                    if 'Months_Active' in account and isinstance(account['Months_Active'], list):
-                        # Convert month names to numbers
-                        month_name_to_num = {
-                            'January': 1, 'February': 2, 'March': 3, 'April': 4,
-                            'May': 5, 'June': 6, 'July': 7, 'August': 8,
-                            'September': 9, 'October': 10, 'November': 11, 'December': 12
-                        }
-                        months_active = [month_name_to_num.get(m, 0) for m in account['Months_Active'] if m in month_name_to_num]
+                # Vectorized month checking
+                previous_month = (current_month - 1) if current_month > 1 else 12
+                
+                # Check if current or previous month is in Months_Active list
+                # This is tricky to vectorize with lists, so we'll use a different approach
+                in_active_period = pd.Series(True, index=normal_accounts.index)
+                
+                if is_seasonal_pattern.any() and 'Months_Active' in normal_accounts.columns:
+                    # Create month lookup strings for current and previous month
+                    month_names = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+                                  'July', 'August', 'September', 'October', 'November', 'December']
+                    current_month_name = month_names[current_month]
+                    previous_month_name = month_names[previous_month]
                     
-                    # For Regular/Seasonal accounts, only check if in or near active period
-                    event_freq = account.get('Event_Frequency_Current', '')
-                    if event_freq in ['Regular', 'Seasonal', 'Annual'] and months_active:
-                        previous_month = (current_month - 1) if current_month > 1 else 12
-                        if current_month not in months_active and previous_month not in months_active:
-                            # Not in active period - skip rapid drop detection
-                            skipped_inactive_period += 1
-                            continue
+                    # Vectorized check if Months_Active contains current or previous month
+                    # Convert lists to strings for vectorized operations
+                    months_active_str = normal_accounts['Months_Active'].fillna('[]').astype(str)
                     
-                    # Check revenue drop for this account
-                    if comparison_revenues[normal_indices[idx]] >= MIN_REVENUE_FOR_RAPID_DROP:
-                        ratio = drop_ratios[normal_indices[idx]]
-                        if ratio < 0.25:
-                            eligible_scores[normal_indices[idx]] = 3
-                        elif ratio < 0.50:
-                            eligible_scores[normal_indices[idx]] = 2
-                        elif ratio < 0.75:
-                            eligible_scores[normal_indices[idx]] = 1
+                    has_current_month = months_active_str.str.contains(current_month_name, na=False)
+                    has_previous_month = months_active_str.str.contains(previous_month_name, na=False)
+                    
+                    # Only check drops if in or near active period
+                    in_active_period = ~is_seasonal_pattern | has_current_month | has_previous_month
+                
+                # Apply revenue drop checks only to accounts in active period
+                check_drops_mask = in_active_period & (comparison_revenues[normal_indices] >= MIN_REVENUE_FOR_RAPID_DROP)
+                
+                # Vectorized severity scoring
+                drop_ratios_subset = drop_ratios[normal_indices]
+                
+                # Calculate scores using np.select
+                conditions = [
+                    check_drops_mask & (drop_ratios_subset < 0.25),
+                    check_drops_mask & (drop_ratios_subset < 0.50),
+                    check_drops_mask & (drop_ratios_subset < 0.75)
+                ]
+                choices = [3, 2, 1]
+                
+                eligible_scores[normal_indices] = np.select(conditions, choices, default=0)
                 
                 # Log accounts skipped
-                if skipped_inactive_period > 0:
-                    logger.info(f"Skipped rapid drop detection for {skipped_inactive_period} accounts outside their active periods")
+                skipped_count = is_seasonal_pattern.sum() - in_active_period[is_seasonal_pattern].sum()
+                if skipped_count > 0:
+                    logger.info(f"Skipped rapid drop detection for {skipped_count} accounts outside their active periods")
             
             # Assign scores back to main array
             rapid_drop_scores[eligible_indices] = eligible_scores

@@ -547,7 +547,7 @@ def handle_seasonal_comparison(
     Handle seasonal comparison logic for specific account types.
     
     Args:
-        account_data: Account's transaction history
+        account_data: Account transaction history
         comparison_period: Type of comparison ('year_over_year', 'term_to_term', etc.)
     
     Returns:
@@ -590,8 +590,8 @@ def get_account_revenue_history(
         end_date: Optional end date filter
     
     Returns:
-        DataFrame with account's transaction history
-    \"\"\"
+        DataFrame with account transaction history
+    """
     # Convert account_id to string for consistent comparison
     account_id_str = str(account_id)
     booking_df['AccountId'] = booking_df['AccountId'].astype(str)
@@ -600,7 +600,7 @@ def get_account_revenue_history(
     account_data = booking_df[booking_df['AccountId'] == account_id_str].copy()
     
     if account_data.empty:
-        logger.warning(f\"No data found for account {account_id}\")
+        logger.warning(f"No data found for account {account_id}")
         return account_data
     
     # Ensure TransactionDate is datetime
@@ -620,17 +620,17 @@ def calculate_yoy_comparison(
     reference_date: Optional[pd.Timestamp] = None,
     period_days: int = 28
 ) -> Dict[str, float]:
-    \"\"\"
+    """
     Calculate year-over-year revenue comparison.
     
     Args:
-        account_data: Account's transaction history
+        account_data: Account transaction history
         reference_date: Date to calculate from (default: now)
         period_days: Number of days for comparison period
     
     Returns:
         Dict with current and previous year revenues
-    \"\"\"
+    """
     if reference_date is None:
         reference_date = pd.Timestamp.now()
     
@@ -662,17 +662,17 @@ def determine_account_age(
     accounts_df: Optional[pd.DataFrame] = None,
     account_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    \"\"\"
+    """
     Determine account age and lifecycle stage.
     
     Args:
-        account_data: Account's transaction history
+        account_data: Account transaction history
         accounts_df: Optional accounts master data
         account_id: Optional account ID for lookup
     
     Returns:
         Dict with age information and lifecycle stage
-    \"\"\"
+    """
     current_date = pd.Timestamp.now()
     
     # Try to get creation date from multiple sources
@@ -730,7 +730,7 @@ def get_revenue_factor(
     account_type: str = 'continuous',
     account_info: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    \"\"\"
+    """
     Main function to calculate revenue factor and risk score.
     
     Args:
@@ -742,7 +742,7 @@ def get_revenue_factor(
     
     Returns:
         Dict with revenue factor score and supporting details
-    \"\"\"
+    """
     result = {
         'score': 0,
         'factor': 'revenue_drop',
@@ -772,7 +772,7 @@ def get_revenue_factor(
     # Calculate industry quintiles if industry data provided
     industry_quintiles = {}
     if industry_data is not None and not industry_data.empty:
-        logger.info(\"Calculating industry quintiles for revenue analysis\")
+        logger.info("Calculating industry quintiles for revenue analysis")
         
         # Get accounts master data if available
         accounts_df = None

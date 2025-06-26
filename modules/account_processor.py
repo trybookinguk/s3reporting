@@ -230,8 +230,22 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     freq_current_list = metrics_df['event_months_freq_current'].tolist()
     freq_previous_list = metrics_df['event_months_freq_previous'].tolist()
     
-    metrics_df['freq_month_count_current'] = [len(x) if x else 0 for x in freq_current_list]
-    metrics_df['freq_month_count_previous'] = [len(x) if x else 0 for x in freq_previous_list]
+    # More robust handling of None/NaN values
+    # Check for unexpected types
+    unexpected_types_current = set(type(x).__name__ for x in freq_current_list if not isinstance(x, (set, list, type(None))))
+    unexpected_types_previous = set(type(x).__name__ for x in freq_previous_list if not isinstance(x, (set, list, type(None))))
+    
+    if unexpected_types_current or unexpected_types_previous:
+        logger.warning(f"Unexpected types in event months - Current: {unexpected_types_current}, Previous: {unexpected_types_previous}")
+    
+    metrics_df['freq_month_count_current'] = [
+        len(x) if isinstance(x, (set, list)) else 0 
+        for x in freq_current_list
+    ]
+    metrics_df['freq_month_count_previous'] = [
+        len(x) if isinstance(x, (set, list)) else 0 
+        for x in freq_previous_list
+    ]
     
     # Process account lookup data if available
     if account_lookup:
@@ -280,21 +294,45 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     # VECTORIZED event frequency classification - major speedup
     print("  Classifying event frequencies...")
     
-    # Vectorized current frequency classification
-    metrics_df['Event_Frequency_Current'] = pd.cut(
+    # Ensure no NaN values in month counts
+    nan_current = metrics_df['freq_month_count_current'].isna().sum()
+    nan_previous = metrics_df['freq_month_count_previous'].isna().sum()
+    if nan_current > 0 or nan_previous > 0:
+        logger.warning(f"Found NaN values in month counts - Current: {nan_current}, Previous: {nan_previous}")
+    
+    metrics_df['freq_month_count_current'] = metrics_df['freq_month_count_current'].fillna(0).astype(int)
+    metrics_df['freq_month_count_previous'] = metrics_df['freq_month_count_previous'].fillna(0).astype(int)
+    
+    # Handle edge cases where month counts might exceed 12
+    over_12_current = (metrics_df['freq_month_count_current'] > 12).sum()
+    over_12_previous = (metrics_df['freq_month_count_previous'] > 12).sum()
+    if over_12_current > 0 or over_12_previous > 0:
+        logger.warning(f"Found month counts > 12 - Current: {over_12_current}, Previous: {over_12_previous}")
+    
+    metrics_df['freq_month_count_current'] = metrics_df['freq_month_count_current'].clip(upper=12)
+    metrics_df['freq_month_count_previous'] = metrics_df['freq_month_count_previous'].clip(upper=12)
+    
+    # Vectorized current frequency classification with explicit handling
+    current_freq = pd.cut(
         metrics_df['freq_month_count_current'],
-        bins=[-1, 0, 1, 4, 9, 12],
+        bins=[-1, 0, 1, 4, 9, 13],  # Extended upper bound to catch 12
         labels=['Inactive', 'Annual', 'Seasonal', 'Regular', 'Continuous'],
-        include_lowest=True
-    ).astype(str)
+        include_lowest=True,
+        right=True  # Include right edge
+    )
+    # Fill any remaining NaN with 'Inactive' as safe default
+    metrics_df['Event_Frequency_Current'] = current_freq.fillna('Inactive').astype(str)
     
     # Vectorized previous frequency classification  
-    metrics_df['Event_Frequency_Previous'] = pd.cut(
+    previous_freq = pd.cut(
         metrics_df['freq_month_count_previous'],
-        bins=[-1, 0, 1, 4, 9, 12],
+        bins=[-1, 0, 1, 4, 9, 13],  # Extended upper bound
         labels=['Inactive', 'Annual', 'Seasonal', 'Regular', 'Continuous'],
-        include_lowest=True
-    ).astype(str)
+        include_lowest=True,
+        right=True
+    )
+    # Fill any remaining NaN with 'Inactive' as safe default
+    metrics_df['Event_Frequency_Previous'] = previous_freq.fillna('Inactive').astype(str)
     
     # Event frequency summary
     event_freq_summary = metrics_df['Event_Frequency_Current'].value_counts().to_dict()

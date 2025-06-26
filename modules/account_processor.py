@@ -719,7 +719,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                         months_active_str = str(normal_accounts.loc[idx, 'Months_Active'])
                         
                         # Check if any active month falls within current date + lead days
-                        future_date = today + timedelta(days=lead_days)
+                        future_date = today + pd.Timedelta(days=lead_days)
                         current_month_num = today.month
                         future_month_num = future_date.month
                         

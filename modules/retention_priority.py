@@ -80,7 +80,12 @@ def calculate_retention_priorities(df):
     rapid_drop_alerts = pd.to_numeric(df['rapid_drop_alert'], errors='coerce').fillna(0).clip(0, 3)
     
     # Calculate base priority (vectorized)
-    priority_scores = (tier_weight_series * (rating_severity_series + revenue_scores)).astype('int64')
+    # Use a more balanced formula to prevent excessive scores
+    # Old formula: tier_weight × (rating_severity + revenue_score) could yield 40+
+    # New formula: (tier_weight × 2) + rating_severity + revenue_score yields max ~18
+    priority_scores = (
+        (tier_weight_series * 2) + rating_severity_series + revenue_scores
+    ).astype('int64')
     
     # High-value tier minimum priority (vectorized)
     # Only boost if they have actual risk factors
@@ -182,6 +187,11 @@ def calculate_retention_priorities(df):
         df['Current_Tier'].isin(['Key Account', 'High Value'])
     )
     priority_scores[critical_rapid_mask] = 25  # Reduced from 90
+    
+    # Cap maximum score to prevent excessive "Very High" classifications
+    # This ensures a more reasonable distribution across priority levels
+    MAX_PRIORITY_SCORE = 25
+    priority_scores = priority_scores.clip(upper=MAX_PRIORITY_SCORE)
     
     return priority_scores
 

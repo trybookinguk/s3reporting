@@ -87,15 +87,8 @@ def calculate_retention_priorities(df):
         (tier_weight_series * 2) + rating_severity_series + revenue_scores
     ).astype('int64')
     
-    # High-value tier minimum priority (vectorized)
-    # Only boost if they have actual risk factors
-    high_value_tiers = ['Key Account', 'High Value', 'Tier 4', 'Tier 3']
-    high_value_at_risk = (
-        df['Current_Tier'].isin(high_value_tiers) & 
-        (df['Rating'].isin(['At Risk', 'Outreach'])) &
-        (df['Rating'] != 'Churned')
-    )
-    priority_scores[high_value_at_risk] = np.maximum(priority_scores[high_value_at_risk], 8)
+    # Note: Removed minimum score logic as the new additive formula 
+    # already produces appropriate base scores for high-value accounts
     
     # Tier drop boost (vectorized)
     tier_hierarchy = ["NIL", "Tier 1", "Tier 2", "Tier 3", "Tier 4", "High Value", "Key Account"]

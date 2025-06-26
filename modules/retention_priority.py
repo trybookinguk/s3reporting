@@ -174,12 +174,19 @@ def calculate_retention_priorities(df):
     severe_rapid_mask = rapid_drop_alerts == 3
     priority_scores[severe_rapid_mask] = np.maximum(priority_scores[severe_rapid_mask], 20)
     
-    # Critical rapid drops for key accounts
+    # High-value accounts with significant drops (score 2) - boost to High/Very High boundary
+    high_value_significant_mask = (
+        (rapid_drop_alerts == 2) & 
+        df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4'])
+    )
+    priority_scores[high_value_significant_mask] = np.maximum(priority_scores[high_value_significant_mask], 19)
+    
+    # Critical rapid drops for top accounts (score 3) - definitely Very High
     critical_rapid_mask = (
         (rapid_drop_alerts == 3) & 
-        df['Current_Tier'].isin(['Key Account', 'High Value'])
+        df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4'])
     )
-    priority_scores[critical_rapid_mask] = 25  # Reduced from 90
+    priority_scores[critical_rapid_mask] = 23  # Near max to ensure Very High
     
     # Cap maximum score to prevent excessive "Very High" classifications
     # This ensures a more reasonable distribution across priority levels

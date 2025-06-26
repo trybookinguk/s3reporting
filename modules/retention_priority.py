@@ -213,7 +213,10 @@ def calculate_revenue_drop_category(current_revenue, previous_revenue):
     """
     # Handle edge cases
     if previous_revenue <= 0:
-        return "Stable" if current_revenue > 0 else "Severe"
+        if current_revenue > 0:
+            return "Stable"  # Growth from zero
+        else:
+            return "Stable"  # No revenue in either period - not a drop
     
     # Calculate percentage drop
     drop_percentage = ((previous_revenue - current_revenue) / previous_revenue) * 100

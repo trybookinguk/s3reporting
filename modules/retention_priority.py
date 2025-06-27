@@ -92,6 +92,18 @@ def calculate_retention_priorities(df):
         )
         rapid_drop_alerts[upgraded_from_nil] = 0
     
+    # Clear rapid drop alerts for schools during summer holidays
+    if 'Industry' in df.columns:
+        current_date = datetime.now()
+        current_month = current_date.month
+        
+        # Education accounts get rapid drop alerts suppressed June-September
+        is_education = df['Industry'] == 'Education'
+        is_summer_period = current_month in [6, 7, 8, 9]
+        
+        if is_summer_period:
+            rapid_drop_alerts[is_education] = 0
+    
     # Calculate base priority (vectorized)
     # Use a more balanced formula to prevent excessive scores
     # Old formula: tier_weight × (rating_severity + revenue_score) could yield 40+
@@ -229,10 +241,20 @@ def calculate_retention_priorities(df):
                 df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1'])
             )
         
+        # For rapid drop score 3, also check the revenue drop category
+        # Don't treat as critical if revenue drop is only Moderate or Stable
+        has_severe_revenue_drop = pd.Series(False, index=df.index)
+        if 'revenue_drop_score' in df.columns:
+            # Check for Severe or Significant drops only
+            severe_drop_string = df['revenue_drop_score'].isin(['Severe', 'Significant'])
+            severe_drop_numeric = pd.to_numeric(df['revenue_drop_score'], errors='coerce') >= 2
+            has_severe_revenue_drop = severe_drop_string | severe_drop_numeric
+        
         critical_rapid_mask = (
             (rapid_drop_alerts == 3) & 
             df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4']) &
             has_revenue_decline &
+            has_severe_revenue_drop &  # Must have severe/significant revenue drop too
             (~tier_upgraded)  # Exclude tier upgrades
         )
         priority_scores[critical_rapid_mask] = 23  # Near max to ensure Very High

@@ -104,6 +104,45 @@ def calculate_retention_priorities(df):
         if is_summer_period:
             rapid_drop_alerts[is_education] = 0
     
+    # Reduce rapid drop alerts for accounts still selling tickets (even if free)
+    # These accounts are still active, just not generating revenue recently
+    if 'tickets_current' in df.columns and 'tickets_prev' in df.columns:
+        # Check if account maintains significant ticket activity
+        has_ticket_activity = (
+            (df['tickets_current'] >= 100) &  # Still selling meaningful tickets
+            (df['tickets_current'] >= df['tickets_prev'] * 0.5)  # At least 50% of previous volume
+        )
+        
+        # If they have good ticket activity but rapid drop alert, reduce severity
+        # Score 3 → 2, Score 2 → 1, Score 1 → 0
+        rapid_drop_alerts[has_ticket_activity & (rapid_drop_alerts > 0)] -= 1
+    
+    # Adjust rapid drop alerts based on account patterns
+    if 'Event_Frequency_Current' in df.columns:
+        # Only apply rapid drop detection to Continuous/Regular accounts (as originally designed)
+        is_continuous_regular = df['Event_Frequency_Current'].isin(['Continuous', 'Regular'])
+        
+        # Clear rapid drops for Annual/Seasonal accounts - they naturally have periods of no activity
+        is_annual_seasonal = df['Event_Frequency_Current'].isin(['Annual', 'Seasonal'])
+        rapid_drop_alerts[is_annual_seasonal] = 0
+        
+        # For accounts that changed from Continuous/Regular to Annual/Seasonal, this is concerning
+        # Keep their rapid drop alerts as this indicates a significant pattern change
+        if 'Event_Frequency_Previous' in df.columns:
+            pattern_degraded = (
+                df['Event_Frequency_Previous'].isin(['Continuous', 'Regular']) &
+                df['Event_Frequency_Current'].isin(['Annual', 'Seasonal'])
+            )
+            # For these accounts, restore the rapid drop alert if it was cleared
+            if 'rapid_drop_alert' in df.columns:
+                original_alerts = pd.to_numeric(df['rapid_drop_alert'], errors='coerce').fillna(0).clip(0, 3)
+                rapid_drop_alerts[pattern_degraded] = original_alerts[pattern_degraded]
+    
+    # For Continuous/Regular accounts with rapid drops, check if it's seasonal
+    # This would require comparing to same period last year
+    # Without that data, we keep the rapid drop alert but can reduce severity based on context
+    # The revenue_drop_score (year-over-year) provides additional context
+    
     # Calculate base priority (vectorized)
     # Use a more balanced formula to prevent excessive scores
     # Old formula: tier_weight × (rating_severity + revenue_score) could yield 40+
@@ -145,10 +184,10 @@ def calculate_retention_priorities(df):
             full_minor_mask = has_previous_tier.copy()
             full_minor_mask.loc[has_previous_tier] = tier_drop_mask & minor_drop_mask
             
-            # Apply boosts using full boolean masks (reduced values)
-            priority_scores[full_major_mask] += 8      # Reduced from 15
-            priority_scores[full_significant_mask] += 5  # Reduced from 10
-            priority_scores[full_minor_mask] += 3       # Reduced from 5
+            # Apply boosts using full boolean masks
+            priority_scores[full_major_mask] += 6      # Major tier drop boost
+            priority_scores[full_significant_mask] += 4  # Significant tier drop boost
+            priority_scores[full_minor_mask] += 2       # Minor tier drop boost
     
     # Annual reachout boost (fully vectorized)
     annual_mask = (
@@ -190,19 +229,20 @@ def calculate_retention_priorities(df):
         # Apply vectorized check
         annual_boost_mask = annual_accounts['months_active_current'].apply(check_upcoming_months)
         
-        # Apply boost using vectorized maximum (reduced value)
+        # Apply boost using vectorized maximum
+        # Set to 11 to ensure High priority (10-15 range)
         boost_indices = annual_accounts[annual_boost_mask].index
         if len(boost_indices) > 0:
-            priority_scores.loc[boost_indices] = np.maximum(priority_scores.loc[boost_indices], 12)
+            priority_scores.loc[boost_indices] = np.maximum(priority_scores.loc[boost_indices], 11)
     
     # Rapid drop alert boosting (vectorized)
     # Moderate rapid drops (score 2)
     moderate_rapid_mask = rapid_drop_alerts == 2
-    priority_scores[moderate_rapid_mask] = np.maximum(priority_scores[moderate_rapid_mask], 15)
+    priority_scores[moderate_rapid_mask] = np.maximum(priority_scores[moderate_rapid_mask], 13)
     
     # Severe rapid drops (score 3)
     severe_rapid_mask = rapid_drop_alerts == 3
-    priority_scores[severe_rapid_mask] = np.maximum(priority_scores[severe_rapid_mask], 20)
+    priority_scores[severe_rapid_mask] = np.maximum(priority_scores[severe_rapid_mask], 17)
     
     # High-value accounts with significant drops (score 2) - boost but check other factors
     high_value_significant_mask = (
@@ -215,11 +255,11 @@ def calculate_retention_priorities(df):
     
     # If At Risk/Outreach + rapid drop = Very High
     high_value_sig_at_risk = high_value_significant_mask & at_risk_mask
-    priority_scores[high_value_sig_at_risk] = np.maximum(priority_scores[high_value_sig_at_risk], 19)
+    priority_scores[high_value_sig_at_risk] = np.maximum(priority_scores[high_value_sig_at_risk], 16)
     
     # If Active but rapid drop = High priority  
     high_value_sig_active = high_value_significant_mask & (~at_risk_mask)
-    priority_scores[high_value_sig_active] = np.maximum(priority_scores[high_value_sig_active], 16)
+    priority_scores[high_value_sig_active] = np.maximum(priority_scores[high_value_sig_active], 13)
     
     # Critical rapid drops for top accounts (score 3) - Very High only if truly at risk
     if 'revenue_current' in df.columns:
@@ -257,14 +297,14 @@ def calculate_retention_priorities(df):
             has_severe_revenue_drop &  # Must have severe/significant revenue drop too
             (~tier_upgraded)  # Exclude tier upgrades
         )
-        priority_scores[critical_rapid_mask] = 23  # Near max to ensure Very High
+        priority_scores[critical_rapid_mask] = 19  # Top of Very High range
     else:
         # Fallback if revenue columns not available
         critical_rapid_mask = (
             (rapid_drop_alerts == 3) & 
             df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4'])
         )
-        priority_scores[critical_rapid_mask] = 23
+        priority_scores[critical_rapid_mask] = 19
     
     # School summer holiday adjustments (vectorized)
     if 'Industry' in df.columns:
@@ -317,7 +357,7 @@ def calculate_retention_priorities(df):
     
     # Cap maximum score to prevent excessive "Very High" classifications
     # This ensures a more reasonable distribution across priority levels
-    MAX_PRIORITY_SCORE = 25
+    MAX_PRIORITY_SCORE = 20
     priority_scores = priority_scores.clip(upper=MAX_PRIORITY_SCORE)
     
     return priority_scores
@@ -334,16 +374,19 @@ def categorize_priorities(priority_scores):
         pd.Series: Priority categories
     """
     # Use pd.cut for efficient categorization
-    # Adjusted thresholds for better distribution
+    # Thresholds: 0-5=Low, 6-10=Medium, 11-15=High, 16-20=Very High
     categories = pd.cut(
         priority_scores,
-        bins=[-np.inf, 0, 5, 10, 20, np.inf],
-        labels=['Excluded', 'Low', 'Medium', 'High', 'Very High'],
+        bins=[-np.inf, 0, 6, 11, 16, 20, np.inf],
+        labels=['Excluded', 'Low', 'Medium', 'High', 'Very High', 'Critical'],
         include_lowest=True
     ).astype(str)
     
     # Handle negative scores specifically
     categories[priority_scores < 0] = 'Excluded'
+    
+    # Merge Critical into Very High to maintain 5 categories
+    categories[categories == 'Critical'] = 'Very High'
     
     return categories
 

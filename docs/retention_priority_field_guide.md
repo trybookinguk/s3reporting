@@ -36,22 +36,36 @@ The **Retention_Priority** field tells us which accounts need immediate attentio
 ### High-Value Accounts
 Key Accounts and High Value accounts get the highest priority scores when they show any warning signs. Even small issues become high priority for these accounts.
 
-### Revenue Comparison
-The system compares each account's revenue to others in their industry:
-- Accounts in the bottom 20% of their industry get higher priority
-- If many similar accounts have low revenue (>30%), priority is based on activity only
-- New accounts aren't compared until they're 3 months old
+### Revenue Analysis
+The system performs two types of revenue analysis:
+
+#### 1. Strategic Revenue Drops (Year-over-Year)
+- Compares current year revenue to same period last year
+- Categories: Severe (>75% drop), Significant (50-75%), Moderate (25-50%), Stable (<25%)
+- Industry quintile comparison for mature accounts
+- New accounts (<12 weeks) use simple trend analysis
+
+#### 2. Rapid Revenue Drops (4-week trends)
+- **Only for high-value accounts**: Key Account, High Value, Tier 4, Tier 3
+- **Only for continuous/regular patterns**: Accounts expected to have consistent revenue
+- Compares last 4 weeks to previous 8 weeks
+- Minimum £100 in comparison period to trigger alerts
+- Creates urgent alerts for sudden drops (>50% = Level 2, >75% = Level 3)
 
 ### Education Accounts
-Schools get special consideration:
-- Summer revenue drops don't increase priority
-- Priority increases in August/September if they haven't returned
-- Scottish schools tracked separately (different term dates)
+Schools get special handling during holidays:
+- **Scottish schools**: Mid-June to mid-August (15th June - 15th August)
+- **English/Welsh schools**: July to early September (July - 7th September)  
+- During holidays: Priority capped at "Low", rapid drop alerts disabled
+- After holidays: Normal priority calculation resumes
+- System detects Scottish schools by postcode (AB, DD, DG, EH, FK, G, etc.)
 
 ### Annual Events
-For yearly events, priority increases:
-- 30 days before they usually start selling tickets
-- Immediately if they miss their typical event window
+For yearly events, priority increases when:
+- They're 1-2 months away from their typical event months
+- Haven't created events yet this year
+- Based on their average lead time (typically 30-60 days)
+- Priority boosted to at least "High" during this critical period
 
 ## Data Sources
 
@@ -68,6 +82,27 @@ This priority system helps us:
 - **Focus effort** on accounts we can actually help
 - **Use time wisely** by prioritizing high-value at-risk accounts
 - **Track success** by monitoring priority changes over time
+
+## Priority Scoring Details
+
+The system uses a scoring formula to calculate priorities:
+- **Base score**: (Tier Weight × 2) + Activity Rating Severity + Revenue Drop Score
+- **Tier weights**: Key Account=5, High Value=4, Tier 4=3, Tier 3=2, Tier 2/1=1
+- **Activity severity**: At Risk=5, Outreach=3, New=2, Active/Inactive=0
+- **Revenue scores**: Severe=3, Significant=2, Moderate=1, Stable=0
+
+### Additional Boosts
+- **Tier drops**: +2 to +6 points based on severity
+- **Annual accounts approaching events**: Minimum score of 11
+- **Rapid drops**: Level 2 sets minimum 13, Level 3 sets minimum 17-19
+- **Maximum score**: Capped at 20 to prevent excessive "Very High" classifications
+
+### Priority Thresholds
+- **Very High**: Score 16-20
+- **High**: Score 11-15  
+- **Medium**: Score 6-10
+- **Low**: Score 1-5
+- **Empty**: Churned accounts (excluded from scoring)
 
 ## Update Frequency
 

@@ -27,11 +27,11 @@ The **Rating** field tells us how each account is doing and whether they need he
 ### 4. **At Risk**
 - **What it means**: They've gone quiet and that's worrying
 - **How we know (depends on account type)**:
-  - **New accounts**: No activity 14-27 days after account creation
+  - **New accounts**: No activity 15-28 days after account creation (changed from 14-27)
   - **Annual/Seasonal**: Should be selling tickets based on historical patterns
   - **Regular**: No activity for 90-179 days
   - **Continuous**: No activity for 30-89 days
-  - **Education industry**: July/August excluded from day count
+  - **Education industry**: Special handling based on term patterns
 - **Action**: Immediate intervention required
 
 ### 5. **Churned**
@@ -39,13 +39,19 @@ The **Rating** field tells us how each account is doing and whether they need he
 - **How we know (depends on account type)**:
   - **New accounts**: No activity 28+ days after account creation
   - **Annual/Seasonal**: Missed expected event date (plus 30-day grace period)
-  - **Regular**: No activity for 180+ days
-  - **Continuous**: No activity for 90+ days
+  - **Regular**: No activity for 180+ days AND minimal current activity (<10 tickets or <£100 revenue)
+  - **Continuous**: No activity for 90+ days AND minimal current activity (<10 tickets or <£100 revenue)
+  - **Tier Loss**: Lost their tier and became inactive
 - **Action**: Win-back campaign or account closure
+
+**Note**: Accounts with meaningful current activity (10+ tickets or £100+ revenue) are NOT marked as churned even if they haven't had recent bookings
 
 ### 6. **Returned**
 - **What it means**: They stopped using us but have come back
-- **How we know**: No activity last year, but active now
+- **How we know**: 
+  - No activity last year, but active now
+  - Only applies to accounts that existed before (Years_Loyalty > 1)
+  - New accounts can't be "Returned"
 - **What to do**: Welcome them back and help them succeed
 
 ### 7. **Inactive**
@@ -62,23 +68,24 @@ Schools and education accounts are handled differently based on when they normal
 - Treated like any other account
 - No special allowances for July/August
 
-**Schools that always start in September**:
-- Flagged immediately if they haven't started by September
-- Important for catching issues after summer staff changes
+**Schools with term-time pattern**:
+- Identified by 60%+ activity during term months (September-June)
+- Minimal summer activity (≤1 month in July/August)
+- July and August treated differently for inactivity calculations
 
-**Schools closed all summer (including September)**:
-- July and August don't count against them
-- Example: If a school was last active on June 30th and we check on September 15th, they've only been inactive for 15 days (not 77 days)
+**Schools that run summer programs**:
+- Any education account with July/August activity in their history
+- Treated like regular accounts with no special summer allowances
 
 The system identifies education accounts by:
 - Industry field marked as "Education"
 - OR activity pattern showing 60%+ activity during term months (September-June) with summer gap
 
 **Scottish Schools**:
-- Identified automatically by their postcode
-- Have different holiday patterns (only July is excluded, not August)
-- Scottish schools return mid-August
-- If a Scottish school normally runs August events, they're flagged immediately if inactive
+- Identified automatically by their postcode (AB, DD, DG, EH, FK, G, HS, IV, KA, KW, KY, ML, PA, PH, TD, ZE)
+- Have different holiday patterns than English/Welsh schools
+- Scottish schools typically return mid-August
+- Special handling during their specific holiday periods
 
 ### Annual Events
 For accounts that run yearly or seasonal events, we predict when they should be active by looking at:
@@ -88,8 +95,17 @@ For accounts that run yearly or seasonal events, we predict when they should be 
 
 The system allows annual events to vary by ±30 days from the expected 365-day cycle to accommodate real-world variations like "last Saturday in June" events.
 
-### Tier-Based Prioritization
-Only our most important accounts (Tier 3 and above) get the "Outreach" rating. This helps us focus on the accounts that matter most.
+### Tier-Based Features
+
+**Outreach Rating**:
+- Only for Tier 3+ accounts (Key Account, High Value, Tier 4, Tier 3)
+- Applied to annual/seasonal accounts 30 days before expected sales
+- Helps prioritize proactive support for valuable accounts
+
+**Tier Loss Detection**:
+- Accounts that had a tier but lost it (became NIL)
+- If also inactive, immediately marked as "Churned"
+- Critical indicator of account health issues
 
 ### Annual Events Report
 A separate report identifies upcoming annual events for Tier 3+ accounts that need proactive outreach in the next 30 days. This report is automatically emailed to stakeholders.
@@ -102,7 +118,10 @@ To work out the rating, we look at:
 - **When their events happen**: To predict future activity
 - **What type of account**: Industry classification
 - **When they joined**: DateTimeCreated field from Accounts report
-- **How important they are**: Their tier level
+- **How important they are**: Their tier level (current and previous)
+- **Current activity levels**: Tickets and revenue in current period
+- **Revenue drops**: Severe drops can influence ratings
+- **Postcode**: For identifying Scottish schools
 
 ## Business Value
 

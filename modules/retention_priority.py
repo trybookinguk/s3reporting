@@ -137,33 +137,38 @@ def calculate_retention_priorities(df):
         current_month = datetime.now().month
         month_name_to_number = {calendar.month_name[i]: i for i in range(1, 13)}
         
-        # Optimized annual reachout boost
-        annual_boost_mask = pd.Series(False, index=df.index)
+        # Vectorized annual reachout boost
+        annual_accounts = df[annual_mask].copy()
         
-        # Process annual accounts with optimized list comprehensions
-        annual_accounts = df[annual_mask]
-        months_to_check = {1, 2}  # Months away to trigger boost
+        # Vectorized month processing
+        def check_upcoming_months(months_list):
+            if not isinstance(months_list, list) or not months_list:
+                return False
+            
+            # Convert month names to numbers
+            month_numbers = [
+                month_name_to_number.get(month_name, 0)
+                for month_name in months_list
+                if isinstance(month_name, str)
+            ]
+            
+            if not month_numbers:
+                return False
+            
+            # Check if any event is 1-2 months away
+            for month_num in month_numbers:
+                months_until = (month_num - current_month + 12) % 12
+                if months_until in [1, 2]:
+                    return True
+            return False
         
-        # Vectorized processing using list comprehension for efficiency
-        for idx in annual_accounts.index:
-            months_active = annual_accounts.loc[idx, 'months_active_current']
-            if isinstance(months_active, list) and months_active:
-                # Efficient month conversion and timing check
-                month_numbers = [
-                    month_name_to_number[month_name] 
-                    for month_name in months_active 
-                    if isinstance(month_name, str) and month_name in month_name_to_number
-                ]
-                
-                if month_numbers:
-                    # Check if any event is 1-2 months away (vectorized calculation)
-                    months_until = {(month_num - current_month) % 12 for month_num in month_numbers}
-                    if months_until & months_to_check:  # Set intersection for efficiency
-                        annual_boost_mask[idx] = True
+        # Apply vectorized check
+        annual_boost_mask = annual_accounts['months_active_current'].apply(check_upcoming_months)
         
         # Apply boost using vectorized maximum (reduced value)
-        if annual_boost_mask.any():
-            priority_scores[annual_boost_mask] = np.maximum(priority_scores[annual_boost_mask], 12)
+        boost_indices = annual_accounts[annual_boost_mask].index
+        if len(boost_indices) > 0:
+            priority_scores.loc[boost_indices] = np.maximum(priority_scores.loc[boost_indices], 12)
     
     # Rapid drop alert boosting (vectorized)
     # Moderate rapid drops (score 2)
@@ -197,6 +202,55 @@ def calculate_retention_priorities(df):
         df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4'])
     )
     priority_scores[critical_rapid_mask] = 23  # Near max to ensure Very High
+    
+    # School summer holiday adjustments (vectorized)
+    if 'Industry' in df.columns:
+        education_mask = df['Industry'] == 'Education'
+        
+        if education_mask.any():
+            current_date = datetime.now()
+            current_month = current_date.month
+            current_day = current_date.day
+            
+            # Determine Scottish schools (postcodes starting with specific letters)
+            scottish_postcodes = ['AB', 'DD', 'DG', 'EH', 'FK', 'G', 'HS', 'IV', 'KA', 'KW', 'KY', 'ML', 'PA', 'PH', 'TD', 'ZE']
+            
+            # Check both AccountPostcode and EventPostcode for Scottish locations
+            is_scottish = pd.Series(False, index=df.index)
+            
+            if 'AccountPostcode' in df.columns:
+                account_scottish = df['AccountPostcode'].fillna('').str.upper().str[:2].isin(scottish_postcodes) | \
+                                   df['AccountPostcode'].fillna('').str.upper().str[:1].isin(['G'])  # G postcodes are single letter
+                is_scottish |= account_scottish
+            
+            if 'EventPostcode' in df.columns:
+                event_scottish = df['EventPostcode'].fillna('').str.upper().str[:2].isin(scottish_postcodes) | \
+                                 df['EventPostcode'].fillna('').str.upper().str[:1].isin(['G'])  # G postcodes are single letter
+                is_scottish |= event_scottish
+            
+            # Define holiday periods
+            # Scottish schools: mid-June (15th) to mid-August (15th)
+            scottish_holiday = (
+                ((current_month == 6) & (current_day >= 15)) |
+                (current_month == 7) |
+                ((current_month == 8) & (current_day <= 15))
+            )
+            
+            # English/Welsh schools: July to early September (7th)
+            english_holiday = (
+                (current_month == 7) |
+                (current_month == 8) |
+                ((current_month == 9) & (current_day <= 7))
+            )
+            
+            # Apply summer holiday priority reduction
+            scottish_schools_on_holiday = education_mask & is_scottish & scottish_holiday
+            english_schools_on_holiday = education_mask & (~is_scottish) & english_holiday
+            
+            # Cap priority scores for schools on holiday to ensure "Low" priority
+            # Max score of 5 ensures they fall into "Low" category (threshold is 5)
+            schools_on_holiday = scottish_schools_on_holiday | english_schools_on_holiday
+            priority_scores[schools_on_holiday] = np.minimum(priority_scores[schools_on_holiday], 5)
     
     # Cap maximum score to prevent excessive "Very High" classifications
     # This ensures a more reasonable distribution across priority levels

@@ -243,10 +243,60 @@ def calculate_activity_ratings(df):
         ratings[other_churned] = 'Churned'
         ratings[other_at_risk] = 'At Risk'
     
-    # 7. INACTIVE ACCOUNTS (vectorized)
+    # 7. TIER LOSS AND SEVERE DROP CHECK (vectorized)
+    # Check for accounts that have lost tier or had severe drops regardless of event frequency
+    
+    # Tier loss - accounts that had a tier but now don't
+    has_lost_tier = (
+        (df['Current_Tier'].isna() | (df['Current_Tier'] == '') | (df['Current_Tier'] == 'NIL')) &
+        (df['Previous_Tier'].notna()) & 
+        (df['Previous_Tier'] != '') & 
+        (df['Previous_Tier'] != 'NIL')
+    )
+    
+    # Check for severe revenue/ticket drops (only if previous revenue was meaningful)
+    has_severe_drop = pd.Series(False, index=df.index)
+    if 'revenue_drop_score' in df.columns and 'revenue_prev' in df.columns:
+        # Only consider severe drops if previous revenue was >= £100
+        had_meaningful_revenue = df['revenue_prev'] >= 100
+        
+        # Handle both string and numeric revenue drop scores
+        severe_drop_string = df['revenue_drop_score'] == 'Severe'
+        severe_drop_numeric = pd.to_numeric(df['revenue_drop_score'], errors='coerce') >= 3
+        
+        # Only flag as severe drop if they had meaningful revenue to lose
+        has_severe_drop = (severe_drop_string | severe_drop_numeric) & had_meaningful_revenue
+    
+    # Check for zero activity despite having events
+    has_zero_activity = pd.Series(False, index=df.index)
+    if 'tickets_current' in df.columns and 'revenue_current' in df.columns:
+        has_zero_activity = (
+            (df['tickets_current'] == 0) & 
+            (df['revenue_current'] == 0) &
+            (df['Event_Frequency_Current'] != 'Inactive')
+        )
+    
+    # Accounts that lost tier AND are inactive = Churned
+    tier_loss_inactive = has_lost_tier & (df['Event_Frequency_Current'] == 'Inactive')
+    ratings[tier_loss_inactive] = 'Churned'
+    
+    # Accounts that lost tier but still have some frequency = At Risk
+    # OR accounts with severe drops/zero activity = At Risk
+    at_risk_conditions = (
+        (has_lost_tier & (df['Event_Frequency_Current'] != 'Inactive')) |
+        (has_severe_drop & has_zero_activity) |
+        (has_lost_tier & has_severe_drop)
+    )
+    # Don't override if already marked as Churned
+    at_risk_mask = at_risk_conditions & (ratings != 'Churned')
+    ratings[at_risk_mask] = 'At Risk'
+    
+    # 8. INACTIVE ACCOUNTS (vectorized)
+    # Only mark as inactive if they haven't been classified already
     inactive_mask = (
         (df['Event_Frequency_Current'] == 'Inactive') &
-        (~new_account_mask) & (~recently_created_inactive) & (~returned_mask)
+        (~new_account_mask) & (~recently_created_inactive) & (~returned_mask) & 
+        (~tier_loss_inactive) & (~at_risk_mask)
     )
     ratings[inactive_mask] = 'Inactive'
     

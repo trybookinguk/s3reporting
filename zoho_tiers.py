@@ -65,13 +65,31 @@ def main():
         logger.info(f"Loading Account report from S3: {key_account}")
         account_df = download_s3_file_cached(s3_client, key_account)
         
-        # Create lookup dictionary: AccountId -> {LastEventCreation, Industry, DateTimeCreated}
+        # Create lookup dictionary: AccountId -> {LastEventCreation, Industry, DateTimeCreated, AccountName, AccountStatus}
         account_lookup = {}
         required_cols = ['Id', 'LastEventCreation', 'Industry', 'Postcode', 'DateTimeCreated']
+        optional_cols = ['AccountName', 'AccountStatus']
+        
+        # Determine which columns to include in lookup
+        lookup_cols = ['LastEventCreation', 'Industry', 'Postcode', 'DateTimeCreated']
+        for col in optional_cols:
+            if col in account_df.columns:
+                lookup_cols.append(col)
+        
         if all(col in account_df.columns for col in required_cols):
-            account_lookup = account_df.set_index('Id')[['LastEventCreation', 'Industry', 'Postcode', 'DateTimeCreated']].to_dict('index')
+            account_lookup = account_df.set_index('Id')[lookup_cols].to_dict('index')
             logger.info(f"Loaded {len(account_lookup):,} accounts with metadata")
             print(f"Loaded {len(account_lookup):,} accounts with LastEventCreation, Industry, Postcode and DateTimeCreated data")
+            
+            # Check for deleted accounts
+            if 'AccountName' in account_df.columns and 'AccountStatus' in account_df.columns:
+                deleted_accounts = account_df[
+                    (account_df['AccountName'] == 'Account Deleted') & 
+                    (account_df['AccountStatus'] == 'Closed')
+                ]
+                if len(deleted_accounts) > 0:
+                    logger.info(f"Found {len(deleted_accounts)} deleted accounts that will be excluded from Zoho upserts")
+                    print(f"Found {len(deleted_accounts)} deleted accounts that will be excluded from Zoho upserts")
         else:
             missing_cols = [col for col in required_cols if col not in account_df.columns]
             logger.warning(f"Account report missing columns: {missing_cols}")
@@ -287,6 +305,26 @@ def main():
     # First, create zoho_updates as a copy to avoid modifying the original
     zoho_updates = updates.copy()
     
+    # Identify deleted accounts that should be removed from Zoho instead of upserted
+    deleted_account_ids = []
+    if 'AccountName' in account_df.columns and 'AccountStatus' in account_df.columns:
+        # Get deleted accounts from the account dataframe
+        deleted_accounts_df = account_df[
+            (account_df['AccountName'] == 'Account Deleted') & 
+            (account_df['AccountStatus'] == 'Closed')
+        ]
+        deleted_account_ids = deleted_accounts_df['Id'].astype(str).tolist()
+        
+        if deleted_account_ids:
+            # Filter out deleted accounts from zoho_updates
+            initial_count = len(zoho_updates)
+            zoho_updates = zoho_updates[~zoho_updates['Account_Name'].astype(str).isin(deleted_account_ids)]
+            removed_count = initial_count - len(zoho_updates)
+            
+            logger.info(f"Filtered out {removed_count} deleted accounts from Zoho upserts")
+            print(f"\nFiltered out {removed_count} deleted accounts from Zoho upserts")
+            print(f"These {len(deleted_account_ids)} accounts will be deleted from Zoho instead")
+    
     # Rename _retention_priority_score to Retention_Priority_Score for Zoho
     if '_retention_priority_score' in zoho_updates.columns:
         zoho_updates['Retention_Priority_Score'] = zoho_updates['_retention_priority_score']
@@ -304,16 +342,26 @@ def main():
     if 'Retention_Priority_Score' in zoho_columns:
         print("✓ Retention_Priority_Score will be sent to Zoho")
     
-    if not zoho_updates.empty:
+    if not zoho_updates.empty or deleted_account_ids:
         # Get Zoho token and update
         try:
             print("\nAuthenticating with Zoho...")
             logger.info("Authenticating with Zoho API")
             token = get_access_token()
             
-            print("Updating Zoho CRM...")
-            logger.info(f"Updating {len(zoho_updates):,} records in Zoho CRM")
-            upsert_to_zoho(token, zoho_updates)
+            # Update active accounts
+            if not zoho_updates.empty:
+                print("Updating Zoho CRM...")
+                logger.info(f"Updating {len(zoho_updates):,} records in Zoho CRM")
+                upsert_to_zoho(token, zoho_updates)
+            
+            # Delete accounts marked as deleted
+            if deleted_account_ids:
+                print(f"\nDeleting {len(deleted_account_ids)} deleted accounts from Zoho...")
+                logger.info(f"Deleting {len(deleted_account_ids)} accounts from Zoho CRM")
+                from modules.utils.zoho_api import delete_from_zoho
+                delete_results = delete_from_zoho(token, deleted_account_ids)
+                logger.info(f"Deletion results: {delete_results['successful']} successful, {delete_results['failed']} failed")
             
         except Exception as e:
             logger.error(f"Zoho update failed: {str(e)}")

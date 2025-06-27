@@ -410,3 +410,110 @@ def upsert_to_zoho_with_details(token, records, debug=False):
         "successful_records": all_successful,
         "failed_records": all_failed
     }
+
+
+def delete_from_zoho(token: str, account_ids: List[str]) -> Dict[str, Union[int, List]]:
+    """
+    Delete accounts from Zoho CRM.
+    
+    Args:
+        token: Zoho access token
+        account_ids: List of Account IDs to delete
+        
+    Returns:
+        Dictionary with deletion results
+    """
+    if not account_ids:
+        return {
+            "total": 0,
+            "successful": 0,
+            "failed": 0,
+            "results": []
+        }
+    
+    # Check test mode
+    if TEST_MODE:
+        print(f"TEST MODE: Would delete {len(account_ids)} accounts from Zoho:")
+        print(f"Account IDs: {account_ids[:5]}..." if len(account_ids) > 5 else f"Account IDs: {account_ids}")
+        return {
+            "total": len(account_ids),
+            "successful": 0,
+            "failed": 0,
+            "results": []
+        }
+    
+    url = f"{ZOHO_DOMAIN}/crm/v5/Accounts"
+    headers = {
+        "Authorization": f"Zoho-oauthtoken {token}",
+        "Content-Type": "application/json"
+    }
+    
+    # Get session for connection reuse
+    session = get_session()
+    
+    # Zoho allows deleting up to 100 records at once
+    batch_size = 100
+    all_successful = []
+    all_failed = []
+    
+    print(f"\nDeleting {len(account_ids)} accounts from Zoho...")
+    
+    for i in range(0, len(account_ids), batch_size):
+        batch_ids = account_ids[i:i+batch_size]
+        batch_num = i//batch_size + 1
+        
+        # Zoho delete API expects comma-separated IDs in the URL
+        ids_param = ",".join(batch_ids)
+        delete_url = f"{url}?ids={ids_param}"
+        
+        try:
+            response = retry_with_backoff(session.delete)(delete_url, headers=headers)
+            response.raise_for_status()
+            
+            result = response.json()
+            if result.get("data"):
+                for item in result["data"]:
+                    if item.get("status") == "success":
+                        all_successful.append(item.get("details", {}).get("id"))
+                    else:
+                        all_failed.append({
+                            "id": item.get("details", {}).get("id"),
+                            "error": item.get("message", "Unknown error")
+                        })
+            
+            print(f"  Batch {batch_num}: Deleted {len([item for item in result.get('data', []) if item.get('status') == 'success'])} accounts")
+            
+        except requests.exceptions.RequestException as e:
+            print(f"  Batch {batch_num}: Failed to delete - {str(e)}")
+            # Add all IDs in this batch as failed
+            for account_id in batch_ids:
+                all_failed.append({
+                    "id": account_id,
+                    "error": str(e)
+                })
+        
+        # Rate limiting
+        if i + batch_size < len(account_ids):
+            time.sleep(0.5)
+    
+    # Print summary
+    total_successful = len(all_successful)
+    total_failed = len(all_failed)
+    print(f"\n=== Zoho Delete Summary ===")
+    print(f"Total accounts: {len(account_ids)}")
+    print(f"Successfully deleted: {total_successful}")
+    print(f"Failed to delete: {total_failed}")
+    
+    if total_failed > 0:
+        print("\nFailed deletions:")
+        for failed in all_failed[:5]:  # Show first 5 failures
+            print(f"  - ID {failed['id']}: {failed['error']}")
+        if total_failed > 5:
+            print(f"  ... and {total_failed - 5} more failures")
+    
+    return {
+        "total": len(account_ids),
+        "successful": total_successful,
+        "failed": total_failed,
+        "results": {"successful": all_successful, "failed": all_failed}
+    }

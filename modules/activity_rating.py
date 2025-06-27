@@ -119,11 +119,14 @@ def calculate_activity_ratings(df):
         expected_next_with_grace = (last_event_ts + pd.Timedelta(days=365+30)).dt.date
         expected_sale_start_ts = (last_event_ts + pd.Timedelta(days=365) - pd.to_timedelta(avg_leads, unit='D'))
         expected_sale_start = expected_sale_start_ts.dt.date
-        outreach_date = (expected_sale_start_ts - pd.Timedelta(days=30)).dt.date
+        # Changed: Outreach now starts 60 days before expected sales (matching retention priority)
+        outreach_date = (expected_sale_start_ts - pd.Timedelta(days=60)).dt.date
         
         # Apply conditions (vectorized)
         churned_high_tier = today >= expected_next_with_grace
+        # Changed: At Risk is now between expected sales start and event date
         at_risk_high_tier = (~churned_high_tier) & (today >= expected_sale_start)
+        # Outreach is 60 days before sales start
         outreach_high_tier = (~churned_high_tier) & (~at_risk_high_tier) & (today >= outreach_date)
         
         # Update ratings

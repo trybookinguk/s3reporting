@@ -21,14 +21,14 @@ The **Rating** field tells us how each account is doing and whether they need he
 - **Criteria**: 
   - Tier 3 or above (Key Account, High Value, Tier 4, Tier 3)
   - Annual or Seasonal event pattern
-  - 30 days before expected ticket sales should begin
+  - 60 days before expected ticket sales should begin
 - **Action**: Proactive contact to support upcoming event
 
 ### 4. **At Risk**
 - **What it means**: They've gone quiet and that's worrying
 - **How we know (depends on account type)**:
   - **New accounts**: No activity 15-28 days after account creation (changed from 14-27)
-  - **Annual/Seasonal**: Should be selling tickets based on historical patterns
+  - **Annual/Seasonal**: Past when they typically start selling tickets but event hasn't happened yet
   - **Regular**: No activity for 90-179 days
   - **Continuous**: No activity for 30-89 days
   - **Education industry**: Special handling based on term patterns
@@ -99,7 +99,8 @@ The system allows annual events to vary by ±30 days from the expected 365-day c
 
 **Outreach Rating**:
 - Only for Tier 3+ accounts (Key Account, High Value, Tier 4, Tier 3)
-- Applied to annual/seasonal accounts 30 days before expected sales
+- Applied to annual/seasonal accounts 60 days before expected sales
+- Aligns with retention priority boost timing
 - Helps prioritize proactive support for valuable accounts
 
 **Tier Loss Detection**:
@@ -108,7 +109,7 @@ The system allows annual events to vary by ±30 days from the expected 365-day c
 - Critical indicator of account health issues
 
 ### Annual Events Report
-A separate report identifies upcoming annual events for Tier 3+ accounts that need proactive outreach in the next 30 days. This report is automatically emailed to stakeholders.
+A separate report identifies upcoming annual events for Tier 3+ accounts that need proactive outreach in the next 30 days. Since outreach happens 60 days before expected sales, this report captures accounts whose sales are expected to begin in the next 60-90 days. This report is automatically emailed to stakeholders.
 
 ## Data Sources
 

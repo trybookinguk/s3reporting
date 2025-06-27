@@ -49,8 +49,8 @@ def generate_upcoming_annual_events_report(results_df):
             lead_days = account.get('_avg_lead_days', 60)
             predicted_creation_date = predicted_event_date - pd.Timedelta(days=lead_days)
             
-            # We want to reach out 30 days before creation
-            outreach_date = predicted_creation_date - pd.Timedelta(days=30)
+            # We want to reach out 60 days before creation (matching retention priority)
+            outreach_date = predicted_creation_date - pd.Timedelta(days=60)
             days_until_outreach = (outreach_date - pd.Timestamp.now()).days
             
             # Include if outreach needed in next 30 days

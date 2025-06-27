@@ -76,7 +76,7 @@ EVENT_FREQUENCY_THRESHOLDS = {
 SMTP_HOST = "smtp.mailgun.org"
 SMTP_PORT = 587
 DEFAULT_RECIPIENT = "alex@trybooking.co.uk"
-CC_RECIPIENT = "louise@trybooking.co.uk" if not TEST_MODE else ""
+CC_RECIPIENT = ""
 
 # === REPORT SETTINGS ===
 ANNUAL_EVENT_MIN_REVENUE = 100  # Minimum revenue for annual event filtering

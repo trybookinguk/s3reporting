@@ -62,10 +62,17 @@ Schools get special handling during holidays:
 
 ### Annual Events
 For yearly events, priority increases when:
-- They're 1-2 months away from their typical event months
-- Haven't created events yet this year
-- Based on their average lead time (typically 30-60 days)
-- Priority boosted to at least "High" during this critical period
+- They haven't created events yet this year
+- We're within 60 days of when they typically start selling tickets
+- Uses their average lead time (e.g., if they sell 96 days before events, we boost 60 days before that)
+- Priority boosted to at least "High" (score 11+) during this critical period
+- **Boost persists** from 60 days before typical sales start until the event date passes
+
+Example: September event with 96-day lead time:
+- April/May: Boost starts (60 days before June sales typically begin)
+- June-August: Boost continues throughout selling season
+- September: Boost ends after event date passes
+- This ensures we catch them BEFORE they choose their ticketing platform
 
 ## Data Sources
 
@@ -93,7 +100,7 @@ The system uses a scoring formula to calculate priorities:
 
 ### Additional Boosts
 - **Tier drops**: +2 to +6 points based on severity
-- **Annual accounts approaching events**: Minimum score of 11
+- **Annual accounts approaching events**: Minimum score of 11 (starts 60 days before typical sales, persists until event passes)
 - **Rapid drops**: Level 2 sets minimum 13, Level 3 sets minimum 17-19
 - **Maximum score**: Capped at 20 to prevent excessive "Very High" classifications
 
@@ -106,4 +113,8 @@ The system uses a scoring formula to calculate priorities:
 
 ## Update Frequency
 
-Priorities are updated automatically every Tuesday morning, using the latest booking data.
+Priorities are updated automatically Monday-Friday at 4:00 AM UTC, using the latest booking data. This daily update ensures:
+- Rapid drop alerts catch issues within 24 hours
+- Tier changes are reflected immediately
+- Annual account boosts activate at the right time
+- CS teams always work with current priorities

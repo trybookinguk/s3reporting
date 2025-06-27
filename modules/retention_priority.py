@@ -198,14 +198,25 @@ def calculate_retention_priorities(df):
     )
     
     if annual_mask.any():
-        current_month = datetime.now().month
+        current_date = datetime.now()
+        current_month = current_date.month
+        current_day = current_date.day
         month_name_to_number = {calendar.month_name[i]: i for i in range(1, 13)}
         
-        # Vectorized annual reachout boost
+        # Vectorized annual reachout boost with lead time consideration
         annual_accounts = df[annual_mask].copy()
         
-        # Vectorized month processing
-        def check_upcoming_months(months_list):
+        # Get average lead days, default to 60 if not available
+        if 'avg_lead_days' in annual_accounts.columns:
+            annual_accounts['lead_days'] = annual_accounts['avg_lead_days'].fillna(60)
+        else:
+            annual_accounts['lead_days'] = 60
+        
+        # Vectorized month processing with lead time
+        def check_upcoming_months_with_lead(row):
+            months_list = row['months_active_current']
+            lead_days = row['lead_days'] if pd.notna(row['lead_days']) else 60
+            
             if not isinstance(months_list, list) or not months_list:
                 return False
             
@@ -219,15 +230,28 @@ def calculate_retention_priorities(df):
             if not month_numbers:
                 return False
             
-            # Check if any event is 1-2 months away
+            # Check if we need to reach out based on lead time
             for month_num in month_numbers:
-                months_until = (month_num - current_month + 12) % 12
-                if months_until in [1, 2]:
+                # Calculate days until the first of the event month
+                if month_num >= current_month:
+                    # Event is this year
+                    days_until_event = (month_num - current_month) * 30 + (1 - current_day)
+                else:
+                    # Event is next year
+                    days_until_event = ((12 - current_month) + month_num) * 30 + (1 - current_day)
+                
+                # Calculate when they typically start selling
+                days_until_sales_start = days_until_event - lead_days
+                
+                # Boost if:
+                # 1. Sales should start in next 30-60 days (early warning), OR
+                # 2. We're past when sales should have started but event hasn't happened yet
+                if days_until_sales_start <= 60 and days_until_event > 0:
                     return True
             return False
         
-        # Apply vectorized check
-        annual_boost_mask = annual_accounts['months_active_current'].apply(check_upcoming_months)
+        # Apply vectorized check with lead time
+        annual_boost_mask = annual_accounts.apply(check_upcoming_months_with_lead, axis=1)
         
         # Apply boost using vectorized maximum
         # Set to 11 to ensure High priority (10-15 range)

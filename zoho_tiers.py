@@ -284,13 +284,17 @@ def main():
         print(f"WARNING: Failed to email tier updates report: {str(e)}")
     
     # Clean up hidden fields before Zoho upload, but keep retention priority score
-    # Rename _retention_priority_score to Retention_Priority_Score for Zoho
-    if '_retention_priority_score' in updates.columns:
-        updates['Retention_Priority_Score'] = updates['_retention_priority_score']
+    # First, create zoho_updates as a copy to avoid modifying the original
+    zoho_updates = updates.copy()
     
-    # Remove hidden columns except the ones we've explicitly renamed
-    hidden_cols = [col for col in updates.columns if col.startswith('_')]
-    zoho_updates = updates.drop(columns=hidden_cols, errors='ignore')
+    # Rename _retention_priority_score to Retention_Priority_Score for Zoho
+    if '_retention_priority_score' in zoho_updates.columns:
+        zoho_updates['Retention_Priority_Score'] = zoho_updates['_retention_priority_score']
+        print(f"✓ Added Retention_Priority_Score to Zoho updates (sample values: {zoho_updates['Retention_Priority_Score'].head(3).tolist()})")
+    
+    # Remove hidden columns after adding the renamed column
+    hidden_cols = [col for col in zoho_updates.columns if col.startswith('_')]
+    zoho_updates = zoho_updates.drop(columns=hidden_cols, errors='ignore')
     logger.info(f"Removing {len(hidden_cols)} hidden columns before Zoho upload")
     print(f"\nRemoving {len(hidden_cols)} hidden columns before Zoho upload")
     

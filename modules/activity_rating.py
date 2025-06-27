@@ -69,9 +69,26 @@ def calculate_activity_ratings(df):
     ratings[at_risk_recent] = 'At Risk'
     
     # 3. RETURNED ACCOUNTS (vectorized)
+    # Only mark as Returned if they existed before (not new accounts)
+    existed_before = pd.Series(True, index=df.index)  # Default to True
+    
+    # Check if account is new based on Years_Loyalty or Previous_Tier
+    if 'Years_Loyalty' in df.columns:
+        existed_before &= df['Years_Loyalty'] > 1
+    
+    if 'Previous_Tier' in df.columns:
+        # If they had no previous tier (NIL/empty), they likely didn't exist
+        had_previous_tier = (
+            df['Previous_Tier'].notna() & 
+            (df['Previous_Tier'] != '') & 
+            (df['Previous_Tier'] != 'NIL')
+        )
+        existed_before &= had_previous_tier
+    
     returned_mask = (
         (df['Event_Frequency_Current'] != 'Inactive') & 
-        (df['Event_Frequency_Previous'] == 'Inactive')
+        (df['Event_Frequency_Previous'] == 'Inactive') &
+        existed_before  # Must have existed before to "return"
     )
     ratings[returned_mask] = 'Returned'
     

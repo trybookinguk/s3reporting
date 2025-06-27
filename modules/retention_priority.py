@@ -79,6 +79,19 @@ def calculate_retention_priorities(df):
     # Validate rapid drop alert
     rapid_drop_alerts = pd.to_numeric(df['rapid_drop_alert'], errors='coerce').fillna(0).clip(0, 3)
     
+    # Clear rapid drop alerts for new accounts (shouldn't have year-over-year comparisons)
+    if 'Years_Loyalty' in df.columns:
+        is_new_account = df['Years_Loyalty'] <= 1
+        rapid_drop_alerts[is_new_account] = 0
+    
+    # Also clear for accounts that upgraded from NIL tier
+    if 'Previous_Tier' in df.columns:
+        upgraded_from_nil = (
+            (df['Previous_Tier'].isna() | (df['Previous_Tier'] == '') | (df['Previous_Tier'] == 'NIL')) &
+            df['Current_Tier'].notna() & (df['Current_Tier'] != '') & (df['Current_Tier'] != 'NIL')
+        )
+        rapid_drop_alerts[upgraded_from_nil] = 0
+    
     # Calculate base priority (vectorized)
     # Use a more balanced formula to prevent excessive scores
     # Old formula: tier_weight × (rating_severity + revenue_score) could yield 40+
@@ -196,12 +209,40 @@ def calculate_retention_priorities(df):
     high_value_sig_active = high_value_significant_mask & (~at_risk_mask)
     priority_scores[high_value_sig_active] = np.maximum(priority_scores[high_value_sig_active], 16)
     
-    # Critical rapid drops for top accounts (score 3) - definitely Very High
-    critical_rapid_mask = (
-        (rapid_drop_alerts == 3) & 
-        df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4'])
-    )
-    priority_scores[critical_rapid_mask] = 23  # Near max to ensure Very High
+    # Critical rapid drops for top accounts (score 3) - Very High only if truly at risk
+    if 'revenue_current' in df.columns:
+        # Check for actual revenue decline (not just ticket drops)
+        has_revenue_decline = pd.Series(True, index=df.index)  # Default to True
+        
+        if 'revenue_prev' in df.columns:
+            # Exclude accounts with revenue growth or stable low revenue
+            has_revenue_decline = (
+                (df['revenue_current'] < df['revenue_prev']) &  # Revenue decreased
+                (df['revenue_prev'] >= 100)  # And previous revenue was meaningful
+            )
+        
+        # Also exclude accounts that upgraded tiers (NIL to something)
+        tier_upgraded = pd.Series(False, index=df.index)
+        if 'Previous_Tier' in df.columns:
+            tier_upgraded = (
+                (df['Previous_Tier'].isna() | (df['Previous_Tier'] == '') | (df['Previous_Tier'] == 'NIL')) &
+                df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1'])
+            )
+        
+        critical_rapid_mask = (
+            (rapid_drop_alerts == 3) & 
+            df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4']) &
+            has_revenue_decline &
+            (~tier_upgraded)  # Exclude tier upgrades
+        )
+        priority_scores[critical_rapid_mask] = 23  # Near max to ensure Very High
+    else:
+        # Fallback if revenue columns not available
+        critical_rapid_mask = (
+            (rapid_drop_alerts == 3) & 
+            df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4'])
+        )
+        priority_scores[critical_rapid_mask] = 23
     
     # School summer holiday adjustments (vectorized)
     if 'Industry' in df.columns:

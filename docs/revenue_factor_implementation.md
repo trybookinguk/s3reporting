@@ -47,7 +47,6 @@ Assesses revenue trend severity and score.
 - Stable (0): ≥75% of comparison revenue
 
 **Industry Quintile Adjustments:**
-When quintiles are available, the score can be increased based on quintile drops:
 - Drop 3+ quintiles: Upgrade to Severe (3)
 - Drop 2 quintiles: Upgrade to Significant (2)
 - Drop 1 quintile: Upgrade to Moderate (1)
@@ -85,7 +84,7 @@ Entry point for revenue analysis that orchestrates all the other functions.
 - Accounts 12+ weeks old: Full quintile comparison with industry peers
 - Lifecycle stages tracked for context but don't affect scoring directly
 
-### Zero Revenue Normalization
+### Zero Revenue Normalisation
 When >30% of industry peers have zero revenue (ZERO_REVENUE_COMMON_THRESHOLD), accounts with zero revenue receive reduced severity scores (-1 level). This prevents false positives in industries with seasonal patterns or high dormancy rates.
 
 ### Education Account Handling
@@ -104,27 +103,15 @@ The revenue factor module is designed to integrate with the retention priority s
 ```python
 from modules.revenue_factor import get_revenue_factor
 
-# Prepare data
-current_revenue = 5000  # Current period revenue
-historical_df = pd.DataFrame(...)  # Transaction history with dates
-industry_df = pd.DataFrame(...)    # Industry peer data for quintiles
-
-# Calculate revenue factor
 result = get_revenue_factor(
-    current_revenue=current_revenue,
-    historical_revenue=historical_df,
-    industry_data=industry_df,
-    account_type='seasonal',  # or 'continuous', 'annual'
-    account_info={
-        'account_age_days': 180,  # Optional: for lifecycle stage
-        'accounts_df': accounts_df  # Optional: can extract age from here
-    }
+    current_revenue=5000,
+    historical_revenue=historical_df,  # Transaction history
+    industry_data=industry_df,         # Peer data for quintiles
+    account_type='seasonal',           # 'continuous', 'annual'
+    account_info={'account_age_days': 180}
 )
 
-# Result contains:
-print(result['severity'])  # 'stable', 'moderate', 'significant', or 'severe'
-print(result['score'])     # 0, 1, 2, or 3
-print(result['details'])   # Rich context about the analysis
+# Returns: severity ('stable'-'severe'), score (0-3), details (dict)
 ```
 
 ## Testing

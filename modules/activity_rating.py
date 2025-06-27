@@ -81,18 +81,10 @@ def calculate_activity_ratings(df):
     existed_before = pd.Series(False, index=df.index)  # Default to False
     
     if 'Years_Loyalty' in df.columns:
-        # Only consider returned if they have 2+ years AND had a previous tier
-        if 'Previous_Tier' in df.columns:
-            had_meaningful_previous = (
-                (df['Years_Loyalty'] > 1) &
-                df['Previous_Tier'].notna() & 
-                (df['Previous_Tier'] != '') & 
-                (df['Previous_Tier'] != 'NIL')
-            )
-            existed_before = had_meaningful_previous
-        else:
-            # Fallback if no Previous_Tier column
-            existed_before = df['Years_Loyalty'] > 1
+        # Consider returned if they have 2+ years of loyalty
+        # This captures accounts that were active before, went inactive, and have now returned
+        # Previous tier is not required as some old accounts may not have had tiers assigned
+        existed_before = df['Years_Loyalty'] > 1
     
     # Only consider "Returned" if previous frequency was explicitly 'Inactive' (not null/blank)
     had_inactive_previous = (

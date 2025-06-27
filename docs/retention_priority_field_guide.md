@@ -14,7 +14,7 @@ The **Retention_Priority** field tells us which accounts need immediate attentio
 ### 2. **High**
 - **What it means**: Important account needs urgent attention
 - **How we know**: Valuable account showing concerning patterns
-- **What to do**: Personalized outreach within 1 week
+- **What to do**: Personalised outreach within 1 week
 
 ### 3. **Medium**
 - **What it means**: Account showing early warning signs
@@ -68,27 +68,17 @@ For yearly events, priority increases when:
 - Priority boosted to at least "High" (score 11+) during this critical period
 - **Boost persists** from 60 days before typical sales start until the event date passes
 
-Example: September event with 96-day lead time:
-- April/May: Boost starts (60 days before June sales typically begin)
-- June-August: Boost continues throughout selling season
-- September: Boost ends after event date passes
-- This ensures we catch them BEFORE they choose their ticketing platform
+Example: September event with 96-day lead:
+- April: Boost starts (60 days before typical sales)
+- September: Boost ends after event
+- Ensures intervention before platform decision
 
-## Data Sources
+## Key Benefits
 
-To calculate priority, we combine:
-- **Account tier**: How valuable they are (Key Account, High Value, Tier 4, etc.)
-- **Activity rating**: Their current health status (Active, At Risk, etc.)
-- **Revenue trends**: How they compare to similar accounts
-- **Event patterns**: When they normally run events
-
-## Business Value
-
-This priority system helps us:
-- **Save more accounts** by intervening before they churn
-- **Focus effort** on accounts we can actually help
-- **Use time wisely** by prioritizing high-value at-risk accounts
-- **Track success** by monitoring priority changes over time
+- **Early intervention** before accounts churn
+- **Focused effort** on high-value at-risk accounts
+- **Clear actions** based on priority levels
+- **Measurable success** through priority tracking
 
 ## Priority Scoring Details
 

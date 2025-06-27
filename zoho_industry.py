@@ -7,7 +7,8 @@ from datetime import datetime
 # Import shared modules
 from modules.utils.config import S3_BUCKET, ZOHO_DOMAIN
 from modules.utils.s3_data_loader import get_s3_client, download_s3_file_cached
-from modules.utils.zoho_api import get_access_token, upsert_to_zoho
+from modules.utils.zoho_api import get_access_token, upsert_to_zoho, delete_from_zoho
+from modules.deleted_account_handler import process_deleted_accounts
 
 # === S3 Download ===
 def fetch_s3_report():
@@ -125,13 +126,24 @@ def main():
     token = get_access_token()
     s3_df = fetch_s3_report()
     zoho_accounts = fetch_zoho_accounts(token)
+    
+    # Handle deleted accounts using the dedicated module
+    deleted_account_ids, deletion_results = process_deleted_accounts(
+        s3_df, token, delete_from_zoho
+    )
+    
+    # Remove deleted accounts from the dataframe so they won't be upserted
+    if deleted_account_ids:
+        s3_df = s3_df[~s3_df['Id'].astype(str).isin(deleted_account_ids)]
+    
+    # Now prepare upserts for non-deleted accounts
     upserts = prepare_upserts(s3_df, zoho_accounts)
 
     if not upserts:
         print("No updates needed.")
         return
 
-    print(f"Prepared {len(upserts)} updates...")
+    print(f"\nPrepared {len(upserts)} updates...")
     # Use shared upsert function with debug=True and return_results=True
     result = upsert_to_zoho(token, upserts, debug=True, return_results=True)
     success = [r for r in result if r.get("status") == "success"]

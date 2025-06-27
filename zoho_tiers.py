@@ -305,25 +305,8 @@ def main():
     # First, create zoho_updates as a copy to avoid modifying the original
     zoho_updates = updates.copy()
     
-    # Identify deleted accounts that should be removed from Zoho instead of upserted
-    deleted_account_ids = []
-    if 'AccountName' in account_df.columns and 'AccountStatus' in account_df.columns:
-        # Get deleted accounts from the account dataframe
-        deleted_accounts_df = account_df[
-            (account_df['AccountName'] == 'Account Deleted') & 
-            (account_df['AccountStatus'] == 'Closed')
-        ]
-        deleted_account_ids = deleted_accounts_df['Id'].astype(str).tolist()
-        
-        if deleted_account_ids:
-            # Filter out deleted accounts from zoho_updates
-            initial_count = len(zoho_updates)
-            zoho_updates = zoho_updates[~zoho_updates['Account_Name'].astype(str).isin(deleted_account_ids)]
-            removed_count = initial_count - len(zoho_updates)
-            
-            logger.info(f"Filtered out {removed_count} deleted accounts from Zoho upserts")
-            print(f"\nFiltered out {removed_count} deleted accounts from Zoho upserts")
-            print(f"These {len(deleted_account_ids)} accounts will be deleted from Zoho instead")
+    # Note: Deleted account handling has been moved to zoho_industry.py
+    # where it makes more sense as part of account-level data sync
     
     # Rename _retention_priority_score to Retention_Priority_Score for Zoho
     if '_retention_priority_score' in zoho_updates.columns:
@@ -342,26 +325,16 @@ def main():
     if 'Retention_Priority_Score' in zoho_columns:
         print("✓ Retention_Priority_Score will be sent to Zoho")
     
-    if not zoho_updates.empty or deleted_account_ids:
+    if not zoho_updates.empty:
         # Get Zoho token and update
         try:
             print("\nAuthenticating with Zoho...")
             logger.info("Authenticating with Zoho API")
             token = get_access_token()
             
-            # Update active accounts
-            if not zoho_updates.empty:
-                print("Updating Zoho CRM...")
-                logger.info(f"Updating {len(zoho_updates):,} records in Zoho CRM")
-                upsert_to_zoho(token, zoho_updates)
-            
-            # Delete accounts marked as deleted
-            if deleted_account_ids:
-                print(f"\nDeleting {len(deleted_account_ids)} deleted accounts from Zoho...")
-                logger.info(f"Deleting {len(deleted_account_ids)} accounts from Zoho CRM")
-                from modules.utils.zoho_api import delete_from_zoho
-                delete_results = delete_from_zoho(token, deleted_account_ids)
-                logger.info(f"Deletion results: {delete_results['successful']} successful, {delete_results['failed']} failed")
+            print("Updating Zoho CRM...")
+            logger.info(f"Updating {len(zoho_updates):,} records in Zoho CRM")
+            upsert_to_zoho(token, zoho_updates)
             
         except Exception as e:
             logger.error(f"Zoho update failed: {str(e)}")

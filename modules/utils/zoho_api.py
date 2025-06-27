@@ -88,6 +88,45 @@ def get_access_token():
     return _make_request()
 
 
+def _clean_record_for_json(record: Dict) -> Dict:
+    """
+    Clean a record to ensure all values are JSON-serializable.
+    Replaces NaN, infinity values with None.
+    """
+    import math
+    import numpy as np
+    
+    cleaned = {}
+    for key, value in record.items():
+        # Handle pandas/numpy numeric types
+        if isinstance(value, (np.integer, np.floating)):
+            if np.isnan(value) or np.isinf(value):
+                cleaned[key] = None
+            else:
+                cleaned[key] = float(value)
+        # Handle regular Python floats
+        elif isinstance(value, float):
+            if math.isnan(value) or math.isinf(value):
+                cleaned[key] = None
+            else:
+                cleaned[key] = value
+        # Convert any other numpy types to Python types
+        elif hasattr(value, 'item'):
+            # This handles numpy scalars
+            try:
+                python_value = value.item()
+                if isinstance(python_value, float) and (math.isnan(python_value) or math.isinf(python_value)):
+                    cleaned[key] = None
+                else:
+                    cleaned[key] = python_value
+            except:
+                cleaned[key] = str(value)
+        else:
+            cleaned[key] = value
+    
+    return cleaned
+
+
 def _process_batch_with_retry(session: requests.Session, url: str, headers: Dict, 
                             batch: List[Dict], batch_num: int, max_retries: int = 3) -> Tuple[List[Dict], List[Dict]]:
     """
@@ -96,8 +135,11 @@ def _process_batch_with_retry(session: requests.Session, url: str, headers: Dict
     Returns:
         Tuple of (successful_records, failed_records)
     """
+    # Clean all records in the batch to ensure JSON compatibility
+    cleaned_batch = [_clean_record_for_json(record) for record in batch]
+    
     payload = {
-        "data": batch,
+        "data": cleaned_batch,
         "duplicate_check_fields": ["Account_Name"]
     }
     
@@ -115,7 +157,7 @@ def _process_batch_with_retry(session: requests.Session, url: str, headers: Dict
             
             # Separate successful and failed records
             for idx, result in enumerate(batch_results):
-                record = batch[idx] if idx < len(batch) else {}
+                record = cleaned_batch[idx] if idx < len(cleaned_batch) else {}
                 if result.get("status") == "success":
                     successful_records.append({
                         "record": record,
@@ -157,7 +199,7 @@ def _process_batch_with_retry(session: requests.Session, url: str, headers: Dict
                 print(f"Batch {batch_num}: Failed after {max_retries} retries: {error_msg}")
                 
                 # Mark all records in batch as failed
-                for record in batch:
+                for record in cleaned_batch:
                     failed_records.append({
                         "record": record,
                         "error": f"Failed after retries: {error_msg}",

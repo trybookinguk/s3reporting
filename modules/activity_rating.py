@@ -69,34 +69,57 @@ def calculate_activity_ratings(df):
     ratings[at_risk_recent] = 'At Risk'
     
     # 3. RETURNED ACCOUNTS (vectorized)
-    # Only mark as Returned if they existed before (not new accounts)
-    existed_before = pd.Series(True, index=df.index)  # Default to True
+    # Only mark as Returned if they truly existed before and went away
     
-    # Check if account is new based on Years_Loyalty or Previous_Tier
+    # For accounts to be "Returned", they must have:
+    # 1. Current activity (not inactive)
+    # 2. Previous period was inactive
+    # 3. Actually existed before (not just selling tickets for a future event)
+    
+    # Years_Loyalty alone can be misleading for annual events that sell across periods
+    # Better indicators of truly returning:
+    existed_before = pd.Series(False, index=df.index)  # Default to False
+    
     if 'Years_Loyalty' in df.columns:
-        existed_before &= df['Years_Loyalty'] > 1
+        # Only consider returned if they have 2+ years AND had a previous tier
+        if 'Previous_Tier' in df.columns:
+            had_meaningful_previous = (
+                (df['Years_Loyalty'] > 1) &
+                df['Previous_Tier'].notna() & 
+                (df['Previous_Tier'] != '') & 
+                (df['Previous_Tier'] != 'NIL')
+            )
+            existed_before = had_meaningful_previous
+        else:
+            # Fallback if no Previous_Tier column
+            existed_before = df['Years_Loyalty'] > 1
     
-    if 'Previous_Tier' in df.columns:
-        # If they had no previous tier (NIL/empty), they likely didn't exist
-        had_previous_tier = (
-            df['Previous_Tier'].notna() & 
-            (df['Previous_Tier'] != '') & 
-            (df['Previous_Tier'] != 'NIL')
-        )
-        existed_before &= had_previous_tier
+    # Only consider "Returned" if previous frequency was explicitly 'Inactive' (not null/blank)
+    had_inactive_previous = (
+        df['Event_Frequency_Previous'].notna() & 
+        (df['Event_Frequency_Previous'] == 'Inactive')
+    )
     
     returned_mask = (
         (df['Event_Frequency_Current'] != 'Inactive') & 
-        (df['Event_Frequency_Previous'] == 'Inactive') &
-        existed_before  # Must have existed before to "return"
+        had_inactive_previous &
+        existed_before
     )
     ratings[returned_mask] = 'Returned'
     
     # 4. HIGH-TIER ANNUAL/SEASONAL ACCOUNTS (vectorized)
     high_tier_mask = df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4', 'Tier 3'])
-    annual_seasonal_mask = df['Event_Frequency_Previous'].isin(['Annual', 'Seasonal'])
+    # Handle null values in Event_Frequency_Previous
+    annual_seasonal_mask = (
+        df['Event_Frequency_Previous'].notna() & 
+        df['Event_Frequency_Previous'].isin(['Annual', 'Seasonal'])
+    )
     has_last_event = df['last_event_date'].notna()
-    has_historical_activity = df['Event_Frequency_Previous'] != 'Inactive'
+    # Historical activity means they had a non-inactive previous frequency (including null is ok)
+    has_historical_activity = (
+        df['Event_Frequency_Previous'].isna() |  # No previous data is ok
+        (df['Event_Frequency_Previous'] != 'Inactive')
+    )
     
     # Only check annual/seasonal patterns for accounts that are currently inactive
     currently_inactive = df['Event_Frequency_Current'] == 'Inactive'
@@ -137,6 +160,7 @@ def calculate_activity_ratings(df):
     
     # 5. REGULAR/CONTINUOUS ACCOUNTS (vectorized)
     regular_continuous_mask = (
+        df['Event_Frequency_Previous'].notna() &  # Must have previous frequency data
         df['Event_Frequency_Previous'].isin(['Regular', 'Continuous']) &
         has_historical_activity &
         (~new_account_mask) & (~recently_created_inactive) & (~returned_mask) & (~high_tier_annual_seasonal)
@@ -238,9 +262,11 @@ def calculate_activity_ratings(df):
         ratings[reg_cont_indices[continuous_at_risk | regular_at_risk]] = 'At Risk'
     
     # 6. DEFAULT FALLBACK FOR OTHER PATTERNS (vectorized)
+    # This catches any unusual patterns or accounts with null previous frequency
     other_patterns_mask = (
         has_historical_activity &
-        (~df['Event_Frequency_Previous'].isin(['Annual', 'Seasonal', 'Regular', 'Continuous', 'Inactive'])) &
+        (df['Event_Frequency_Previous'].isna() |  # No previous data
+         (~df['Event_Frequency_Previous'].isin(['Annual', 'Seasonal', 'Regular', 'Continuous', 'Inactive']))) &
         (~new_account_mask) & (~recently_created_inactive) & (~returned_mask) & 
         (~high_tier_annual_seasonal) & (~regular_continuous_mask)
     )
@@ -328,6 +354,18 @@ def calculate_activity_ratings(df):
     )
     if potential_issues.any():
         ratings[potential_issues] = 'Dormant'  # More appropriate than 'Active'
+    
+    # Fix misclassified "Returned" accounts that are actually new annual accounts
+    # These are accounts with Years_Loyalty <= 1 that got marked as Returned
+    if 'Years_Loyalty' in df.columns:
+        misclassified_returned = (
+            (ratings == 'Returned') & 
+            (df['Years_Loyalty'] <= 1)
+        )
+        if misclassified_returned.any():
+            # If they're currently active, mark as Active
+            # If they're at risk based on other criteria, keep that
+            ratings[misclassified_returned & (df['Event_Frequency_Current'] != 'Inactive')] = 'Active'
     
     # SAFETY NET: Override clearly incorrect 'Churned' ratings
     # This should rarely trigger if the earlier logic is correct

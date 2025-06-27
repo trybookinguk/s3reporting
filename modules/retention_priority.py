@@ -401,7 +401,7 @@ def categorize_priorities(priority_scores):
     # Thresholds: 0-5=Low, 6-10=Medium, 11-15=High, 16-20=Very High
     categories = pd.cut(
         priority_scores,
-        bins=[-np.inf, 0, 6, 11, 16, 20, np.inf],
+        bins=[-np.inf, 0, 5, 10, 15, 20, np.inf],
         labels=['Excluded', 'Low', 'Medium', 'High', 'Very High', 'Critical'],
         include_lowest=True
     ).astype(str)

@@ -328,7 +328,31 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     # Event Frequency only has: Continuous, Regular, Seasonal, Annual, Inactive
     # Accounts that created events but haven't sold tickets remain "Inactive" in frequency
     
-    # Vectorized previous frequency classification  
+    # Vectorized previous frequency classification
+    # For accounts with no previous period data, keep as blank/null rather than 'Inactive'
+    # Check if they actually had a previous period to analyze
+    has_previous_data = pd.Series(False, index=metrics_df.index)
+    
+    # Best indicator: if they had a Previous_Tier, they existed in previous period
+    if 'Previous_Tier' in metrics_df.columns:
+        had_previous_tier = (
+            metrics_df['Previous_Tier'].notna() & 
+            (metrics_df['Previous_Tier'] != '') & 
+            (metrics_df['Previous_Tier'] != 'NIL')
+        )
+        has_previous_data |= had_previous_tier
+    
+    # If freq_month_count_previous > 0, they definitely had activity
+    has_previous_data |= (metrics_df['freq_month_count_previous'] > 0)
+    
+    # Check if they had any events in previous period
+    if 'event_months_previous' in metrics_df.columns:
+        # event_months_previous is a set, not a string, so check length differently
+        has_events_previous = metrics_df['event_months_previous'].apply(
+            lambda x: len(x) > 0 if isinstance(x, (set, list)) else False
+        )
+        has_previous_data |= has_events_previous
+    
     previous_freq = pd.cut(
         metrics_df['freq_month_count_previous'],
         bins=[-1, 0, 1, 4, 9, 13],  # Extended upper bound
@@ -336,8 +360,11 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         include_lowest=True,
         right=True
     )
-    # Fill any remaining NaN with 'Inactive' as safe default
-    metrics_df['Event_Frequency_Previous'] = previous_freq.fillna('Inactive').astype(str)
+    
+    # Only fill with 'Inactive' if they actually had previous period but no activity
+    # Leave as NaN if they have no previous period data at all
+    metrics_df['Event_Frequency_Previous'] = previous_freq
+    metrics_df.loc[~has_previous_data, 'Event_Frequency_Previous'] = np.nan
     
     # Event frequency summary
     event_freq_summary = metrics_df['Event_Frequency_Current'].value_counts().to_dict()

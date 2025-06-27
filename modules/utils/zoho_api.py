@@ -456,12 +456,11 @@ def upsert_to_zoho_with_details(token, records, debug=False):
 
 def delete_from_zoho(token: str, account_ids: List[str]) -> Dict[str, Union[int, List]]:
     """
-    Delete accounts from Zoho CRM by TryBooking Account IDs.
-    First searches for the Zoho record IDs, then deletes them.
+    Delete accounts from Zoho CRM using Account_Name (which matches TryBooking Account IDs).
     
     Args:
         token: Zoho access token
-        account_ids: List of TryBooking Account IDs to delete
+        account_ids: List of TryBooking Account IDs (which are Account_Name in Zoho)
         
     Returns:
         Dictionary with deletion results
@@ -492,107 +491,100 @@ def delete_from_zoho(token: str, account_ids: List[str]) -> Dict[str, Union[int,
         "Content-Type": "application/json"
     }
     
-    print(f"\nSearching for Zoho record IDs for {len(account_ids)} accounts...")
-    
-    # First, we need to search for these accounts to get their Zoho IDs
-    # Process in smaller batches for search
-    search_batch_size = 20
-    account_to_zoho_id = {}
-    
-    for i in range(0, len(account_ids), search_batch_size):
-        batch = account_ids[i:i+search_batch_size]
-        
-        # Build search criteria
-        criteria_parts = [f"(Account_Name:equals:{acc_id})" for acc_id in batch]
-        criteria = f"({' or '.join(criteria_parts)})"
-        
-        search_url = f"{ZOHO_DOMAIN}/crm/v5/Accounts/search"
-        params = {
-            "criteria": criteria,
-            "fields": "id,Account_Name",
-            "per_page": 200
-        }
-        
-        try:
-            response = retry_with_backoff(session.get)(search_url, headers=headers, params=params)
-            response.raise_for_status()
-            
-            result = response.json()
-            if result.get("data"):
-                for record in result["data"]:
-                    zoho_id = record.get("id")
-                    account_name = record.get("Account_Name")
-                    if zoho_id and account_name:
-                        account_to_zoho_id[account_name] = zoho_id
-            
-        except requests.exceptions.RequestException as e:
-            print(f"  Search batch {i//search_batch_size + 1}: Failed - {str(e)}")
-        
-        # Rate limiting
-        if i + search_batch_size < len(account_ids):
-            time.sleep(0.2)
-    
-    print(f"Found {len(account_to_zoho_id)} Zoho records out of {len(account_ids)} accounts")
-    
-    # Now delete using the Zoho IDs
-    zoho_ids_to_delete = list(account_to_zoho_id.values())
-    if not zoho_ids_to_delete:
-        return {
-            "total": len(account_ids),
-            "successful": 0,
-            "failed": len(account_ids),
-            "results": {"message": "No matching records found in Zoho"}
-        }
-    
-    # Delete in batches
-    delete_batch_size = 100
+    # We need to delete by Zoho's internal ID, so we'll use a different approach
+    # Delete records one by one or in small batches using search + delete
+    delete_batch_size = 10  # Smaller batches for delete operations
     all_successful = []
     all_failed = []
     
-    print(f"\nDeleting {len(zoho_ids_to_delete)} accounts from Zoho...")
+    print(f"\nDeleting {len(account_ids)} accounts from Zoho...")
     
-    for i in range(0, len(zoho_ids_to_delete), delete_batch_size):
-        batch_zoho_ids = zoho_ids_to_delete[i:i+delete_batch_size]
+    for i in range(0, len(account_ids), delete_batch_size):
+        batch_account_ids = account_ids[i:i+delete_batch_size]
         batch_num = i//delete_batch_size + 1
         
-        # Zoho delete API expects comma-separated IDs in the URL
-        ids_param = ",".join(batch_zoho_ids)
-        delete_url = f"{ZOHO_DOMAIN}/crm/v5/Accounts?ids={ids_param}"
+        # First search for these accounts to get their Zoho IDs
+        criteria_parts = [f"(Account_Name:equals:{acc_id})" for acc_id in batch_account_ids]
+        criteria = f"({' or '.join(criteria_parts)})"
+        
+        search_url = f"{ZOHO_DOMAIN}/crm/v2/Accounts/search"
+        params = {
+            "criteria": criteria,
+            "fields": "id,Account_Name"
+        }
         
         try:
-            response = retry_with_backoff(session.delete)(delete_url, headers=headers)
-            response.raise_for_status()
+            # Search for the accounts
+            search_response = retry_with_backoff(session.get)(search_url, headers=headers, params=params)
+            search_response.raise_for_status()
             
-            result = response.json()
-            if result.get("data"):
-                for item in result["data"]:
-                    if item.get("status") == "success":
+            search_result = search_response.json()
+            if not search_result.get("data"):
+                # No records found to delete
+                for acc_id in batch_account_ids:
+                    all_failed.append({
+                        "id": acc_id,
+                        "error": "Account not found in Zoho"
+                    })
+                continue
+            
+            # Extract Zoho IDs
+            zoho_ids = []
+            account_id_map = {}
+            for record in search_result["data"]:
+                zoho_id = record.get("id")
+                account_name = record.get("Account_Name")
+                if zoho_id and account_name:
+                    zoho_ids.append(zoho_id)
+                    account_id_map[zoho_id] = account_name
+            
+            if zoho_ids:
+                # Delete using Zoho IDs
+                ids_param = ",".join(zoho_ids)
+                delete_url = f"{ZOHO_DOMAIN}/crm/v2/Accounts?ids={ids_param}"
+                
+                delete_response = retry_with_backoff(session.delete)(delete_url, headers=headers)
+                delete_response.raise_for_status()
+                
+                delete_result = delete_response.json()
+                if delete_result.get("data"):
+                    for item in delete_result["data"]:
                         zoho_id = item.get("details", {}).get("id")
-                        # Find the original account ID
-                        orig_id = next((k for k, v in account_to_zoho_id.items() if v == zoho_id), zoho_id)
-                        all_successful.append(orig_id)
-                    else:
-                        all_failed.append({
-                            "id": item.get("details", {}).get("id"),
-                            "error": item.get("message", "Unknown error")
-                        })
+                        if item.get("status") == "success":
+                            # Map back to original account ID
+                            orig_id = account_id_map.get(zoho_id, zoho_id)
+                            all_successful.append(orig_id)
+                        else:
+                            orig_id = account_id_map.get(zoho_id, zoho_id)
+                            all_failed.append({
+                                "id": orig_id,
+                                "error": item.get("message", "Unknown error")
+                            })
+                
+                success_count = len([item for item in delete_result.get('data', []) if item.get('status') == 'success'])
+                print(f"  Batch {batch_num}: Deleted {success_count} accounts")
             
-            success_count = len([item for item in result.get('data', []) if item.get('status') == 'success'])
-            print(f"  Batch {batch_num}: Deleted {success_count} accounts")
+            # Check for accounts that weren't found
+            found_account_names = set(account_id_map.values())
+            for acc_id in batch_account_ids:
+                if acc_id not in found_account_names:
+                    all_failed.append({
+                        "id": acc_id,
+                        "error": "Account not found in Zoho"
+                    })
             
         except requests.exceptions.RequestException as e:
-            print(f"  Batch {batch_num}: Failed to delete - {str(e)}")
+            print(f"  Batch {batch_num}: Failed - {str(e)}")
             # Add all IDs in this batch as failed
-            for zoho_id in batch_zoho_ids:
-                orig_id = next((k for k, v in account_to_zoho_id.items() if v == zoho_id), zoho_id)
+            for acc_id in batch_account_ids:
                 all_failed.append({
-                    "id": orig_id,
+                    "id": acc_id,
                     "error": str(e)
                 })
         
         # Rate limiting
-        if i + delete_batch_size < len(zoho_ids_to_delete):
-            time.sleep(0.5)
+        if i + delete_batch_size < len(account_ids):
+            time.sleep(0.3)
     
     # Print summary
     total_successful = len(all_successful)

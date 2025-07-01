@@ -556,7 +556,7 @@ def main():
             to='alex@trybooking.co.uk' if TEST_MODE else 'joan@trybooking.co.uk',
             cc=None,
             bcc='alex@trybooking.co.uk',
-            subject=f"{'[TEST] ' if TEST_MODE else ''}Monthly Report - {dates['month_name']}",
+            subject=f"Monthly Report - {dates['month_name']} (MD Update)",
             html_content=md_html_content
         )
         print(f"MD update email sent to: {'alex@trybooking.co.uk (TEST MODE)' if TEST_MODE else 'joan@trybooking.co.uk'}")
@@ -568,7 +568,7 @@ def main():
             to='alex@trybooking.co.uk' if TEST_MODE else ['louise@trybooking.co.uk', 'jules@trybooking.co.uk'],
             cc=None,
             bcc='alex@trybooking.co.uk',
-            subject=f"{'[TEST] ' if TEST_MODE else ''}Monthly Report - {dates['month_name']}",
+            subject=f"Monthly Report - {dates['month_name']}",
             html_content=staff_html_content
         )
         print(f"General staff email sent to: {'alex@trybooking.co.uk (TEST MODE)' if TEST_MODE else 'louise@trybooking.co.uk, jules@trybooking.co.uk'}")

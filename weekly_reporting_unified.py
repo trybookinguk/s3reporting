@@ -82,7 +82,9 @@ def analyze_accounts(df, week_start, week_end, last_year_week_start, last_year_w
     
     # Event creation analysis - only for accounts that have events
     if not with_events.empty:
-        with_events['FirstEventCreation'] = pd.to_datetime(with_events['FirstEventCreation'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
+        # Use .loc to avoid SettingWithCopyWarning
+        with_events = with_events.copy()
+        with_events.loc[:, 'FirstEventCreation'] = pd.to_datetime(with_events['FirstEventCreation'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
         week_1 = with_events[with_events['FirstEventCreation'] <= with_events['DateTimeCreated'] + pd.Timedelta(weeks=1)]
         week_2 = with_events[(with_events['FirstEventCreation'] > with_events['DateTimeCreated'] + pd.Timedelta(weeks=1)) & 
                              (with_events['FirstEventCreation'] <= with_events['DateTimeCreated'] + pd.Timedelta(weeks=2))]
@@ -219,27 +221,6 @@ def send_email(html_content, plain_text, stats):
     print("Email sent successfully!")
 
 
-def save_csv_reports(stats):
-    """Save detailed CSV reports for debugging."""
-    # Accounts with events - top 20
-    if not stats['with_events'].empty:
-        top_accounts = stats['with_events'].nlargest(20, 'DaysToCreate')[
-            ['Id', 'AccountName', 'DateTimeCreated', 'FirstEventCreation', 'DaysToCreate']
-        ].copy()
-        top_accounts['DateTimeCreated'] = top_accounts['DateTimeCreated'].dt.strftime('%Y-%m-%d %H:%M')
-        top_accounts['FirstEventCreation'] = top_accounts['FirstEventCreation'].dt.strftime('%Y-%m-%d %H:%M')
-        filename = f"weekly_accounts_with_events_{stats['week_start'].strftime('%Y%m%d')}.csv"
-        top_accounts.to_csv(filename, index=False)
-        print(f"Saved top 20 accounts to {filename}")
-    
-    # Accounts without events
-    if not stats['without_events'].empty:
-        no_events = stats['without_events'][['Id', 'AccountName', 'DateTimeCreated']].copy()
-        no_events['DateTimeCreated'] = no_events['DateTimeCreated'].dt.strftime('%Y-%m-%d %H:%M')
-        filename = f"weekly_accounts_without_events_{stats['week_start'].strftime('%Y%m%d')}.csv"
-        no_events.to_csv(filename, index=False)
-        print(f"Saved accounts without events to {filename}")
-
 
 def main(send_email_report=True):
     """Main execution function."""
@@ -273,9 +254,6 @@ def main(send_email_report=True):
         print(f"- Without events: {len(stats['without_events'])} ({(len(stats['without_events']) / stats['total_accounts'] * 100):.1f}%)")
         print(f"- Average days to first event: {stats['avg_days']:.1f}")
         
-        # Save CSV reports
-        save_csv_reports(stats)
-        
         # Send email if requested
         if send_email_report:
             html_content, plain_text = create_email_content(stats)
@@ -294,10 +272,10 @@ def main(send_email_report=True):
 
 if __name__ == "__main__":
     # Check command line arguments
-    send_email = '--no-email' not in sys.argv
+    send_email_flag = '--no-email' not in sys.argv
     
     # Also check environment variable
     if os.environ.get('SEND_EMAIL', '').lower() in ['0', 'false', 'no']:
-        send_email = False
+        send_email_flag = False
     
-    main(send_email_report=send_email)
+    main(send_email_report=send_email_flag)

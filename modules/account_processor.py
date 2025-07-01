@@ -731,8 +731,17 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                 is_continuous = normal_accounts['Event_Frequency_Current'] == 'Continuous'
                 is_regular = normal_accounts['Event_Frequency_Current'] == 'Regular'
                 
-                # Only check rapid drops for continuous/regular accounts
-                eligible_for_rapid_check = is_continuous | is_regular
+                # Get years_loyalty for new account exclusion
+                years_loyalty = pd.Series(2, index=normal_accounts.index)  # Default to 2 (not new)
+                if 'years_loyalty' in metrics_df.columns:
+                    for idx in normal_accounts.index:
+                        account_name = eligible_accounts.loc[idx, 'Account_Name_Clean']
+                        parent_rows = metrics_df[metrics_df['Account_Name_Clean'] == account_name]
+                        if not parent_rows.empty and 'years_loyalty' in parent_rows.columns:
+                            years_loyalty.loc[idx] = parent_rows.iloc[0]['years_loyalty']
+                
+                # Only check rapid drops for continuous/regular accounts that aren't new
+                eligible_for_rapid_check = (is_continuous | is_regular) & (years_loyalty > 1)
                 
                 # For Regular accounts, also check if we're in their active selling period
                 in_active_period = is_continuous  # Continuous always active
@@ -891,6 +900,25 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         '_rapid_drop_alert': metrics_df['rapid_drop_alert'],
         '_rapid_drop_details': metrics_df['rapid_drop_details']
     })
+    
+    # Add formatted fields for CSV output
+    # Last_Event_Date_Str - formatted date string
+    if '_last_event_date' in results_df.columns:
+        last_event_dates = pd.to_datetime(results_df['_last_event_date'], errors='coerce')
+        results_df['Last_Event_Date_Str'] = last_event_dates.dt.strftime('%Y-%m-%d')
+        results_df.loc[last_event_dates.isna(), 'Last_Event_Date_Str'] = None
+    else:
+        results_df['Last_Event_Date_Str'] = None
+    
+    # Annual_Pattern - boolean for annual accounts
+    results_df['Annual_Pattern'] = (
+        results_df['Event_Frequency_Current'].eq('Annual') | 
+        results_df['Event_Frequency_Previous'].eq('Annual')
+    )
+    
+    # Retention_Priority_Score - copy without underscore
+    if '_retention_priority_score' in results_df.columns:
+        results_df['Retention_Priority_Score'] = results_df['_retention_priority_score']
     
     # Print event frequency summary
     print("\nEvent Frequency Summary:")

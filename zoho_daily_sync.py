@@ -359,54 +359,45 @@ def sync_tier_data_optimized(results_df, zoho_token):
     # Prepare data more efficiently using vectorized operations
     zoho_data = []
     
-    # Vectorized data preparation
-    # Handle _last_event_date efficiently - check if it exists first
-    if '_last_event_date' in results_df.columns:
-        # Vectorized date conversion - handle both date and datetime objects
-        # First ensure we have datetime objects
-        last_event_dates = pd.to_datetime(results_df['_last_event_date'], errors='coerce')
-        # Then format as strings where not null
-        results_df['Last_Event_Date_Str'] = last_event_dates.dt.strftime('%Y-%m-%d')
-        # Replace NaT with None
-        results_df.loc[last_event_dates.isna(), 'Last_Event_Date_Str'] = None
-    else:
-        results_df['Last_Event_Date_Str'] = None
+    # Note: Last_Event_Date_Str, Annual_Pattern, and Retention_Priority_Score 
+    # are now created in process_accounts and already exist in results_df
     
-    # Vectorized boolean operation for Annual Pattern
-    results_df['Annual_Pattern'] = (
-        results_df['Event_Frequency_Current'].eq('Annual') | 
-        results_df['Event_Frequency_Previous'].eq('Annual')
-    )
+    # Log that these fields already exist
+    if 'Retention_Priority_Score' in results_df.columns:
+        logger.info(f"Retention_Priority_Score already exists (sample values: {results_df['Retention_Priority_Score'].head(3).tolist()})")
     
-    # Add Retention_Priority_Score if it exists (matching zoho_tiers.py functionality)
-    if '_retention_priority_score' in results_df.columns:
-        results_df['Retention_Priority_Score'] = results_df['_retention_priority_score']
-        logger.info(f"Added Retention_Priority_Score to updates (sample values: {results_df['Retention_Priority_Score'].head(3).tolist()})")
-    
-    # Select and rename columns efficiently - matching original zoho_tiers.py
+    # Select columns for Zoho update - DO NOT rename, keep original field names
     update_columns = {
         'Account_Name': 'Account_Name',
-        'Current_Tier': 'Tier',
-        'Previous_Tier': 'Previous_Tier',  # Added to match original
-        'Event_Frequency_Current': 'Event_Frequency',
-        'Event_Frequency_Previous': 'Event_Frequency_Previous',  # Added to match original
-        'Rating': 'Activity_Rating',
+        'Current_Tier': 'Current_Tier',  # Keep original name
+        'Previous_Tier': 'Previous_Tier',
+        'Event_Frequency_Current': 'Event_Frequency_Current',  # Keep original name
+        'Event_Frequency_Previous': 'Event_Frequency_Previous',
+        'Rating': 'Rating',  # Keep original name
         'Retention_Priority': 'Retention_Priority',
         'Ticket_Quantity': 'Ticket_Quantity',
-        'Last_Year_Ticket_Quantity': 'Last_Year_Ticket_Quantity',  # Added to match original
-        'Years_Loyalty': 'Years_Loyalty',  # Added to match original
+        'Last_Year_Ticket_Quantity': 'Last_Year_Ticket_Quantity',
+        'Years_Loyalty': 'Years_Loyalty',
         'Days_Since_Last_Booking': 'Days_Since_Last_Booking',
         'Last_Event_Date_Str': 'Last_Event_Date',
         'Annual_Pattern': 'Annual_Pattern',
-        'Months_Active': 'Months_Active'  # Added to match original
+        'Months_Active': 'Months_Active'
     }
     
     # Add optional columns if they exist
     if 'Retention_Priority_Score' in results_df.columns:
         update_columns['Retention_Priority_Score'] = 'Retention_Priority_Score'
     
-    # Create update DataFrame
-    update_df = results_df[list(update_columns.keys())].rename(columns=update_columns)
+    # Create a copy for Zoho updates (don't modify original)
+    zoho_updates_df = results_df.copy()
+    
+    # Remove hidden columns (those starting with underscore)
+    hidden_cols = [col for col in zoho_updates_df.columns if col.startswith('_')]
+    zoho_updates_df = zoho_updates_df.drop(columns=hidden_cols, errors='ignore')
+    logger.info(f"Removed {len(hidden_cols)} hidden columns for Zoho upload")
+    
+    # Select only the columns we need for Zoho
+    update_df = zoho_updates_df[list(update_columns.keys())].rename(columns=update_columns)
     
     # Convert numeric columns using vectorized operations
     update_df['Ticket_Quantity'] = update_df['Ticket_Quantity'].fillna(0).astype('int32')
@@ -558,7 +549,16 @@ def main():
         print("\nCalculating tiers and metrics...")
         results_df = process_accounts(account_metrics, account_lookup, booking_data_df)
         
-        # Sync tier data to Zoho (optimized)
+        # Save tier updates CSV BEFORE any modifications
+        csv_filename = f"tier_updates_{datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')}.csv"
+        # Correctly exclude underscore-prefixed detail columns
+        columns_to_exclude = ['_rapid_drop_details', '_revenue_drop_details']
+        csv_columns = [col for col in results_df.columns if col not in columns_to_exclude]
+        results_df[csv_columns].to_csv(csv_filename, index=False)
+        logger.info(f"Saved tier updates to {csv_filename}")
+        print(f"\nSaved tier calculations to: {csv_filename}")
+        
+        # Sync tier data to Zoho (optimized) - this will modify results_df
         tier_updates = sync_tier_data_optimized(results_df, zoho_token)
         
         # Summary statistics (from original zoho_tiers.py)
@@ -607,14 +607,6 @@ def main():
         
         # Generate and send reports
         print("\n--- Generating Reports ---")
-        
-        # Save tier updates CSV (exclude internal/debugging columns)
-        csv_filename = f"tier_updates_{datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')}.csv"
-        columns_to_exclude = ['rapid_drop_details', 'revenue_details', 'revenue_drop_details']
-        csv_columns = [col for col in results_df.columns if col not in columns_to_exclude]
-        results_df[csv_columns].to_csv(csv_filename, index=False)
-        logger.info(f"Saved tier updates to {csv_filename}")
-        print(f"Saved tier updates to {csv_filename}")
         
         # Email tier updates report
         email_tier_updates_report(results_df, csv_filename)

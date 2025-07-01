@@ -96,9 +96,9 @@ MATURE_ACCOUNT_AGE_DAYS = 180
 
 # Revenue drop thresholds (unified for all account types)
 REVENUE_DROP_THRESHOLDS = {
-    "severe": 0.25,      # <25% of comparison period
-    "significant": 0.5,  # <50% of comparison period
-    "moderate": 0.75     # <75% of comparison period
+    "severe": 0.25,      # <25% of comparison period = 75%+ drop
+    "significant": 0.5,  # <50% of comparison period = 50%+ drop
+    "moderate": 0.80     # <80% of comparison period = 20%+ drop
 }
 
 # Minimum revenue threshold for rapid drop detection (£)

@@ -12,18 +12,22 @@ from datetime import datetime
 # Import shared modules
 from modules.utils.config import TEST_MODE, UK_TZ
 from modules.utils.s3_data_loader import get_s3_client
-from modules.utils.date_utils import get_week_dates
+from modules.utils.date_utils import get_week_dates, get_latest_data_date
 from modules.utils.data_loaders import load_accounts_data
 from modules.utils.email_utils import send_html_email
+from modules.utils.metrics_calculator import calculate_percentage, aggregate_by_day_of_week, filter_date_range, calculate_yoy_change
+from modules.utils.validation import validate_environment_variables
+from modules.utils.performance import timer_decorator
 
 
 
 
+@timer_decorator
 def analyze_accounts(df, week_start, week_end, last_year_week_start, last_year_week_end):
     """Analyze account data for current and previous year."""
-    # Filter data
-    current_week = df[(df['DateTimeCreated'] >= week_start) & (df['DateTimeCreated'] <= week_end)].copy()
-    last_year_week = df[(df['DateTimeCreated'] >= last_year_week_start) & (df['DateTimeCreated'] <= last_year_week_end)].copy()
+    # Filter data using optimized function
+    current_week = filter_date_range(df, 'DateTimeCreated', week_start, week_end)
+    last_year_week = filter_date_range(df, 'DateTimeCreated', last_year_week_start, last_year_week_end)
     
     # Basic stats
     total_accounts = len(current_week)
@@ -85,12 +89,12 @@ def create_internal_email_content(stats, df_current):
     # Calculate industry stats
     total_accounts = stats['total_accounts']
     total_accounts_ly = stats['total_accounts_ly']
-    yoy_change = ((total_accounts - total_accounts_ly) / total_accounts_ly * 100) if total_accounts_ly else 0
-    without_industry_pct = 100 * df_current['Industry'].isna().sum() / total_accounts if total_accounts else 0
+    yoy_change = calculate_yoy_change(total_accounts, total_accounts_ly)
+    without_industry_pct = calculate_percentage(df_current['Industry'].isna().sum(), total_accounts)
     
     # Industry analysis
     ticket_purchasers = df_current['Industry'].eq("Ticket Purchaser").sum()
-    ticket_purchaser_pct = 100 * ticket_purchasers / total_accounts if total_accounts else 0
+    ticket_purchaser_pct = calculate_percentage(ticket_purchasers, total_accounts)
     
     filtered_industries = df_current['Industry'][
         df_current['Industry'].notna() & (df_current['Industry'] != "Ticket Purchaser")
@@ -134,7 +138,7 @@ def create_external_email_content(stats, df_current):
     
     # Industry analysis
     ticket_purchasers = df_current['Industry'].eq("Ticket Purchaser").sum()
-    ticket_purchaser_pct = 100 * ticket_purchasers / total_accounts if total_accounts else 0
+    ticket_purchaser_pct = calculate_percentage(ticket_purchasers, total_accounts)
     
     filtered_industries = df_current['Industry'][
         df_current['Industry'].notna() & (df_current['Industry'] != "Ticket Purchaser")
@@ -144,7 +148,7 @@ def create_external_email_content(stats, df_current):
     
     # Event creation stats
     with_events_count = len(stats['with_events'])
-    with_events_pct = (with_events_count / total_accounts * 100) if total_accounts else 0
+    with_events_pct = calculate_percentage(with_events_count, total_accounts)
     
     # Daily breakdown
     def classify_time(dt):
@@ -203,6 +207,12 @@ def main(send_email_report=True):
     """Main execution function."""
     start_time = time.time()
     
+    # Validate environment variables
+    validate_environment_variables([
+        'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
+        'MAILGUN_SMTP_LOGIN', 'MAILGUN_SMTP_PASSWORD', 'MAILGUN_DOMAIN'
+    ])
+    
     print(f"\n=== Weekly Reporting Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')} ===")
     print(f"Email sending: {'ENABLED' if send_email_report else 'DISABLED'}")
     if send_email_report and TEST_MODE:
@@ -223,8 +233,7 @@ def main(send_email_report=True):
         print(f"Last year comparison: {last_year_week_start.strftime('%d %B %Y')} to {last_year_week_end.strftime('%d %B %Y')}")
         
         # Fetch and process data
-        yesterday = pd.Timestamp.now('Europe/London') - pd.Timedelta(days=1)
-        df = load_accounts_data(s3_client, yesterday)
+        df = load_accounts_data(s3_client, get_latest_data_date())
         print(f"Total accounts in dataset: {len(df):,}")
         
         # Analyze accounts

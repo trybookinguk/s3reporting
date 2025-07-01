@@ -79,3 +79,17 @@ def get_file_date_info(date=None):
         'folder_month': date.strftime('%m'),
         'file_prefix': date.strftime('%Y%m')
     }
+
+
+def get_latest_data_date():
+    """
+    Get the date for the latest available S3 data files.
+    
+    S3 files are generated daily at midnight for the previous day's data.
+    This function returns yesterday's date, which corresponds to the latest
+    available data files.
+    
+    Returns:
+        pd.Timestamp: Yesterday's date in Europe/London timezone
+    """
+    return pd.Timestamp.now('Europe/London') - pd.Timedelta(days=1)

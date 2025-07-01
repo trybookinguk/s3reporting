@@ -11,94 +11,97 @@ from datetime import datetime
 
 # Import shared modules
 from modules.utils.config import TEST_MODE, UK_TZ
-from modules.utils.s3_data_loader import get_s3_client
+from modules.utils.s3_data_loader import get_s3_client, download_s3_file_cached
 from modules.utils.date_utils import get_last_month_dates, get_ytd_dates
 from modules.utils.data_loaders import load_accounts_data, load_booking_data, filter_successful_transactions
 from modules.utils.email_utils import send_html_email
+from modules.utils.metrics_calculator import (
+    calculate_yoy_change, calculate_percentage, calculate_transaction_metrics,
+    calculate_fee_metrics, filter_date_range
+)
+from modules.utils.validation import validate_environment_variables
+from modules.utils.performance import timer_decorator
 
 
+@timer_decorator
 def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     """Calculate all required metrics."""
     metrics = {}
     
     # 1. Total new accounts for last month
-    last_month_accounts = accounts_df[
-        (accounts_df['DateTimeCreated'] >= dates['last_month_start']) & 
-        (accounts_df['DateTimeCreated'] <= dates['last_month_end'])
-    ]
+    last_month_accounts = filter_date_range(
+        accounts_df, 'DateTimeCreated', 
+        dates['last_month_start'], dates['last_month_end']
+    )
     metrics['total_new_accounts'] = len(last_month_accounts)
     
     # 2. Accounts that created events last month
     accounts_with_events = last_month_accounts[last_month_accounts['FirstEventCreation'].notna()]
     metrics['accounts_with_events'] = len(accounts_with_events)
-    metrics['accounts_with_events_pct'] = (metrics['accounts_with_events'] / metrics['total_new_accounts'] * 100) if metrics['total_new_accounts'] > 0 else 0
+    metrics['accounts_with_events_pct'] = calculate_percentage(
+        metrics['accounts_with_events'], metrics['total_new_accounts']
+    )
     
     # 3. Accounts that have sold tickets (present in BookingData)
     # Get unique account IDs from last month's bookings
-    last_month_bookings = filter_successful_transactions(booking_df[
-        (booking_df['TransactionDate'] >= dates['last_month_start']) & 
-        (booking_df['TransactionDate'] <= dates['last_month_end'])
-    ])
+    last_month_bookings = filter_successful_transactions(
+        filter_date_range(booking_df, 'TransactionDate', 
+                         dates['last_month_start'], dates['last_month_end'])
+    )
     
     # Find which new accounts sold tickets
     accounts_with_sales = last_month_accounts[
         last_month_accounts['Id'].isin(last_month_bookings['AccountId'].unique())
     ]
     metrics['accounts_with_sales'] = len(accounts_with_sales)
-    metrics['accounts_with_sales_pct'] = (metrics['accounts_with_sales'] / metrics['total_new_accounts'] * 100) if metrics['total_new_accounts'] > 0 else 0
+    metrics['accounts_with_sales_pct'] = calculate_percentage(
+        metrics['accounts_with_sales'], metrics['total_new_accounts']
+    )
     
-    # 4. Average transaction value (from successful transactions)
-    if len(last_month_bookings) > 0:
-        metrics['avg_transaction_value'] = last_month_bookings['PaymentReceived'].mean()
-        metrics['total_transactions'] = len(last_month_bookings)
-    else:
-        metrics['avg_transaction_value'] = 0
-        metrics['total_transactions'] = 0
-    
-    # 5. Average tickets per transaction
-    if len(last_month_bookings) > 0:
-        metrics['avg_tickets_per_transaction'] = last_month_bookings['TicketQuantity'].mean()
-    else:
-        metrics['avg_tickets_per_transaction'] = 0
+    # 4 & 5. Transaction metrics
+    transaction_metrics = calculate_transaction_metrics(last_month_bookings)
+    metrics['avg_transaction_value'] = transaction_metrics['avg_amount']
+    metrics['total_transactions'] = transaction_metrics['count']
+    metrics['avg_tickets_per_transaction'] = transaction_metrics['avg_quantity']
     
     # 6. Total fees for last month
     metrics['total_fees_last_month'] = last_month_bookings['TotalFees'].sum()
     
     # Last year same month fees (from BookingDataAll)
-    last_year_month_bookings = filter_successful_transactions(booking_all_df[
-        (booking_all_df['TransactionDate'] >= dates['last_year_month_start']) & 
-        (booking_all_df['TransactionDate'] <= dates['last_year_month_end'])
-    ])
+    last_year_month_bookings = filter_successful_transactions(
+        filter_date_range(booking_all_df, 'TransactionDate',
+                         dates['last_year_month_start'], dates['last_year_month_end'])
+    )
     metrics['total_fees_last_year_month'] = last_year_month_bookings['TotalFees'].sum()
     
     # Calculate YoY change
-    if metrics['total_fees_last_year_month'] > 0:
-        metrics['fees_yoy_change'] = ((metrics['total_fees_last_month'] - metrics['total_fees_last_year_month']) / metrics['total_fees_last_year_month'] * 100)
-    else:
-        metrics['fees_yoy_change'] = 0
+    metrics['fees_yoy_change'] = calculate_yoy_change(
+        metrics['total_fees_last_month'], 
+        metrics['total_fees_last_year_month']
+    )
     
     # 7. YTD fees
     ytd_dates = get_ytd_dates()
     
     # Current YTD (from BookingDataAll for previous months + BookingData for current month)
-    ytd_bookings_historical = filter_successful_transactions(booking_all_df[
-        (booking_all_df['TransactionDate'] >= ytd_dates['ytd_start']) & 
-        (booking_all_df['TransactionDate'] <= ytd_dates['ytd_end'])
-    ])
+    ytd_bookings_historical = filter_successful_transactions(
+        filter_date_range(booking_all_df, 'TransactionDate',
+                         ytd_dates['ytd_start'], ytd_dates['ytd_end'])
+    )
     metrics['total_fees_ytd'] = ytd_bookings_historical['TotalFees'].sum()
     
     # Last year YTD
-    ytd_bookings_ly = filter_successful_transactions(booking_all_df[
-        (booking_all_df['TransactionDate'] >= ytd_dates['ytd_start_ly']) & 
-        (booking_all_df['TransactionDate'] <= ytd_dates['ytd_end_ly'])
-    ])
+    ytd_bookings_ly = filter_successful_transactions(
+        filter_date_range(booking_all_df, 'TransactionDate',
+                         ytd_dates['ytd_start_ly'], ytd_dates['ytd_end_ly'])
+    )
     metrics['total_fees_ytd_ly'] = ytd_bookings_ly['TotalFees'].sum()
     
     # YTD YoY change
-    if metrics['total_fees_ytd_ly'] > 0:
-        metrics['fees_ytd_yoy_change'] = ((metrics['total_fees_ytd'] - metrics['total_fees_ytd_ly']) / metrics['total_fees_ytd_ly'] * 100)
-    else:
-        metrics['fees_ytd_yoy_change'] = 0
+    metrics['fees_ytd_yoy_change'] = calculate_yoy_change(
+        metrics['total_fees_ytd'],
+        metrics['total_fees_ytd_ly']
+    )
     
     return metrics
 
@@ -160,6 +163,12 @@ def main():
     """Main execution function."""
     start_time = time.time()
     
+    # Validate environment variables
+    validate_environment_variables([
+        'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
+        'MAILGUN_SMTP_LOGIN', 'MAILGUN_SMTP_PASSWORD', 'MAILGUN_DOMAIN'
+    ])
+    
     print(f"\n=== Monthly Reporting Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')} ===")
     if TEST_MODE:
         print("TEST MODE: Email will be sent to alex@trybooking.co.uk only")
@@ -181,9 +190,9 @@ def main():
         booking_df = load_booking_data(s3_client, dates['last_month_end'])
         print(f"Total booking records loaded: {len(booking_df):,}")
         
-        # For BookingDataAll, we need the current month's file
-        today = pd.Timestamp.now('Europe/London')
-        booking_all_df = load_booking_data(s3_client, today, data_type='BookingDataAll')
+        # For BookingDataAll, we need the PREVIOUS month's file since this report runs on the 1st
+        # but the current month's BookingDataAll isn't generated until the 2nd
+        booking_all_df = load_booking_data(s3_client, dates['last_month_end'], data_type='BookingDataAll')
         print(f"Total historical booking records loaded: {len(booking_all_df):,}")
         
         # Calculate metrics

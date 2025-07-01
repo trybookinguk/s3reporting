@@ -24,11 +24,21 @@ from modules.utils.config import CUTOFF_365, CUTOFF_730, EVENT_FREQ_CUTOFF_CURRE
 from modules.account_processor import process_accounts
 from modules.utils.zoho_api import get_access_token, upsert_to_zoho
 from modules.utils.report_generator import generate_upcoming_annual_events_report, email_upcoming_events_report, email_tier_updates_report
+from modules.utils.validation import validate_environment_variables
+from modules.utils.performance import timer_decorator
 
 
 def main():
     """Main execution function."""
     start_time = time.time()
+    
+    # Validate environment variables
+    validate_environment_variables([
+        'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
+        'ZOHO_CLIENT_ID', 'ZOHO_CLIENT_SECRET', 'ZOHO_REFRESH_TOKEN',
+        'ZOHO_ORG_ID', 'MAILGUN_SMTP_LOGIN', 'MAILGUN_SMTP_PASSWORD',
+        'MAILGUN_DOMAIN'
+    ])
     
     logger.info(f"Zoho Tier Update Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}")
     print(f"\n=== Zoho Tier Update Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')} ===")

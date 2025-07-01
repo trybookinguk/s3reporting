@@ -3,9 +3,11 @@ Standardized data loading functions for TryBooking reports.
 """
 import pandas as pd
 from .s3_data_loader import download_s3_file_cached
-from .date_utils import get_file_date_info
+from .date_utils import get_file_date_info, get_latest_data_date
+from .performance import optimize_dtypes, timer_decorator
 
 
+@timer_decorator
 def load_accounts_data(s3_client, target_date=None):
     """
     Load and preprocess accounts data from S3.
@@ -18,8 +20,8 @@ def load_accounts_data(s3_client, target_date=None):
         DataFrame with preprocessed accounts data
     """
     if target_date is None:
-        # Default to yesterday
-        target_date = pd.Timestamp.now('Europe/London') - pd.Timedelta(days=1)
+        # Default to yesterday (latest available data)
+        target_date = get_latest_data_date()
     
     date_info = get_file_date_info(target_date)
     filename = f"{date_info['file_prefix']}-Accounts-TBUK.csv"
@@ -40,9 +42,13 @@ def load_accounts_data(s3_client, target_date=None):
         df['LastEventCreation'] = pd.to_datetime(df['LastEventCreation'], errors='coerce', utc=True)
         df.loc[df['LastEventCreation'].notna(), 'LastEventCreation'] = df.loc[df['LastEventCreation'].notna(), 'LastEventCreation'].dt.tz_convert('Europe/London')
     
+    # Optimize data types for memory efficiency
+    df = optimize_dtypes(df)
+    
     return df
 
 
+@timer_decorator
 def load_booking_data(s3_client, target_date=None, data_type='BookingData'):
     """
     Load and preprocess booking data from S3.
@@ -56,11 +62,17 @@ def load_booking_data(s3_client, target_date=None, data_type='BookingData'):
         DataFrame with preprocessed booking data including calculated TotalFees
     """
     if target_date is None:
-        # Default to yesterday
-        target_date = pd.Timestamp.now('Europe/London') - pd.Timedelta(days=1)
+        # Default to yesterday (latest available data)
+        target_date = get_latest_data_date()
     
     date_info = get_file_date_info(target_date)
-    filename = f"{date_info['file_prefix']}-{data_type}-TBUK.csv"
+    
+    # BookingDataAll has a special naming convention with 01 suffix
+    if data_type == 'BookingDataAll':
+        filename = f"{date_info['file_prefix']}01-{data_type}-TBUK.csv"
+    else:
+        filename = f"{date_info['file_prefix']}-{data_type}-TBUK.csv"
+    
     s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
     
     print(f"Loading {data_type} from S3: {s3_key}")
@@ -86,6 +98,9 @@ def load_booking_data(s3_client, target_date=None, data_type='BookingData'):
     if 'EventDate' in df.columns:
         df['EventDate'] = pd.to_datetime(df['EventDate'], errors='coerce', utc=True)
         df.loc[df['EventDate'].notna(), 'EventDate'] = df.loc[df['EventDate'].notna(), 'EventDate'].dt.tz_convert('Europe/London')
+    
+    # Optimize data types for memory efficiency
+    df = optimize_dtypes(df)
     
     return df
 

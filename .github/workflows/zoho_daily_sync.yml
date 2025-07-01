@@ -1,0 +1,53 @@
+name: Zoho Daily Sync
+
+on:
+  schedule:
+    # Run daily at 01:00 UTC (02:00 BST / 01:00 GMT)
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  zoho-sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3 pandas requests pytz python-dateutil
+          
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        
+      - name: Cache S3 files
+        uses: actions/cache@v3
+        with:
+          path: .cache
+          key: s3-cache-${{ runner.os }}-${{ steps.date.outputs.date }}-zoho-sync
+          restore-keys: |
+            s3-cache-${{ runner.os }}-${{ steps.date.outputs.date }}-
+            s3-cache-${{ runner.os }}-
+            
+      - name: Run Zoho Daily Sync
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_KEY }}
+          ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+          ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+          ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+          ZOHO_ORG_ID: ${{ secrets.ZOHO_ORG_ID }}
+          MAILGUN_SMTP_LOGIN: ${{ secrets.MAILGUN_SMTP_LOGIN }}
+          MAILGUN_SMTP_PASSWORD: ${{ secrets.MAILGUN_SMTP_PASSWORD }}
+          MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
+        run: |
+          echo "Running Zoho Daily Sync (Industry + Tiers)..."
+          python zoho_daily_sync.py

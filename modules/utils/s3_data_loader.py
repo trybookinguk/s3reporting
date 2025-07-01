@@ -167,7 +167,7 @@ def is_cache_valid(s3_client, key, cache_path):
             return False
         
         # Check cache age (optional - expire after 7 days)
-        cache_age_days = (datetime.now().timestamp() - cache_meta.get('cached_at', 0)) / 86400
+        cache_age_days = (datetime.now(UK_TZ).timestamp() - cache_meta.get('cached_at', 0)) / 86400
         if cache_age_days > 7:
             print(f"  Cache outdated: Cached {cache_age_days:.1f} days ago")
             return False
@@ -189,7 +189,7 @@ def save_cache_metadata(s3_client, key):
             'last_modified': response['LastModified'].timestamp(),
             'etag': response.get('ETag', '').strip('"'),
             'size': response.get('ContentLength', 0),
-            'cached_at': datetime.now().timestamp()
+            'cached_at': datetime.now(UK_TZ).timestamp()
         }
         
         with open(meta_path, 'w') as f:

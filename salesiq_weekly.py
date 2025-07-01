@@ -6,13 +6,13 @@ import os
 # Import shared modules
 from modules.utils.config import (
     ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN,
-    TEST_MODE
+    ZOHO_PORTAL_NAME, TEST_MODE
 )
 from modules.utils.zoho_api import get_access_token
 from modules.utils.email_utils import send_html_email
-
-# Additional environment variable specific to this script
-PORTAL_NAME = os.environ["ZOHO_PORTAL_NAME"]
+from modules.utils.metrics_calculator import calculate_percentage
+from modules.utils.validation import validate_environment_variables
+from modules.utils.performance import timer_decorator
 
 # === Tags to track ===
 TRACKED_TAGS = ["Unknown User", "Event Organiser", "Ticket Purchaser", "New Business"]
@@ -28,8 +28,9 @@ last_sunday = last_sunday.replace(hour=23, minute=59, second=59, microsecond=999
 # Now using shared get_access_token from modules.utils.zoho_api
 
 # === Step 2: Fetch all conversations (stop early when past range) ===
+@timer_decorator
 def fetch_conversations(token):
-    url = f"https://salesiq.zoho.com/api/v2/{PORTAL_NAME}/conversations"
+    url = f"https://salesiq.zoho.com/api/v2/{ZOHO_PORTAL_NAME}/conversations"
     headers = {
         "Authorization": f"Zoho-oauthtoken {token}"
     }
@@ -119,7 +120,7 @@ def send_email(total, tag_counts, busiest_day, day_counts):
         
         <h3>Tagged breakdown:</h3>
         <ul>
-        {''.join(f'<li>{tag}: {tag_counts.get(tag, 0)} ({(tag_counts.get(tag, 0) / total * 100):.0f}%)</li>' for tag in TRACKED_TAGS)}
+        {''.join(f'<li>{tag}: {tag_counts.get(tag, 0)} ({calculate_percentage(tag_counts.get(tag, 0), total):.0f}%)</li>' for tag in TRACKED_TAGS)}
         </ul>
         
         <h3>Chats by day:</h3>
@@ -133,7 +134,7 @@ def send_email(total, tag_counts, busiest_day, day_counts):
     
     # Plain text version for fallback
     tracked_lines = '\n'.join(
-        f"- {tag}: {tag_counts.get(tag, 0)} ({(tag_counts.get(tag, 0) / total * 100):.0f}%)"
+        f"- {tag}: {tag_counts.get(tag, 0)} ({calculate_percentage(tag_counts.get(tag, 0), total):.0f}%)"
         for tag in TRACKED_TAGS
     )
     day_lines = '\n'.join(
@@ -161,6 +162,13 @@ Chats by day:
 # === Run ===
 def main():
     """Main execution function."""
+    # Validate environment variables
+    validate_environment_variables([
+        'ZOHO_CLIENT_ID', 'ZOHO_CLIENT_SECRET', 'ZOHO_REFRESH_TOKEN',
+        'ZOHO_PORTAL_NAME', 'MAILGUN_SMTP_LOGIN', 'MAILGUN_SMTP_PASSWORD', 
+        'MAILGUN_DOMAIN'
+    ])
+    
     send_email_report = os.environ.get('SEND_EMAIL', '1') != '0'
     
     print(f"\n=== SalesIQ Weekly Report ===")

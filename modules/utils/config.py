@@ -14,6 +14,7 @@ AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.ge
 ZOHO_CLIENT_ID = os.environ.get("ZOHO_CLIENT_ID")
 ZOHO_CLIENT_SECRET = os.environ.get("ZOHO_CLIENT_SECRET")
 ZOHO_REFRESH_TOKEN = os.environ.get("ZOHO_REFRESH_TOKEN")
+ZOHO_PORTAL_NAME = os.environ.get("ZOHO_PORTAL_NAME")
 
 ZOHO_DOMAIN = "https://www.zohoapis.com"
 

@@ -118,7 +118,7 @@ allowing proactive outreach approximately 1 month before they usually set up the
     
     # Create email message
     msg = EmailMessage()
-    msg['Subject'] = f'{"[TEST] " if TEST_MODE else ""}Upcoming Annual Events - {datetime.now().strftime("%B %Y")}'
+    msg['Subject'] = f'{"[TEST] " if TEST_MODE else ""}Upcoming Annual Events - {datetime.now(UK_TZ).strftime("%B %Y")}'
     msg['From'] = f"TryBooking Reporting <reports@{MAILGUN_DOMAIN}>"
     msg['To'] = DEFAULT_RECIPIENT
     

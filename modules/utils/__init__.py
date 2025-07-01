@@ -20,6 +20,12 @@ from .report_generator import (
     email_upcoming_events_report,
     email_tier_updates_report
 )
-from .date_utils import get_last_month_dates, get_ytd_dates, get_week_dates, get_file_date_info
+from .date_utils import get_last_month_dates, get_ytd_dates, get_week_dates, get_file_date_info, get_latest_data_date
 from .data_loaders import load_accounts_data, load_booking_data, filter_successful_transactions
 from .email_utils import send_html_email, create_html_table
+from .metrics_calculator import (
+    calculate_yoy_change, calculate_percentage, calculate_transaction_metrics,
+    calculate_fee_metrics, filter_date_range, aggregate_by_day_of_week
+)
+from .validation import validate_environment_variables, validate_dataframe_columns
+from .performance import optimize_dtypes, chunk_dataframe, timer_decorator

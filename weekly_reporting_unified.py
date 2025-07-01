@@ -117,107 +117,132 @@ def analyze_accounts(df, week_start, week_end, last_year_week_start, last_year_w
         'week_4': week_4,
         'more_than_month': more_than_month,
         'avg_days': with_events['DaysToCreate'].mean() if not with_events.empty else 0,
-        'median_days': with_events['DaysToCreate'].median() if not with_events.empty else 0
+        'median_days': with_events['DaysToCreate'].median() if not with_events.empty else 0,
+        'current_week': current_week  # Add this for email generation
     }
 
 
-def create_email_content(stats):
-    """Create HTML and plain text email content."""
-    # HTML Email
+def create_internal_email_content(stats, df_current):
+    """Create internal email content (Email A from original)."""
+    # Calculate industry stats
+    total_accounts = stats['total_accounts']
+    total_accounts_ly = stats['total_accounts_ly']
+    yoy_change = ((total_accounts - total_accounts_ly) / total_accounts_ly * 100) if total_accounts_ly else 0
+    without_industry_pct = 100 * df_current['Industry'].isna().sum() / total_accounts if total_accounts else 0
+    
+    # Industry analysis
+    ticket_purchasers = df_current['Industry'].eq("Ticket Purchaser").sum()
+    ticket_purchaser_pct = 100 * ticket_purchasers / total_accounts if total_accounts else 0
+    
+    filtered_industries = df_current['Industry'][
+        df_current['Industry'].notna() & (df_current['Industry'] != "Ticket Purchaser")
+    ]
+    top_5_industries = filtered_industries.value_counts().head(5)
+    
+    industry_lines = ''.join(
+        f"<li>{industry}: {count} ({(count / total_accounts) * 100:.0f}%)</li>"
+        for industry, count in top_5_industries.items()
+    )
+    
     html_content = f"""
-    <html>
-    <body style="font-family: Arial, sans-serif;">
-        <h2>TryBooking UK - Weekly New Accounts Report</h2>
-        <p>Week: {stats['week_start'].strftime('%d %B %Y')} to {stats['week_end'].strftime('%d %B %Y')}</p>
-        
-        <h3>Summary</h3>
-        <table border="1" cellpadding="5" cellspacing="0">
-            <tr><th>Metric</th><th>This Year</th><th>Last Year</th><th>Change</th></tr>
-            <tr>
-                <td>Total New Accounts</td>
-                <td>{stats['total_accounts']}</td>
-                <td>{stats['total_accounts_ly']}</td>
-                <td>{'+' if stats['total_accounts'] > stats['total_accounts_ly'] else ''}{stats['total_accounts'] - stats['total_accounts_ly']} ({((stats['total_accounts'] / stats['total_accounts_ly'] - 1) * 100):.1f}%)</td>
-            </tr>
-            <tr>
-                <td>Accounts with Events</td>
-                <td>{len(stats['with_events'])} ({(len(stats['with_events']) / stats['total_accounts'] * 100):.1f}%)</td>
-                <td>{len(stats['ly_with_events'])} ({(len(stats['ly_with_events']) / stats['total_accounts_ly'] * 100):.1f}%)</td>
-                <td>{'+' if len(stats['with_events']) > len(stats['ly_with_events']) else ''}{len(stats['with_events']) - len(stats['ly_with_events'])}</td>
-            </tr>
-            <tr>
-                <td>Accounts without Events</td>
-                <td>{len(stats['without_events'])} ({(len(stats['without_events']) / stats['total_accounts'] * 100):.1f}%)</td>
-                <td>{stats['total_accounts_ly'] - len(stats['ly_with_events'])} ({((stats['total_accounts_ly'] - len(stats['ly_with_events'])) / stats['total_accounts_ly'] * 100):.1f}%)</td>
-                <td>{'+' if len(stats['without_events']) > (stats['total_accounts_ly'] - len(stats['ly_with_events'])) else ''}{len(stats['without_events']) - (stats['total_accounts_ly'] - len(stats['ly_with_events']))}</td>
-            </tr>
-        </table>
-        
-        <h3>Time to First Event Creation</h3>
-        <table border="1" cellpadding="5" cellspacing="0">
-            <tr><th>Period</th><th>Count</th><th>Percentage</th></tr>
-            <tr><td>Within 1 week</td><td>{len(stats['week_1'])}</td><td>{(len(stats['week_1']) / len(stats['with_events']) * 100) if len(stats['with_events']) > 0 else 0:.1f}%</td></tr>
-            <tr><td>Week 2</td><td>{len(stats['week_2'])}</td><td>{(len(stats['week_2']) / len(stats['with_events']) * 100) if len(stats['with_events']) > 0 else 0:.1f}%</td></tr>
-            <tr><td>Week 3</td><td>{len(stats['week_3'])}</td><td>{(len(stats['week_3']) / len(stats['with_events']) * 100) if len(stats['with_events']) > 0 else 0:.1f}%</td></tr>
-            <tr><td>Week 4</td><td>{len(stats['week_4'])}</td><td>{(len(stats['week_4']) / len(stats['with_events']) * 100) if len(stats['with_events']) > 0 else 0:.1f}%</td></tr>
-            <tr><td>More than 1 month</td><td>{len(stats['more_than_month'])}</td><td>{(len(stats['more_than_month']) / len(stats['with_events']) * 100) if len(stats['with_events']) > 0 else 0:.1f}%</td></tr>
-        </table>
-        
-        <p><strong>Average days to create first event:</strong> {stats['avg_days']:.1f} days</p>
-        <p><strong>Median days to create first event:</strong> {stats['median_days']:.1f} days</p>
-        
-        <br>
-        <p style="color: #666; font-size: 12px;">This is an automated report generated by TryBooking UK reporting system.</p>
-    </body>
-    </html>
+    <div style="font-family: Arial, sans-serif; font-size: 11pt;">
+      <p>Total accounts last week: {total_accounts}</p>
+      <p>Percentage YoY change compared to the same week last year: {yoy_change:.0f}%</p>
+      <p>Ticket Purchasers: {ticket_purchasers} ({ticket_purchaser_pct:.0f}%)</p>
+      <p>Top 5 industries (excluding Ticket Purchasers):</p>
+      <ul>{industry_lines}</ul>
+      <p>% of accounts without an industry assigned: {without_industry_pct:.0f}%</p>
+    </div>
     """
     
-    # Plain text version
-    plain_text = f"""
-TryBooking UK - Weekly New Accounts Report
-Week: {stats['week_start'].strftime('%d %B %Y')} to {stats['week_end'].strftime('%d %B %Y')}
+    return html_content
 
-Summary:
-- Total New Accounts: {stats['total_accounts']} (Last Year: {stats['total_accounts_ly']}, Change: {stats['total_accounts'] - stats['total_accounts_ly']})
-- With Events: {len(stats['with_events'])} ({(len(stats['with_events']) / stats['total_accounts'] * 100):.1f}%)
-- Without Events: {len(stats['without_events'])} ({(len(stats['without_events']) / stats['total_accounts'] * 100):.1f}%)
 
-Time to First Event:
-- Within 1 week: {len(stats['week_1'])} ({(len(stats['week_1']) / len(stats['with_events']) * 100):.1f}%)
-- Week 2: {len(stats['week_2'])} ({(len(stats['week_2']) / len(stats['with_events']) * 100):.1f}%)
-- Week 3: {len(stats['week_3'])} ({(len(stats['week_3']) / len(stats['with_events']) * 100):.1f}%)
-- Week 4: {len(stats['week_4'])} ({(len(stats['week_4']) / len(stats['with_events']) * 100):.1f}%)
-- More than 1 month: {len(stats['more_than_month'])} ({(len(stats['more_than_month']) / len(stats['with_events']) * 100):.1f}%)
-
-Average days to create first event: {stats['avg_days']:.1f} days
-Median days to create first event: {stats['median_days']:.1f} days
-"""
+def create_external_email_content(stats, df_current):
+    """Create external email content (Email B from original)."""
+    # Calculate stats
+    total_accounts = stats['total_accounts']
+    total_accounts_ly = stats['total_accounts_ly']
+    yoy_change = ((total_accounts - total_accounts_ly) / total_accounts_ly * 100) if total_accounts_ly else 0
     
-    return html_content, plain_text
+    # Industry analysis
+    ticket_purchasers = df_current['Industry'].eq("Ticket Purchaser").sum()
+    ticket_purchaser_pct = 100 * ticket_purchasers / total_accounts if total_accounts else 0
+    
+    filtered_industries = df_current['Industry'][
+        df_current['Industry'].notna() & (df_current['Industry'] != "Ticket Purchaser")
+    ]
+    top_3_counts = filtered_industries.value_counts().head(3)
+    top_3_named = [f"{industry} ({(count / total_accounts) * 100:.0f}%)" for industry, count in top_3_counts.items()]
+    
+    # Daily breakdown
+    def classify_time(dt):
+        return 'Day' if (dt.hour == 17 and dt.minute < 30) or (9 <= dt.hour < 17) else 'Evening'
+    
+    daily = (
+        df_current
+        .assign(DayName=lambda df: df['DateTimeCreated'].dt.strftime('%A'))
+        .assign(TimeCategory=lambda df: df['DateTimeCreated'].apply(classify_time))
+        .groupby(['DayName', 'TimeCategory'])
+        .size()
+        .unstack(fill_value=0)
+    )
+    
+    daily = daily.reindex(columns=['Day', 'Evening'], fill_value=0)
+    daily['Total'] = daily.sum(axis=1)
+    daily = daily.reset_index()
+    
+    weekday_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    daily['DayName'] = pd.Categorical(daily['DayName'], categories=weekday_order, ordered=True)
+    daily = daily.sort_values('DayName')
+    
+    html_table_rows = ''.join(
+        f"<tr><td>{row['DayName']}</td><td>{row['Total']}</td><td>{row.get('Day', 0)}</td><td>{row.get('Evening', 0)}</td></tr>"
+        for _, row in daily.iterrows()
+    )
+    
+    html_content = f"""
+    <div style="font-family: Arial, sans-serif; font-size: 11pt;">
+      <p>Hi Gareth and Abi,</p>
+      <p>Please find actual new account numbers below for the week commencing {stats['week_start'].strftime('%d %B %Y')}.</p>
+      <p>Percentage change YoY compared to last year: {yoy_change:.0f}%<br>
+         % of accounts who are ticket purchasers: {ticket_purchaser_pct:.0f}%</p>
+      <p>Top 3 industries (excluding Ticket Purchasers):</p>
+      <ul>{''.join(f'<li>{entry}</li>' for entry in top_3_named)}</ul>
+      <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
+        <thead>
+          <tr><th>Day</th><th>Total</th><th>Day (0900-1730)</th><th>Evening</th></tr>
+        </thead>
+        <tbody>{html_table_rows}</tbody>
+      </table>
+      <p>Do hope this helps.</p>
+      <p>Kindest regards,</p>
+    </div>
+    """
+    
+    return html_content
 
 
-def send_email(html_content, plain_text, stats):
-    """Send email report via Mailgun SMTP."""
+def send_email(to, cc, subject, html_body):
+    """Send email via Mailgun SMTP."""
     msg = EmailMessage()
-    msg['From'] = f"TryBooking UK Reports <reports@{MAILGUN_DOMAIN}>"
+    msg['Subject'] = subject
+    msg['From'] = f"TryBooking Reporting <reports@{MAILGUN_DOMAIN}>"
+    msg['To'] = to
+    if cc:
+        msg['Cc'] = cc
+    msg.set_content("This is an HTML report. Please view it in an HTML-compatible client.")
+    msg.add_alternative(html_body, subtype='html')
     
-    # Recipients based on TEST_MODE
-    if TEST_MODE:
-        msg['To'] = 'alex@trybooking.co.uk'
-        msg['Subject'] = f'[TEST] Weekly New Accounts Report - {stats["week_start"].strftime("%d %b %Y")}'
-    else:
-        msg['To'] = 'tbuk@trybooking.com'
-        msg['Subject'] = f'Weekly New Accounts Report - {stats["week_start"].strftime("%d %b %Y")}'
+    recipients = to
+    if cc:
+        recipients += f", {cc}"
+    print(f"\nSending email to: {recipients}")
     
-    msg.set_content(plain_text)
-    msg.add_alternative(html_content, subtype='html')
-    
-    # Send via SMTP
-    print(f"\nSending email to: {msg['To']}")
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-        server.starttls()
-        server.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-        server.send_message(msg)
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
+        smtp.starttls()
+        smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
+        smtp.send_message(msg)
     print("Email sent successfully!")
 
 
@@ -254,10 +279,25 @@ def main(send_email_report=True):
         print(f"- Without events: {len(stats['without_events'])} ({(len(stats['without_events']) / stats['total_accounts'] * 100):.1f}%)")
         print(f"- Average days to first event: {stats['avg_days']:.1f}")
         
-        # Send email if requested
+        # Send emails if requested
         if send_email_report:
-            html_content, plain_text = create_email_content(stats)
-            send_email(html_content, plain_text, stats)
+            # Email A - Internal
+            internal_html = create_internal_email_content(stats, stats['current_week'])
+            send_email(
+                to="alex@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk",
+                cc="alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, louise@trybooking.co.uk",
+                subject=f"{'[TEST] ' if TEST_MODE else ''}New Accounts w/c {stats['week_start'].strftime('%d %B %Y')}",
+                html_body=internal_html
+            )
+            
+            # Email B - External
+            external_html = create_external_email_content(stats, stats['current_week'])
+            send_email(
+                to="alex@trybooking.co.uk" if TEST_MODE else "gareth@dgtlonline.co.uk, clients@dgtlonline.co.uk",
+                cc="alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, joan@trybooking.co.uk",
+                subject=f"{'[TEST] ' if TEST_MODE else ''}TryBooking New Accounts w/c {stats['week_start'].strftime('%d %B %Y')}",
+                html_body=external_html
+            )
         else:
             print("\nEmail sending disabled - report generation complete")
         

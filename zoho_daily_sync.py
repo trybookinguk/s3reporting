@@ -100,10 +100,10 @@ def fetch_zoho_accounts_optimized(token, account_names_filter=None):
 @timer_decorator
 def sync_industry_data_vectorized(account_df, zoho_token):
     """
-    Sync account data (industry, status, dates) to Zoho CRM using TRULY vectorized operations.
+    Sync account data (industry, status, dates) to Zoho CRM using vectorized operations.
     Replaces the functionality of zoho_industry.py
     """
-    logger.info("Starting TRULY vectorized account data sync to Zoho")
+    logger.info("Starting account data sync to Zoho")
     
     # Filter out rows without valid IDs upfront
     valid_mask = account_df['Id'].notna()

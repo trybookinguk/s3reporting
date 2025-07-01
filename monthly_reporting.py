@@ -29,18 +29,36 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     metrics = {}
     
     # 1. Total new accounts for last month
-    # Convert DateTimeCreated to datetime and ensure timezone
-    accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'])
-    if accounts_df['DateTimeCreated'].dt.tz is None:
-        accounts_df['DateTimeCreated'] = accounts_df['DateTimeCreated'].dt.tz_localize('Europe/London')
+    # Ensure DateTimeCreated is datetime
+    accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'], errors='coerce')
     
+    # Handle timezone - the data might be timezone-naive or already have timezone
+    if accounts_df['DateTimeCreated'].dt.tz is None:
+        # Data is timezone-naive, localize to Europe/London
+        accounts_df['DateTimeCreated'] = accounts_df['DateTimeCreated'].dt.tz_localize('Europe/London')
+    else:
+        # Data has timezone, convert to Europe/London
+        accounts_df['DateTimeCreated'] = accounts_df['DateTimeCreated'].dt.tz_convert('Europe/London')
+    
+    # Filter for accounts created in the last month
     last_month_accounts = filter_date_range(
         accounts_df, 'DateTimeCreated', 
         dates['last_month_start'], dates['last_month_end']
     )
+    
     metrics['total_new_accounts'] = len(last_month_accounts)
     
+    # Store debug info in metrics for optional reporting
+    metrics['_debug_total_accounts'] = len(accounts_df)
+    metrics['_debug_date_range'] = f"{dates['last_month_start'].date()} to {dates['last_month_end'].date()}"
+    
     # 2. Accounts that created events last month
+    # Ensure FirstEventCreation is datetime
+    if 'FirstEventCreation' in last_month_accounts.columns:
+        last_month_accounts['FirstEventCreation'] = pd.to_datetime(
+            last_month_accounts['FirstEventCreation'], errors='coerce'
+        )
+    
     accounts_with_events = last_month_accounts[last_month_accounts['FirstEventCreation'].notna()]
     metrics['accounts_with_events'] = len(accounts_with_events)
     metrics['accounts_with_events_pct'] = calculate_percentage(
@@ -55,8 +73,12 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     )
     
     # Find which new accounts sold tickets
+    # Ensure Id columns are the same type for matching
+    last_month_accounts['Id'] = last_month_accounts['Id'].astype(str)
+    booking_account_ids = last_month_bookings['AccountId'].astype(str).unique()
+    
     accounts_with_sales = last_month_accounts[
-        last_month_accounts['Id'].isin(last_month_bookings['AccountId'].unique())
+        last_month_accounts['Id'].isin(booking_account_ids)
     ]
     metrics['accounts_with_sales'] = len(accounts_with_sales)
     metrics['accounts_with_sales_pct'] = calculate_percentage(
@@ -88,28 +110,22 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     # 7. YTD fees
     ytd_dates = get_ytd_dates()
     
-    # Current YTD - combine BookingDataAll (historical) + current month BookingData
-    # BookingDataAll contains data up to the 1st of current month
-    # BookingData contains current month data
+    # For YTD, we need to combine BookingDataAll + last month's BookingData
+    # BookingDataAll contains data up to the 1st of the report month
+    # BookingData contains the full report month's data
+    # Together they give us complete YTD through the report month
     
-    # Historical data from BookingDataAll (Jan 1 to last month end)
-    ytd_bookings_historical = filter_successful_transactions(
-        filter_date_range(booking_all_df, 'TransactionDate',
-                         ytd_dates['ytd_start'], dates['last_month_end'])
+    # Combine the datasets for YTD calculation
+    combined_ytd_df = pd.concat([booking_all_df, booking_df], ignore_index=True)
+    if 'BookingTransactionId' in combined_ytd_df.columns:
+        combined_ytd_df = combined_ytd_df.drop_duplicates(subset=['BookingTransactionId'])
+    
+    # Filter for current year YTD
+    ytd_bookings = filter_successful_transactions(
+        filter_date_range(combined_ytd_df, 'TransactionDate',
+                         ytd_dates['ytd_start'], ytd_dates['ytd_end'])
     )
-    
-    # Current month data from BookingData (if we're past the 1st of the month)
-    current_month_start = pd.Timestamp.now('Europe/London').replace(day=1, hour=0, minute=0, second=0)
-    if pd.Timestamp.now('Europe/London').day > 1:
-        # We have some current month data
-        current_month_bookings = filter_successful_transactions(
-            filter_date_range(booking_df, 'TransactionDate',
-                             current_month_start, pd.Timestamp.now('Europe/London'))
-        )
-        metrics['total_fees_ytd'] = ytd_bookings_historical['TotalFees'].sum() + current_month_bookings['TotalFees'].sum()
-    else:
-        # Running on the 1st - no current month data yet
-        metrics['total_fees_ytd'] = ytd_bookings_historical['TotalFees'].sum()
+    metrics['total_fees_ytd'] = ytd_bookings['TotalFees'].sum()
     
     # Last year YTD
     ytd_bookings_ly = filter_successful_transactions(
@@ -210,32 +226,37 @@ def main():
         accounts_df = load_accounts_data(s3_client, dates['last_month_end'])
         print(f"Total accounts loaded: {len(accounts_df):,}")
         
+        # Load BookingData for last month (contains only last month's bookings)
+        booking_df = load_booking_data(s3_client, dates['last_month_end'])
+        print(f"Last month booking records loaded: {len(booking_df):,}")
+        
+        # Show status breakdown if in debug mode
+        if os.environ.get('DEBUG_MODE') and 'Status' in booking_df.columns:
+            status_counts = booking_df['Status'].value_counts()
+            print("\nBooking status breakdown:")
+            for status, count in status_counts.items():
+                print(f"  {status}: {count:,}")
+        
         # Load BookingDataAll (historical data up to 1st of current month)
+        # Note: When running on Dec 1 for Nov report, this loads Nov's BookingDataAll
+        # which contains data only up to Nov 1st, not the full month
         booking_all_df = load_booking_data(s3_client, dates['last_month_end'], data_type='BookingDataAll')
         print(f"Total historical booking records loaded: {len(booking_all_df):,}")
         
-        # Load BookingData for last month
-        booking_month_df = load_booking_data(s3_client, dates['last_month_end'])
-        print(f"Last month booking records loaded: {len(booking_month_df):,}")
-        
-        # Combine BookingDataAll and BookingData for complete dataset
-        # Remove duplicates based on BookingTransactionId
-        print("\nCombining booking data...")
-        booking_df = pd.concat([booking_all_df, booking_month_df], ignore_index=True)
-        if 'BookingTransactionId' in booking_df.columns:
-            initial_count = len(booking_df)
-            booking_df = booking_df.drop_duplicates(subset=['BookingTransactionId'])
-            duplicates_removed = initial_count - len(booking_df)
-            print(f"Removed {duplicates_removed:,} duplicate transactions")
-        print(f"Total unique booking records: {len(booking_df):,}")
-        
         # Calculate metrics
         print("\nCalculating metrics...")
+        print(f"\nDate ranges being used:")
+        print(f"- Report month: {dates['month_name']} ({dates['last_month_start'].date()} to {dates['last_month_end'].date()})")
+        print(f"- YTD period: Jan 1 to {dates['last_month_end'].date()}")
+        
         metrics = calculate_metrics(accounts_df, booking_df, booking_all_df, dates)
         
         # Print summary
         print(f"\nSummary for {dates['month_name']}:")
         print(f"- New accounts: {metrics['total_new_accounts']:,}")
+        if os.environ.get('DEBUG_MODE'):
+            print(f"  (Total accounts in file: {metrics.get('_debug_total_accounts', 'N/A'):,})")
+            print(f"  (Date range: {metrics.get('_debug_date_range', 'N/A')})")
         print(f"- Accounts with events: {metrics['accounts_with_events']:,} ({metrics['accounts_with_events_pct']:.1f}%)")
         print(f"- Accounts with sales: {metrics['accounts_with_sales']:,} ({metrics['accounts_with_sales_pct']:.1f}%)")
         print(f"- Total fees: £{metrics['total_fees_last_month']:,.2f} (YoY: {metrics['fees_yoy_change']:+.1f}%)")

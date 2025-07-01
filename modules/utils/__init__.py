@@ -6,6 +6,9 @@ This package contains infrastructure and helper modules:
 - s3_data_loader: S3 file loading and caching utilities
 - zoho_api: Zoho CRM API integration utilities  
 - report_generator: Email report generation utilities
+- date_utils: Date calculation utilities for reporting periods
+- data_loaders: Standardized data loading functions
+- email_utils: Generic email sending utilities
 """
 
 # Re-export commonly used utilities for convenience
@@ -17,3 +20,6 @@ from .report_generator import (
     email_upcoming_events_report,
     email_tier_updates_report
 )
+from .date_utils import get_last_month_dates, get_ytd_dates, get_week_dates, get_file_date_info
+from .data_loaders import load_accounts_data, load_booking_data, filter_successful_transactions
+from .email_utils import send_html_email, create_html_table

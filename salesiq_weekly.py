@@ -1,6 +1,4 @@
 import requests
-import smtplib
-from email.message import EmailMessage
 from datetime import datetime, timedelta, timezone
 from collections import Counter
 import os
@@ -8,10 +6,10 @@ import os
 # Import shared modules
 from modules.utils.config import (
     ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN,
-    MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN,
-    SMTP_HOST, SMTP_PORT, TEST_MODE
+    TEST_MODE
 )
 from modules.utils.zoho_api import get_access_token
+from modules.utils.email_utils import send_html_email
 
 # Additional environment variable specific to this script
 PORTAL_NAME = os.environ["ZOHO_PORTAL_NAME"]
@@ -109,6 +107,31 @@ def get_day_counts(conversations):
 def send_email(total, tag_counts, busiest_day, day_counts):
     ordered_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
+    # Create HTML content
+    html_content = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif;">
+        <h2>SalesIQ Weekly Chat Summary</h2>
+        <p>Week commencing: {last_monday.strftime('%d %B %Y')}</p>
+        
+        <p><strong>Total SalesIQ conversations:</strong> {total}<br>
+        <strong>Busiest day:</strong> {busiest_day}</p>
+        
+        <h3>Tagged breakdown:</h3>
+        <ul>
+        {''.join(f'<li>{tag}: {tag_counts.get(tag, 0)} ({(tag_counts.get(tag, 0) / total * 100):.0f}%)</li>' for tag in TRACKED_TAGS)}
+        </ul>
+        
+        <h3>Chats by day:</h3>
+        <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
+            <tr><th>Day</th><th>Count</th></tr>
+            {''.join(f'<tr><td>{day}</td><td>{day_counts.get(day, 0)}</td></tr>' for day in ordered_days)}
+        </table>
+    </body>
+    </html>
+    """
+    
+    # Plain text version for fallback
     tracked_lines = '\n'.join(
         f"- {tag}: {tag_counts.get(tag, 0)} ({(tag_counts.get(tag, 0) / total * 100):.0f}%)"
         for tag in TRACKED_TAGS
@@ -116,9 +139,8 @@ def send_email(total, tag_counts, busiest_day, day_counts):
     day_lines = '\n'.join(
         f"{day}: {day_counts.get(day, 0)}" for day in ordered_days
     )
-
-    subject = f"{'[TEST] ' if TEST_MODE else ''}SalesIQ Weekly Chat Summary w/c {last_monday.strftime('%d %B %Y')}"
-    body = f"""Total SalesIQ conversations: {total}
+    
+    plain_text = f"""Total SalesIQ conversations: {total}
 Busiest day: {busiest_day}
 
 Tagged breakdown:
@@ -127,18 +149,14 @@ Tagged breakdown:
 Chats by day:
 {day_lines}
 """
-
-    msg = EmailMessage()
-    msg['From'] = f"TryBooking Reporting <reports@{MAILGUN_DOMAIN}>"
-    msg['To'] = "alex@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk"
-    msg['Cc'] = "alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk"
-    msg['Subject'] = subject
-    msg.set_content(body)
-
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-        smtp.starttls()
-        smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-        smtp.send_message(msg)
+    
+    send_html_email(
+        to="alex@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk",
+        cc="alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk",
+        subject=f"SalesIQ Weekly Chat Summary w/c {last_monday.strftime('%d %B %Y')}",
+        html_content=html_content,
+        plain_text=plain_text
+    )
 
 # === Run ===
 def main():

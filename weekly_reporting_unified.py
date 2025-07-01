@@ -6,59 +6,17 @@ Analyzes new accounts created in the past week and optionally sends email report
 import os
 import sys
 import time
-import boto3
 import pandas as pd
-import smtplib
-from email.message import EmailMessage
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Import shared modules
-from modules.utils.config import (
-    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET,
-    MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN,
-    SMTP_HOST, SMTP_PORT, TEST_MODE, UK_TZ
-)
-from modules.utils.s3_data_loader import get_s3_client, download_s3_file_cached
+from modules.utils.config import TEST_MODE, UK_TZ
+from modules.utils.s3_data_loader import get_s3_client
+from modules.utils.date_utils import get_week_dates
+from modules.utils.data_loaders import load_accounts_data
+from modules.utils.email_utils import send_html_email
 
 
-def calculate_time_windows():
-    """Calculate reporting time windows for current and last year."""
-    today = datetime.today()
-    last_week_date = today - timedelta(days=today.weekday() + 7)
-    week_start = pd.Timestamp(last_week_date.date(), tz='Europe/London')
-    week_end = week_start + pd.Timedelta(days=6, hours=23, minutes=59, seconds=59)
-    
-    # Calculate ISO week info for last year comparison
-    iso_year, iso_week, _ = last_week_date.isocalendar()
-    last_year_week_start = datetime.strptime(f'{iso_year - 1}-W{iso_week}-1', '%G-W%V-%u')
-    last_year_week_end = last_year_week_start + timedelta(days=6, hours=23, minutes=59, seconds=59)
-    last_year_week_start = pd.Timestamp(last_year_week_start, tz='Europe/London')
-    last_year_week_end = pd.Timestamp(last_year_week_end, tz='Europe/London')
-    
-    return week_start, week_end, last_year_week_start, last_year_week_end
-
-
-def fetch_and_process_data(s3_client):
-    """Fetch account data from S3 and process timestamps."""
-    # Use yesterday's date for file location
-    yesterday = datetime.today() - timedelta(days=1)
-    folder_year = yesterday.strftime('%Y')
-    folder_month = yesterday.strftime('%m')
-    file_prefix = yesterday.strftime('%Y%m')
-    filename = f"{file_prefix}-Accounts-TBUK.csv"
-    s3_key = f"{folder_year}/{folder_month}/{filename}"
-    
-    print(f"Fetching data from S3: {s3_key}")
-    df = download_s3_file_cached(s3_client, s3_key)
-    
-    # Convert datetime columns
-    df['DateTimeCreated'] = pd.to_datetime(df['DateTimeCreated'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
-    
-    # Convert FirstEventCreation to datetime, handling empty values
-    df['FirstEventCreation'] = pd.to_datetime(df['FirstEventCreation'], errors='coerce', utc=True)
-    df.loc[df['FirstEventCreation'].notna(), 'FirstEventCreation'] = df.loc[df['FirstEventCreation'].notna(), 'FirstEventCreation'].dt.tz_convert('Europe/London')
-    
-    return df
 
 
 def analyze_accounts(df, week_start, week_end, last_year_week_start, last_year_week_end):
@@ -238,27 +196,6 @@ def create_external_email_content(stats, df_current):
     return html_content
 
 
-def send_email(to, cc, subject, html_body):
-    """Send email via Mailgun SMTP."""
-    msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = f"TryBooking Reporting <reports@{MAILGUN_DOMAIN}>"
-    msg['To'] = to
-    if cc:
-        msg['Cc'] = cc
-    msg.set_content("This is an HTML report. Please view it in an HTML-compatible client.")
-    msg.add_alternative(html_body, subtype='html')
-    
-    recipients = to
-    if cc:
-        recipients += f", {cc}"
-    print(f"\nSending email to: {recipients}")
-    
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-        smtp.starttls()
-        smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-        smtp.send_message(msg)
-    print("Email sent successfully!")
 
 
 
@@ -276,12 +213,18 @@ def main(send_email_report=True):
         s3_client = get_s3_client()
         
         # Calculate time windows
-        week_start, week_end, last_year_week_start, last_year_week_end = calculate_time_windows()
+        dates = get_week_dates(weeks_back=1)
+        week_start = dates['week_start']
+        week_end = dates['week_end']
+        last_year_week_start = dates['last_year_week_start']
+        last_year_week_end = dates['last_year_week_end']
+        
         print(f"\nReporting week: {week_start.strftime('%d %B %Y')} to {week_end.strftime('%d %B %Y')}")
         print(f"Last year comparison: {last_year_week_start.strftime('%d %B %Y')} to {last_year_week_end.strftime('%d %B %Y')}")
         
         # Fetch and process data
-        df = fetch_and_process_data(s3_client)
+        yesterday = pd.Timestamp.now('Europe/London') - pd.Timedelta(days=1)
+        df = load_accounts_data(s3_client, yesterday)
         print(f"Total accounts in dataset: {len(df):,}")
         
         # Analyze accounts
@@ -298,20 +241,20 @@ def main(send_email_report=True):
         if send_email_report:
             # Email A - Internal
             internal_html = create_internal_email_content(stats, stats['current_week'])
-            send_email(
+            send_html_email(
                 to="alex@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk",
                 cc="alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, louise@trybooking.co.uk",
-                subject=f"{'[TEST] ' if TEST_MODE else ''}New Accounts w/c {stats['week_start'].strftime('%d %B %Y')}",
-                html_body=internal_html
+                subject=f"New Accounts w/c {stats['week_start'].strftime('%d %B %Y')}",
+                html_content=internal_html
             )
             
             # Email B - External
             external_html = create_external_email_content(stats, stats['current_week'])
-            send_email(
+            send_html_email(
                 to="alex@trybooking.co.uk" if TEST_MODE else "gareth@dgtlonline.co.uk, clients@dgtlonline.co.uk",
                 cc="alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, joan@trybooking.co.uk",
-                subject=f"{'[TEST] ' if TEST_MODE else ''}TryBooking New Accounts w/c {stats['week_start'].strftime('%d %B %Y')}",
-                html_body=external_html
+                subject=f"TryBooking New Accounts w/c {stats['week_start'].strftime('%d %B %Y')}",
+                html_content=external_html
             )
         else:
             print("\nEmail sending disabled - report generation complete")

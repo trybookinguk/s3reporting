@@ -51,3 +51,13 @@ jobs:
         run: |
           echo "Running Zoho Daily Sync (Industry + Tiers)..."
           python zoho_daily_sync.py
+          
+      - name: Upload CSV artifacts
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: zoho-sync-reports-${{ steps.date.outputs.date }}
+          path: |
+            tier_updates_*.csv
+            upcoming_annual_events_*.csv
+          retention-days: 30

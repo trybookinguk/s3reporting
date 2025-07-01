@@ -174,16 +174,27 @@ def load_and_process_booking_data_optimized(s3_client, key_all, key_month):
     
     logger.info("Loading booking data for revenue analysis (optimized columns)")
     
-    # Load with dtype optimization
+    # Load full data first, then select columns
+    booking_all_df = download_s3_file_cached(s3_client, key_all)
+    booking_month_df = download_s3_file_cached(s3_client, key_month)
+    
+    # Select only required columns
+    available_cols = [col for col in revenue_columns if col in booking_all_df.columns]
+    booking_all_df = booking_all_df[available_cols].copy()
+    booking_month_df = booking_month_df[available_cols].copy()
+    
+    # Apply dtype optimization
     dtype_spec = {
         'AccountId': 'int32',
         'PaymentReceived': 'float32',
         'TicketQuantity': 'int16',
         'Status': 'category'
     }
-    
-    booking_all_df = download_s3_file_cached(s3_client, key_all, usecols=revenue_columns, dtype=dtype_spec)
-    booking_month_df = download_s3_file_cached(s3_client, key_month, usecols=revenue_columns, dtype=dtype_spec)
+    for col, dtype in dtype_spec.items():
+        if col in booking_all_df.columns:
+            booking_all_df[col] = booking_all_df[col].astype(dtype)
+        if col in booking_month_df.columns:
+            booking_month_df[col] = booking_month_df[col].astype(dtype)
     
     # Combine and deduplicate
     booking_data_df = pd.concat([booking_all_df, booking_month_df], ignore_index=True)

@@ -53,7 +53,7 @@ def calculate_percentiles(metrics_df):
 
 
 def prepare_metrics_dataframe(account_metrics):
-    """Convert aggregated account metrics to DataFrame format.
+    """Convert aggregated account metrics to DataFrame format using vectorized operations.
     
     Args:
         account_metrics: Dictionary of aggregated account metrics
@@ -62,63 +62,80 @@ def prepare_metrics_dataframe(account_metrics):
         DataFrame with structured metrics
     """
     logger.info(f"Processing {len(account_metrics):,} accounts into metrics dataframe")
-    all_metrics = []
-    processed = 0
     
-    for account_id, data in account_metrics.items():
-        # Skip if no transactions
-        if data.get('tickets_lifetime', 0) == 0:
-            continue
-        
-        # Use pre-aggregated metrics directly
-        years_loyalty = data.get('years_loyalty', 0)
-        lifetime_revenue = data.get('revenue_lifetime', 0)
-        avg_revenue_per_year = data.get('avg_revenue_per_year', 0)
-        tickets_current = data.get('tickets_current', 0)
-        revenue_current = data.get('revenue_current', 0)
-        
-        years_loyalty_prev = data.get('years_loyalty_prev', 0)
-        revenue_prev = lifetime_revenue - revenue_current  # Revenue up to previous period
-        avg_rev_prev = data.get('avg_revenue_prev', 0)
-        tickets_prev = data.get('tickets_prev', 0)
-        revenue_window_prev = data.get('revenue_prev', 0)  # Revenue in previous window
-        
-        # Include both month tracking and event creation data
-        event_data = {
-            'event_months_current': data.get('event_months_current', set()),
-            'event_months_previous': data.get('event_months_previous', set()),
-            'event_months_freq_current': data.get('event_months_freq_current', set()),
-            'event_months_freq_previous': data.get('event_months_freq_previous', set()),
-            'event_creation_info': data.get('event_creation_info', {}),
-            'last_booking_date': data.get('last_booking_date')
-        }
-        
-        all_metrics.append({
-            'Account_Name': account_id,
-            'tickets_current': float(tickets_current),
-            'revenue_current': float(revenue_current),
-            'years_loyalty': years_loyalty,
-            'lifetime_revenue': float(lifetime_revenue),
-            'avg_revenue_per_year': float(avg_revenue_per_year),
-            'tickets_prev': float(tickets_prev),
-            'revenue_prev': float(revenue_window_prev),
-            'years_loyalty_prev': years_loyalty_prev,
-            'lifetime_revenue_prev': float(revenue_prev),
-            'avg_revenue_prev': float(avg_rev_prev),
-            'has_activity': tickets_current >= MIN_TICKETS_FOR_ACTIVE,
-            '_event_data': event_data  # Store for later use
-        })
-        
-        processed += 1
-        if processed % 10000 == 0:
-            logger.info(f"Processed {processed:,} of {len(account_metrics):,} accounts ({processed/len(account_metrics)*100:.1f}%)")
-        
-        # Clear transaction data to free memory
-        data['transactions'] = None
+    # Convert to DataFrame first for vectorized operations
+    df = pd.DataFrame.from_dict(account_metrics, orient='index')
     
-    logger.info(f"Completed processing {processed:,} accounts")
+    # Filter out accounts with no lifetime tickets
+    if 'tickets_lifetime' in df.columns:
+        df = df[df['tickets_lifetime'] > 0].copy()
+    else:
+        logger.warning("No tickets_lifetime column found")
+        return pd.DataFrame()
     
-    return pd.DataFrame(all_metrics)
+    if len(df) == 0:
+        logger.warning("No accounts with transactions to process")
+        return pd.DataFrame()
+    
+    # Vectorized calculations
+    df['Account_Name'] = df.index
+    
+    # Direct column mappings with defaults
+    metric_mappings = {
+        'tickets_current': ('tickets_current', 0),
+        'revenue_current': ('revenue_current', 0),
+        'years_loyalty': ('years_loyalty', 0),
+        'lifetime_revenue': ('revenue_lifetime', 0),
+        'avg_revenue_per_year': ('avg_revenue_per_year', 0),
+        'tickets_prev': ('tickets_prev', 0),
+        'revenue_prev': ('revenue_prev', 0),  # This is revenue_window_prev
+        'years_loyalty_prev': ('years_loyalty_prev', 0),
+        'avg_revenue_prev': ('avg_revenue_prev', 0)
+    }
+    
+    # Apply mappings with defaults
+    for new_col, (old_col, default) in metric_mappings.items():
+        if old_col in df.columns:
+            df[new_col] = df[old_col].fillna(default)
+        else:
+            df[new_col] = default
+    
+    # Vectorized derived calculations
+    df['lifetime_revenue_prev'] = df['lifetime_revenue'] - df['revenue_current']
+    df['has_activity'] = df['tickets_current'] >= MIN_TICKETS_FOR_ACTIVE
+    
+    # Convert numeric columns to float where needed
+    float_columns = ['tickets_current', 'revenue_current', 'lifetime_revenue', 
+                    'avg_revenue_per_year', 'tickets_prev', 'revenue_prev',
+                    'lifetime_revenue_prev', 'avg_revenue_prev']
+    for col in float_columns:
+        df[col] = df[col].astype(float)
+    
+    # Handle complex event data - this part can't be fully vectorized due to nested structures
+    # But we can optimize by only accessing each row once
+    event_data_cols = ['event_months_current', 'event_months_previous', 
+                      'event_months_freq_current', 'event_months_freq_previous',
+                      'event_creation_info', 'last_booking_date']
+    
+    # Create event data column efficiently
+    df['_event_data'] = df[event_data_cols].apply(
+        lambda row: {col: row.get(col, set() if 'months' in col else {} if col == 'event_creation_info' else None) 
+                    for col in event_data_cols}, axis=1
+    )
+    
+    # Clear transaction data to free memory (vectorized)
+    if 'transactions' in df.columns:
+        df.drop('transactions', axis=1, inplace=True)
+    
+    logger.info(f"Completed processing {len(df):,} accounts")
+    
+    # Return only needed columns
+    return_columns = ['Account_Name', 'tickets_current', 'revenue_current', 'years_loyalty',
+                     'lifetime_revenue', 'avg_revenue_per_year', 'tickets_prev', 'revenue_prev',
+                     'years_loyalty_prev', 'lifetime_revenue_prev', 'avg_revenue_prev',
+                     'has_activity', '_event_data']
+    
+    return df[return_columns]
 
 
 def process_accounts(account_metrics, account_lookup=None, booking_data_df=None):
@@ -422,12 +439,11 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     metrics_df['last_event_date'] = last_event_dates
     
     # Vectorized days since last activity calculation
-    last_booking_list = metrics_df['last_booking_date'].tolist()
-    days_since_list = [
-        (TODAY - (x.date() if hasattr(x, 'date') else x)).days if x else 999 
-        for x in last_booking_list
-    ]
-    metrics_df['days_since_last'] = days_since_list
+    # Convert to datetime if needed and calculate days difference vectorized
+    last_booking_dates = pd.to_datetime(metrics_df['last_booking_date'], errors='coerce')
+    metrics_df['days_since_last'] = (pd.Timestamp(TODAY) - last_booking_dates).dt.days
+    # Fill NaT values with 999
+    metrics_df['days_since_last'] = metrics_df['days_since_last'].fillna(999).astype(int)
     
     # VECTORIZED months active patterns processing
     print("  Processing months active patterns...")
@@ -861,6 +877,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         'Rating': metrics_df['Rating'],
         'Months_Active': metrics_df['Months_Active'],
         'Retention_Priority': metrics_df['Retention_Priority'],
+        'Days_Since_Last_Booking': metrics_df['days_since_last'].astype('Int32'),
         # Hidden fields for report generation (prefix with _)
         '_retention_priority_score': metrics_df['retention_priority_score'],
         '_avg_lead_days': metrics_df['avg_lead_days'],

@@ -60,12 +60,18 @@ def fetch_zoho_accounts_optimized(token, account_names_filter=None):
     # If we have a filter and it's small, use search API instead
     if account_names_filter and len(account_names_filter) < 500:
         logger.info(f"Using search API for {len(account_names_filter)} specific accounts")
+        # Convert to list once for efficiency
+        filter_list = list(account_names_filter)
+        
         # Process in batches to avoid URL length limits
-        for i in range(0, len(account_names_filter), 50):
-            batch_names = list(account_names_filter)[i:i+50]
-            search_criteria = " or ".join([f'(Account_Name:equals:{name})' for name in batch_names])
+        for i in range(0, len(filter_list), 50):
+            batch_names = filter_list[i:i+50]
+            # Build criteria more efficiently using join
+            criteria_parts = [f'(Account_Name:equals:{name})' for name in batch_names]
+            search_criteria = f"({' or '.join(criteria_parts)})"
+            
             params = {
-                "criteria": f"({search_criteria})",
+                "criteria": search_criteria,
                 "per_page": ZOHO_BATCH_SIZE
             }
             resp = requests.get(f"{ZOHO_DOMAIN}/crm/v2/Accounts/search", headers=headers, params=params)
@@ -94,41 +100,174 @@ def fetch_zoho_accounts_optimized(token, account_names_filter=None):
 @timer_decorator
 def sync_industry_data_vectorized(account_df, zoho_token):
     """
-    Sync industry data to Zoho CRM using vectorized operations.
+    Sync account data (industry, status, dates) to Zoho CRM using TRULY vectorized operations.
+    Replaces the functionality of zoho_industry.py
     """
-    logger.info("Starting optimized industry sync to Zoho")
+    logger.info("Starting TRULY vectorized account data sync to Zoho")
     
-    # Only fetch Zoho accounts that exist in our data
-    account_names_in_data = set(account_df['AccountName'].dropna().unique())
-    zoho_accounts = fetch_zoho_accounts_optimized(zoho_token, account_names_in_data)
+    # Filter out rows without valid IDs upfront
+    valid_mask = account_df['Id'].notna()
+    valid_df = account_df[valid_mask].copy()
     
-    # Create DataFrame for comparison
-    zoho_df = pd.DataFrame.from_dict(zoho_accounts, orient='index').reset_index()
-    zoho_df = zoho_df.rename(columns={'index': 'AccountName', 'id': 'zoho_id', 'Industry': 'zoho_industry'})
+    if len(valid_df) == 0:
+        logger.info("No valid accounts to sync")
+        return 0
+    
+    # Vectorized data preparation
+    # Convert IDs to strings
+    valid_df['account_id'] = valid_df['Id'].astype('Int64').astype(str)
+    
+    # Vectorized string operations
+    valid_df['business_name'] = valid_df['AccountName'].fillna('').astype(str).str.strip()
+    valid_df.loc[valid_df['business_name'] == '', 'business_name'] = None
+    
+    valid_df['industry'] = valid_df['Industry'].astype(str).where(valid_df['Industry'].notna(), None)
+    valid_df['subindustry'] = valid_df['SubIndustry'].astype(str).where(valid_df['SubIndustry'].notna(), None)
+    valid_df['status'] = valid_df['AccountStatus'].astype(str).where(valid_df['AccountStatus'].notna(), None)
+    
+    # Vectorized date conversions - all at once
+    date_columns = {
+        'DateTimeCreated': 'created',
+        'LastLogIn': 'last_login',
+        'FirstEventCreation': 'first_event',
+        'LastEventCreation': 'last_event'
+    }
+    
+    # Vectorized date conversions for all columns at once
+    existing_date_cols = [col for col in date_columns.keys() if col in valid_df.columns]
+    
+    if existing_date_cols:
+        # Convert all date columns to datetime in one operation
+        date_conversions = {}
+        for orig_col in existing_date_cols:
+            date_conversions[orig_col] = pd.to_datetime(valid_df[orig_col], errors='coerce')
+        
+        # Apply conversions and format as ISO date strings
+        for orig_col, new_col in date_columns.items():
+            if orig_col in existing_date_cols:
+                valid_df[new_col] = date_conversions[orig_col].dt.date.astype(str)
+                valid_df.loc[date_conversions[orig_col].isna(), new_col] = None
+    
+    # Fetch existing Zoho accounts
+    account_ids_in_data = set(valid_df['account_id'].unique())
+    zoho_accounts = fetch_zoho_accounts_optimized(zoho_token, account_ids_in_data)
+    
+    # Create a DataFrame for comparison
+    zoho_df = pd.DataFrame([
+        {
+            'account_id': acc_id,
+            'zoho_Business_Name': data.get('Business_Name'),
+            'zoho_Industry': data.get('Industry'),
+            'zoho_SubIndustry': data.get('SubIndustry'),
+            'zoho_Account_Status': data.get('Account_Status'),
+            'zoho_DateTimeCreated': data.get('DateTimeCreated'),
+            'zoho_Last_Login': data.get('Last_Login'),
+            'zoho_First_Event_Creation_Date': data.get('First_Event_Creation_Date'),
+            'zoho_Last_Event_Creation_Date': data.get('Last_Event_Creation_Date'),
+            'exists_in_zoho': True
+        }
+        for acc_id, data in zoho_accounts.items()
+    ])
     
     # Merge with our data
-    merged_df = pd.merge(
-        account_df[['AccountName', 'Industry']],
-        zoho_df[['AccountName', 'zoho_id', 'zoho_industry']],
-        on='AccountName',
-        how='inner'
-    )
+    if not zoho_df.empty:
+        merged = valid_df.merge(zoho_df, on='account_id', how='left')
+        merged['exists_in_zoho'] = merged['exists_in_zoho'].fillna(False)
+    else:
+        merged = valid_df.copy()
+        merged['exists_in_zoho'] = False
     
-    # Find accounts where industry has changed
-    merged_df['needs_update'] = merged_df['Industry'] != merged_df['zoho_industry']
-    updates_df = merged_df[merged_df['needs_update']]
+    # Vectorized comparison for changes
+    # For new accounts (not in Zoho)
+    new_accounts_mask = ~merged['exists_in_zoho']
     
-    if len(updates_df) > 0:
-        logger.info(f"Updating industry for {len(updates_df)} accounts")
-        print(f"Updating industry for {len(updates_df)} accounts")
+    # For existing accounts, check what changed
+    field_mappings = {
+        'business_name': 'Business_Name',
+        'industry': 'Industry', 
+        'subindustry': 'SubIndustry',
+        'status': 'Account_Status',
+        'created': 'DateTimeCreated',
+        'last_login': 'Last_Login',
+        'first_event': 'First_Event_Creation_Date',
+        'last_event': 'Last_Event_Creation_Date'
+    }
+    
+    # Create change detection columns
+    for local_col, zoho_field in field_mappings.items():
+        zoho_col = f'zoho_{zoho_field}'
+        if zoho_col in merged.columns:
+            # Special handling for Industry/SubIndustry - direct comparison
+            if zoho_field in ['Industry', 'SubIndustry']:
+                merged[f'changed_{local_col}'] = (merged[local_col] != merged[zoho_col])
+            else:
+                # For other fields, handle string comparison with strip
+                merged[f'changed_{local_col}'] = False
+                
+                # Where both values exist, compare them
+                both_exist = merged[local_col].notna() & merged[zoho_col].notna()
+                merged.loc[both_exist, f'changed_{local_col}'] = (
+                    merged.loc[both_exist, local_col].astype(str).str.strip() != 
+                    merged.loc[both_exist, zoho_col].astype(str).str.strip()
+                )
+                
+                # Where new value exists but zoho doesn't
+                new_not_zoho = merged[local_col].notna() & merged[zoho_col].isna()
+                merged.loc[new_not_zoho, f'changed_{local_col}'] = True
+                
+                # Where zoho exists but new doesn't (setting to None)
+                zoho_not_new = merged[local_col].isna() & merged[zoho_col].notna()
+                merged.loc[zoho_not_new, f'changed_{local_col}'] = True
+    
+    # Determine which accounts need updates
+    change_columns = [col for col in merged.columns if col.startswith('changed_')]
+    if change_columns:
+        merged['has_changes'] = merged[change_columns].any(axis=1)
+    else:
+        merged['has_changes'] = False
+    
+    # Build updates list efficiently
+    updates_needed = merged[new_accounts_mask | merged['has_changes']]
+    
+    if len(updates_needed) == 0:
+        logger.info("No account data updates needed")
+        print("No account data updates needed")
+        return 0
+    
+    # More vectorized update building
+    # Split into new vs existing accounts for different processing
+    new_accounts = updates_needed[~updates_needed['exists_in_zoho']]
+    existing_accounts = updates_needed[updates_needed['exists_in_zoho']]
+    
+    updates = []
+    
+    # Process new accounts - include all non-null fields
+    if len(new_accounts) > 0:
+        new_updates = new_accounts[['account_id'] + list(field_mappings.keys())].copy()
+        new_updates = new_updates.rename(columns={'account_id': 'Account_Name', **field_mappings})
+        # Convert to dict records, removing NaN values
+        new_records = new_updates.to_dict('records')
+        updates.extend([{k: v for k, v in record.items() if pd.notna(v)} for record in new_records])
+    
+    # Process existing accounts - only changed fields
+    if len(existing_accounts) > 0:
+        for idx, row in existing_accounts.iterrows():
+            update = {"Account_Name": row['account_id']}
+            # Only add changed fields
+            for local_col, zoho_field in field_mappings.items():
+                if row.get(f'changed_{local_col}', False):
+                    value = row[local_col]
+                    update[zoho_field] = value if pd.notna(value) else None
+            
+            if len(update) > 1:  # More than just Account_Name
+                updates.append(update)
+    
+    
+    if len(updates) > 0:
+        logger.info(f"Updating {len(updates)} accounts with industry and account data")
+        print(f"Updating {len(updates)} accounts with industry and account data")
         
-        # Prepare updates
-        updates = updates_df.apply(lambda row: {
-            "id": row['zoho_id'],
-            "Industry": row['Industry'] if pd.notna(row['Industry']) else None
-        }, axis=1).tolist()
-        
-        # Batch update
+        # Batch update using the shared upsert function
         total_updated = 0
         for i in range(0, len(updates), ZOHO_BATCH_SIZE):
             batch = updates[i:i+ZOHO_BATCH_SIZE]
@@ -141,8 +280,8 @@ def sync_industry_data_vectorized(account_df, zoho_token):
         
         return total_updated
     else:
-        logger.info("No industry updates needed")
-        print("No industry updates needed")
+        logger.info("No account data updates needed")
+        print("No account data updates needed")
         return 0
 
 
@@ -183,18 +322,23 @@ def load_and_process_booking_data_optimized(s3_client, key_all, key_month):
     booking_all_df = booking_all_df[available_cols].copy()
     booking_month_df = booking_month_df[available_cols].copy()
     
-    # Apply dtype optimization
+    # Apply dtype optimization - vectorized
     dtype_spec = {
         'AccountId': 'int32',
         'PaymentReceived': 'float32',
         'TicketQuantity': 'int16',
         'Status': 'category'
     }
-    for col, dtype in dtype_spec.items():
-        if col in booking_all_df.columns:
-            booking_all_df[col] = booking_all_df[col].astype(dtype)
-        if col in booking_month_df.columns:
-            booking_month_df[col] = booking_month_df[col].astype(dtype)
+    
+    # Get columns that exist in each dataframe
+    all_df_cols = [col for col in dtype_spec.keys() if col in booking_all_df.columns]
+    month_df_cols = [col for col in dtype_spec.keys() if col in booking_month_df.columns]
+    
+    # Apply dtypes in one operation per dataframe
+    if all_df_cols:
+        booking_all_df = booking_all_df.astype({col: dtype_spec[col] for col in all_df_cols})
+    if month_df_cols:
+        booking_month_df = booking_month_df.astype({col: dtype_spec[col] for col in month_df_cols})
     
     # Combine and deduplicate
     booking_data_df = pd.concat([booking_all_df, booking_month_df], ignore_index=True)
@@ -215,63 +359,91 @@ def sync_tier_data_optimized(results_df, zoho_token):
     # Prepare data more efficiently using vectorized operations
     zoho_data = []
     
-    # Convert DataFrame to records more efficiently
-    results_df['Last_Event_Date_Str'] = results_df['_last_event_date'].dt.strftime('%Y-%m-%d').where(
-        results_df['_last_event_date'].notna(), None
-    )
+    # Vectorized data preparation
+    # Handle _last_event_date efficiently - check if it exists first
+    if '_last_event_date' in results_df.columns:
+        # Vectorized date conversion - handle both date and datetime objects
+        # First ensure we have datetime objects
+        last_event_dates = pd.to_datetime(results_df['_last_event_date'], errors='coerce')
+        # Then format as strings where not null
+        results_df['Last_Event_Date_Str'] = last_event_dates.dt.strftime('%Y-%m-%d')
+        # Replace NaT with None
+        results_df.loc[last_event_dates.isna(), 'Last_Event_Date_Str'] = None
+    else:
+        results_df['Last_Event_Date_Str'] = None
     
+    # Vectorized boolean operation for Annual Pattern
     results_df['Annual_Pattern'] = (
-        (results_df['Event_Frequency_Current'] == 'Annual') | 
-        (results_df['Event_Frequency_Previous'] == 'Annual')
+        results_df['Event_Frequency_Current'].eq('Annual') | 
+        results_df['Event_Frequency_Previous'].eq('Annual')
     )
     
-    # Select and rename columns efficiently
+    # Add Retention_Priority_Score if it exists (matching zoho_tiers.py functionality)
+    if '_retention_priority_score' in results_df.columns:
+        results_df['Retention_Priority_Score'] = results_df['_retention_priority_score']
+        logger.info(f"Added Retention_Priority_Score to updates (sample values: {results_df['Retention_Priority_Score'].head(3).tolist()})")
+    
+    # Select and rename columns efficiently - matching original zoho_tiers.py
     update_columns = {
         'Account_Name': 'Account_Name',
         'Current_Tier': 'Tier',
+        'Previous_Tier': 'Previous_Tier',  # Added to match original
         'Event_Frequency_Current': 'Event_Frequency',
+        'Event_Frequency_Previous': 'Event_Frequency_Previous',  # Added to match original
         'Rating': 'Activity_Rating',
         'Retention_Priority': 'Retention_Priority',
-        'Revenue_Factor_Score': 'Revenue_Factor',
-        'Current_Year_Ticket_Quantity': 'Ticket_Quantity',
+        'Ticket_Quantity': 'Ticket_Quantity',
+        'Last_Year_Ticket_Quantity': 'Last_Year_Ticket_Quantity',  # Added to match original
+        'Years_Loyalty': 'Years_Loyalty',  # Added to match original
         'Days_Since_Last_Booking': 'Days_Since_Last_Booking',
         'Last_Event_Date_Str': 'Last_Event_Date',
-        'Annual_Pattern': 'Annual_Pattern'
+        'Annual_Pattern': 'Annual_Pattern',
+        'Months_Active': 'Months_Active'  # Added to match original
     }
+    
+    # Add optional columns if they exist
+    if 'Retention_Priority_Score' in results_df.columns:
+        update_columns['Retention_Priority_Score'] = 'Retention_Priority_Score'
     
     # Create update DataFrame
     update_df = results_df[list(update_columns.keys())].rename(columns=update_columns)
     
-    # Convert numeric columns
+    # Convert numeric columns using vectorized operations
     update_df['Ticket_Quantity'] = update_df['Ticket_Quantity'].fillna(0).astype('int32')
     update_df['Days_Since_Last_Booking'] = update_df['Days_Since_Last_Booking'].astype('Int32')
     
-    # Remove rows with all null values (except Account_Name)
-    update_df = update_df.dropna(subset=[col for col in update_df.columns if col != 'Account_Name'], how='all')
+    # Remove rows with all null values (except Account_Name) - vectorized
+    data_cols = [col for col in update_df.columns if col != 'Account_Name']
+    has_data = update_df[data_cols].notna().any(axis=1)
+    update_df = update_df[has_data].copy()
     
-    # Convert to records and remove None values
-    zoho_data = update_df.to_dict('records')
-    zoho_data = [{k: v for k, v in record.items() if pd.notna(v)} for record in zoho_data]
+    # Instead of converting to dict and filtering, use the DataFrame directly
+    # The upsert_to_zoho function accepts DataFrames
     
-    # Batch upsert to Zoho
-    logger.info(f"Upserting {len(zoho_data)} records to Zoho CRM")
-    print(f"\nUpserting {len(zoho_data)} records to Zoho CRM...")
+    if len(update_df) == 0:
+        logger.info("No tier updates needed")
+        print("No tier updates needed")
+        return 0
+    
+    # Batch upsert to Zoho using DataFrame directly
+    logger.info(f"Upserting {len(update_df)} records to Zoho CRM")
+    print(f"\nUpserting {len(update_df)} records to Zoho CRM...")
     
     total_updated = 0
     
-    for i in range(0, len(zoho_data), ZOHO_BATCH_SIZE):
-        batch = zoho_data[i:i+ZOHO_BATCH_SIZE]
+    # Process DataFrame in chunks
+    for i in range(0, len(update_df), ZOHO_BATCH_SIZE):
+        batch_df = update_df.iloc[i:i+ZOHO_BATCH_SIZE]
         batch_num = (i // ZOHO_BATCH_SIZE) + 1
-        total_batches = (len(zoho_data) + ZOHO_BATCH_SIZE - 1) // ZOHO_BATCH_SIZE
+        total_batches = (len(update_df) + ZOHO_BATCH_SIZE - 1) // ZOHO_BATCH_SIZE
         
         logger.info(f"Processing batch {batch_num}/{total_batches}")
-        print(f"  Batch {batch_num}/{total_batches} ({len(batch)} records)... ", end="", flush=True)
+        print(f"  Batch {batch_num}/{total_batches} ({len(batch_df)} records)... ", end="", flush=True)
         
         try:
-            upsert_to_zoho(zoho_token, batch)
-            total_updated += len(batch)
-            updated = len(batch)
-            print(f"✓ Updated {updated} records")
+            upsert_to_zoho(zoho_token, batch_df)
+            total_updated += len(batch_df)
+            print(f"✓ Updated {len(batch_df)} records")
         except Exception as e:
             print(f"✗ Failed: {str(e)}")
             logger.error(f"Failed to update batch {batch_num}: {str(e)}")
@@ -329,15 +501,12 @@ def main():
         logger.info(f"Loaded {len(account_df):,} accounts")
         print(f"Loaded {len(account_df):,} accounts")
         
-        # === INDUSTRY SYNC (Optimized) ===
-        print("\n--- Industry Sync ---")
-        industry_updates = sync_industry_data_vectorized(account_df, zoho_token)
-        
-        # Handle deleted accounts
+        # Handle deleted accounts first
         deleted_accounts = account_df[
             (account_df['AccountName'] == 'Account Deleted') & 
             (account_df['AccountStatus'] == 'Closed')
         ]
+        deleted_ids = []
         if len(deleted_accounts) > 0:
             logger.info(f"Processing {len(deleted_accounts)} deleted accounts")
             print(f"\nProcessing {len(deleted_accounts)} deleted accounts...")
@@ -348,6 +517,15 @@ def main():
             print(f"Deleted: {deletion_results['successful']} accounts")
             if deletion_results['failed'] > 0:
                 print(f"Failed to delete: {deletion_results['failed']} accounts")
+        
+        # Remove deleted accounts from the dataframe so they won't be upserted
+        if deleted_ids:
+            account_df = account_df[~account_df['Id'].astype(str).isin(deleted_ids)]
+            logger.info(f"Filtered out {len(deleted_ids)} deleted accounts from further processing")
+        
+        # === INDUSTRY SYNC (Optimized) ===
+        print("\n--- Industry Sync ---")
+        industry_updates = sync_industry_data_vectorized(account_df, zoho_token)
         
         # === TIER SYNC (Optimized) ===
         print("\n--- Tier and Metrics Sync ---")
@@ -383,24 +561,76 @@ def main():
         # Sync tier data to Zoho (optimized)
         tier_updates = sync_tier_data_optimized(results_df, zoho_token)
         
+        # Summary statistics (from original zoho_tiers.py)
+        if not results_df.empty:
+            tier_counts = results_df['Current_Tier'].value_counts()
+            print("\nTier Distribution:")
+            for tier in ['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1', 'NIL']:
+                count = tier_counts.get(tier, 0)
+                pct = (count / len(results_df) * 100) if len(results_df) > 0 else 0
+                print(f"  {tier}: {count:,} ({pct:.1f}%)")
+            
+            # Tier changes
+            tier_changes = results_df[results_df['Current_Tier'] != results_df['Previous_Tier']]
+            print(f"\nTier Changes: {len(tier_changes):,} accounts")
+            
+            # Show some tier change examples
+            if len(tier_changes) > 0:
+                print("\nExample tier changes (first 5):")
+                for _, row in tier_changes.head(5).iterrows():
+                    print(f"  Account {row['Account_Name']}: {row['Previous_Tier']} → {row['Current_Tier']}")
+            
+            # Retention priority statistics
+            if 'Retention_Priority' in results_df.columns:
+                very_high_accounts = results_df[results_df['Retention_Priority'] == 'Very High']
+                if len(very_high_accounts) > 0 and '_retention_priority_score' in results_df.columns:
+                    print(f"\nTop Very High Priority Accounts (showing first 5 of {len(very_high_accounts)}):") 
+                    top_very_high = very_high_accounts.nlargest(5, '_retention_priority_score')
+                    for _, row in top_very_high.iterrows():
+                        print(f"  Account {row['Account_Name']}: {row['Current_Tier']}, {row['Rating']}, Score: {row['_retention_priority_score']}")
+            
+            # Annual events statistics
+            print("\n=== Annual Events Report ===")
+            annual_count = len(results_df[results_df['Event_Frequency_Current'] == 'Annual'])
+            annual_prev_count = len(results_df[results_df['Event_Frequency_Previous'] == 'Annual'])
+            print(f"Annual accounts (current): {annual_count}")
+            print(f"Annual accounts (previous): {annual_prev_count}")
+            
+            # Show tier filter impact
+            tier_3_plus = ['Key Account', 'High Value', 'Tier 4', 'Tier 3']
+            annual_tier_3_plus = len(results_df[
+                ((results_df['Event_Frequency_Current'] == 'Annual') | 
+                 (results_df['Event_Frequency_Previous'] == 'Annual')) &
+                (results_df['Current_Tier'].isin(tier_3_plus))
+            ])
+            print(f"Annual accounts that are Tier 3+: {annual_tier_3_plus}")
+        
         # Generate and send reports
         print("\n--- Generating Reports ---")
         
-        # Save tier updates CSV
+        # Save tier updates CSV (exclude internal/debugging columns)
         csv_filename = f"tier_updates_{datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')}.csv"
-        results_df.to_csv(csv_filename, index=False)
+        columns_to_exclude = ['rapid_drop_details', 'revenue_details', 'revenue_drop_details']
+        csv_columns = [col for col in results_df.columns if col not in columns_to_exclude]
+        results_df[csv_columns].to_csv(csv_filename, index=False)
         logger.info(f"Saved tier updates to {csv_filename}")
         print(f"Saved tier updates to {csv_filename}")
         
         # Email tier updates report
         email_tier_updates_report(results_df, csv_filename)
+        print(f"📧 Emailed tier updates report with retention priorities")
         
         # Generate upcoming annual events report
         upcoming_df = generate_upcoming_annual_events_report(results_df)
         if not upcoming_df.empty:
             annual_filename = f"upcoming_annual_events_{datetime.now(UK_TZ).strftime('%Y%m%d')}.csv"
             upcoming_df.to_csv(annual_filename, index=False)
+            print(f"Upcoming annual events needing outreach: {len(upcoming_df)}")
             email_upcoming_events_report(upcoming_df, annual_filename)
+            print(f"📧 Emailed upcoming annual events report")
+        else:
+            logger.info("No upcoming annual events requiring outreach")
+            print("No upcoming annual events requiring outreach in next 30 days")
         
         # Summary
         elapsed_time = time.time() - start_time

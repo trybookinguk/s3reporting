@@ -190,13 +190,11 @@ def calculate_industry_quintiles(industry_data: pd.DataFrame,
     # Get period-appropriate revenue data
     period_days = COMPARISON_PERIOD_DAYS.get(period_type, 84)
     
-    # Calculate revenue by account for the period
-    account_revenues = []
-    for _, group in industry_data.groupby('AccountId'):
-        revenue = calculate_revenue_for_period(group, period_days)
-        account_revenues.append(revenue)
-    
-    revenues = pd.Series(account_revenues)
+    # Vectorized revenue calculation by account for the period
+    # Instead of looping, use groupby with apply
+    revenues = industry_data.groupby('AccountId').apply(
+        lambda group: calculate_revenue_for_period(group, period_days)
+    ).reset_index(drop=True)
     
     if len(revenues) < MIN_ACCOUNTS_FOR_QUINTILES:
         logger.warning(f"Insufficient accounts ({len(revenues)}) for reliable quintiles")

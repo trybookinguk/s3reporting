@@ -308,7 +308,7 @@ def create_md_email_content(metrics, dates):
             <li>Accounts that sold tickets: <strong>{metrics['accounts_with_sales']:,}</strong> ({metrics['accounts_with_sales_pct']:.1f}%)</li>
         </ul>
         
-        <h3>Transaction Metrics</h3>
+        <h3>Ticket Sales and Revenue</h3>
         <ul>
             <li>Total transactions: <strong>{metrics['total_transactions']:,}</strong></li>
             <li>Total revenue: <strong>£{metrics['total_revenue']:,.2f}</strong></li>
@@ -449,7 +449,7 @@ def create_staff_email_content(metrics, dates):
             <li>Accounts that sold tickets: <strong>{metrics['accounts_with_sales']:,}</strong> ({metrics['accounts_with_sales_pct']:.1f}%)</li>
         </ul>
         
-        <h3>Transaction Metrics</h3>
+        <h3>Ticket Sales and Revenue</h3>
         <ul>
             <li>Total transactions: <strong>{metrics['total_transactions']:,}</strong></li>
             <li>Average transaction value: <strong>£{metrics['avg_transaction_value']:.2f}</strong></li>

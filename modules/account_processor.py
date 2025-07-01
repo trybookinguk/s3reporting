@@ -249,7 +249,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     ]
     
     # Process account lookup data if available
-    if account_lookup:
+    if account_lookup is not None and len(account_lookup) > 0:
         print("  Processing account lookup data...")
         # Create a DataFrame from account_lookup for efficient merging
         lookup_df = pd.DataFrame.from_dict(
@@ -510,7 +510,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         if has_industry.any():
             # Prepare accounts DataFrame for quintile calculation
             accounts_df = None
-            if account_lookup:
+            if account_lookup is not None and len(account_lookup) > 0:
                 accounts_df = pd.DataFrame.from_dict(account_lookup, orient='index')
                 accounts_df.reset_index(inplace=True)
                 accounts_df.rename(columns={'index': 'AccountId'}, inplace=True)

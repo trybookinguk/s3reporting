@@ -299,7 +299,7 @@ def create_md_email_content(metrics, dates):
     html_content = f"""
     <html>
     <body style="font-family: Arial, sans-serif;">
-        <h2>TryBooking UK - Monthly Report for {dates['month_name']}</h2>
+        <h2>Monthly Report for {dates['month_name']}</h2>
         
         <h3>New Account Summary</h3>
         <ul>
@@ -440,7 +440,7 @@ def create_staff_email_content(metrics, dates):
     html_content = f"""
     <html>
     <body style="font-family: Arial, sans-serif;">
-        <h2>TryBooking UK - Monthly Report for {dates['month_name']}</h2>
+        <h2>Monthly Report for {dates['month_name']}</h2>
         
         <h3>New Account Summary</h3>
         <ul>
@@ -556,7 +556,7 @@ def main():
             to='alex@trybooking.co.uk' if TEST_MODE else 'joan@trybooking.co.uk',
             cc=None,
             bcc='alex@trybooking.co.uk',
-            subject=f"{'[TEST] ' if TEST_MODE else ''}Monthly Report - {dates['month_name']} (MD Update)",
+            subject=f"{'[TEST] ' if TEST_MODE else ''}Monthly Report - {dates['month_name']}",
             html_content=md_html_content
         )
         print(f"MD update email sent to: {'alex@trybooking.co.uk (TEST MODE)' if TEST_MODE else 'joan@trybooking.co.uk'}")

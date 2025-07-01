@@ -144,10 +144,19 @@ def create_internal_email_content(stats, df_current):
         for industry, count in top_5_industries.items()
     )
     
+    # Event creation stats
+    with_events_count = len(stats['with_events'])
+    without_events_count = len(stats['without_events'])
+    with_events_pct = (with_events_count / total_accounts * 100) if total_accounts else 0
+    
     html_content = f"""
     <div style="font-family: Arial, sans-serif; font-size: 11pt;">
       <p>Total accounts last week: {total_accounts}</p>
       <p>Percentage YoY change compared to the same week last year: {yoy_change:.0f}%</p>
+      <p>Accounts with events: {with_events_count} ({with_events_pct:.0f}%)</p>
+      <p>Accounts without events: {without_events_count} ({100 - with_events_pct:.0f}%)</p>
+      <p>Average days to create first event: {stats['avg_days']:.1f} days</p>
+      <br>
       <p>Ticket Purchasers: {ticket_purchasers} ({ticket_purchaser_pct:.0f}%)</p>
       <p>Top 5 industries (excluding Ticket Purchasers):</p>
       <ul>{industry_lines}</ul>
@@ -174,6 +183,10 @@ def create_external_email_content(stats, df_current):
     ]
     top_3_counts = filtered_industries.value_counts().head(3)
     top_3_named = [f"{industry} ({(count / total_accounts) * 100:.0f}%)" for industry, count in top_3_counts.items()]
+    
+    # Event creation stats
+    with_events_count = len(stats['with_events'])
+    with_events_pct = (with_events_count / total_accounts * 100) if total_accounts else 0
     
     # Daily breakdown
     def classify_time(dt):
@@ -206,7 +219,9 @@ def create_external_email_content(stats, df_current):
       <p>Hi Gareth and Abi,</p>
       <p>Please find actual new account numbers below for the week commencing {stats['week_start'].strftime('%d %B %Y')}.</p>
       <p>Percentage change YoY compared to last year: {yoy_change:.0f}%<br>
-         % of accounts who are ticket purchasers: {ticket_purchaser_pct:.0f}%</p>
+         % of accounts who are ticket purchasers: {ticket_purchaser_pct:.0f}%<br>
+         % of accounts who created events: {with_events_pct:.0f}%<br>
+         Average days to first event: {stats['avg_days']:.1f} days</p>
       <p>Top 3 industries (excluding Ticket Purchasers):</p>
       <ul>{''.join(f'<li>{entry}</li>' for entry in top_3_named)}</ul>
       <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">

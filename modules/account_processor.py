@@ -151,24 +151,23 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     """
     start_time = time.time()
     logger.info(f"Starting account processing for {len(account_metrics):,} accounts")
-    print("\nCalculating metrics for accounts...")
+    logger.info("Calculating metrics for accounts...")
     
     # Convert to DataFrame
     metrics_df = prepare_metrics_dataframe(account_metrics)
     
     # Calculate percentiles
-    print("\nCalculating percentiles...")
+    logger.debug("Calculating percentiles...")
     logger.info("Calculating percentile rankings for metrics")
     percentile_start = time.time()
     metrics_df = calculate_percentiles(metrics_df)
     logger.info(f"Percentile calculation completed in {time.time() - percentile_start:.1f}s")
     
     # Apply tier logic and other calculations
-    print("\nAssigning tiers and calculating new metrics...")
-    print(f"Total accounts to process: {len(metrics_df)}")
+    logger.info(f"Assigning tiers and calculating new metrics for {len(metrics_df)} accounts")
     
     # Use batch tier calculations for better logging
-    print("  Calculating tiers...")
+    logger.debug("Calculating tiers...")
     tier_start = time.time()
     
     # Prepare data for batch processing
@@ -199,7 +198,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     logger.info(f"Tier calculation completed in {time.time() - tier_start:.1f}s")
     
     # Vectorized Account_Name conversion
-    print("  Processing account names...")
+    logger.debug("Processing account names...")
     
     def convert_account_name(name):
         """Safely convert account name to string format."""
@@ -224,11 +223,11 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     
     if len(metrics_df) == 0:
         logger.error("No valid accounts to process after name conversion.")
-        print("No valid accounts to process after name conversion.")
+        logger.warning("No valid accounts to process after name conversion.")
         return pd.DataFrame()
     
     # Extract event data components into separate columns for vectorization
-    print("  Extracting event data...")
+    logger.debug("Extracting event data...")
     logger.info("Extracting event data components")
     event_start = time.time()
     
@@ -267,7 +266,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     
     # Process account lookup data if available
     if account_lookup is not None and len(account_lookup) > 0:
-        print("  Processing account lookup data...")
+        logger.debug("Processing account lookup data...")
         # Create a DataFrame from account_lookup for efficient merging
         lookup_df = pd.DataFrame.from_dict(
             {k: v for k, v in account_lookup.items()}, 
@@ -316,7 +315,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         metrics_df['has_event_creation_previous'] = False
     
     # VECTORIZED event frequency classification - major speedup
-    print("  Classifying event frequencies...")
+    logger.debug("Classifying event frequencies...")
     
     # Ensure no NaN values in month counts
     nan_current = metrics_df['freq_month_count_current'].isna().sum()
@@ -393,7 +392,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     event_freq_summary = metrics_df['Event_Frequency_Current'].value_counts().to_dict()
     
     # Calculate lead times and event dates
-    print("  Processing event timing data...")
+    logger.debug("Processing event timing data...")
     
     def calculate_event_metrics(event_creation_info):
         """Extract lead times and last event date from event creation info."""
@@ -413,7 +412,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         return avg_lead_days, last_event_date
     
     # FULLY VECTORIZED event metrics calculation using numpy
-    print("  Extracting event metrics (vectorized)...")
+    logger.debug("Extracting event metrics (vectorized)...")
     event_creation_list = metrics_df['event_creation_info'].tolist()
     
     # Pre-allocate numpy arrays for speed
@@ -446,7 +445,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     metrics_df['days_since_last'] = metrics_df['days_since_last'].fillna(999).astype(int)
     
     # VECTORIZED months active patterns processing
-    print("  Processing months active patterns...")
+    logger.debug("Processing months active patterns...")
     
     # Truly vectorized months active fingerprint extraction
     def get_months_vectorized(event_months_list):
@@ -488,7 +487,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     )
     
     # VECTORIZED activity rating calculation - massive performance improvement
-    print(f"  Determining activity ratings for {len(metrics_df):,} accounts...")
+    logger.debug(f"Determining activity ratings for {len(metrics_df):,} accounts...")
     logger.info(f"Starting VECTORIZED activity rating calculation for {len(metrics_df):,} accounts")
     
     activity_start_time = time.time()
@@ -512,10 +511,10 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     
     # Process revenue drops with booking data if available - PROPERLY OPTIMIZED
     if booking_data_df is not None and not booking_data_df.empty and 'Industry' in metrics_df.columns:
-        print("  Calculating revenue factors...")
+        logger.debug("Calculating revenue factors...")
         
         # OPTIMIZED: Pre-aggregate booking data instead of full groupby
-        print("    Pre-aggregating booking data for maximum performance...")
+        logger.debug("Pre-aggregating booking data for maximum performance...")
         index_start = time.time()
         
         # Only keep columns we actually need
@@ -537,7 +536,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                 accounts_df.reset_index(inplace=True)
                 accounts_df.rename(columns={'index': 'AccountId'}, inplace=True)
             
-            print(f"    Processing {has_industry.sum()} accounts with industry data...")
+            logger.debug(f"Processing {has_industry.sum()} accounts with industry data...")
             
             # Determine account patterns vectorized
             accounts_with_industry = metrics_df.loc[has_industry].copy()
@@ -557,7 +556,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             accounts_with_industry.loc[is_seasonal, 'account_pattern'] = 'seasonal'
             
             # FULLY VECTORIZED revenue factor calculation - eliminate all loops
-            print("    Using fully vectorized revenue calculation...")
+            logger.debug("Using fully vectorized revenue calculation...")
             
             # Pre-calculate all metrics in bulk using numpy for maximum speed
             current_revenues = accounts_with_industry['revenue_current'].values
@@ -602,7 +601,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         # Apply simple revenue drop calculation for accounts without industry data
         no_industry = ~has_industry
         if no_industry.any():
-            print(f"    Processing {no_industry.sum()} accounts without industry data...")
+            logger.debug(f"Processing {no_industry.sum()} accounts without industry data...")
             # Vectorized revenue drop calculation for accounts without industry
             no_industry_subset = metrics_df.loc[no_industry]
             revenue_current_list = no_industry_subset['revenue_current'].tolist()
@@ -619,7 +618,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             metrics_df.loc[no_industry, 'revenue_drop_details'] = {}
     else:
         # No booking data or no Industry column - apply simple calculation to all
-        print("  Applying simple revenue drop calculation to all accounts...")
+        logger.debug("Applying simple revenue drop calculation to all accounts...")
         # Vectorized revenue drop calculation for all accounts
         revenue_current_list = metrics_df['revenue_current'].tolist()
         revenue_prev_list = metrics_df['revenue_prev'].tolist()
@@ -635,7 +634,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         metrics_df['revenue_drop_details'] = None
     
     # Calculate rapid drop alerts for Tier 3+ accounts
-    print("  Detecting rapid revenue drops...")
+    logger.debug("Detecting rapid revenue drops...")
     rapid_drop_start = time.time()
     
     # Define high-value tiers that qualify for rapid drop detection
@@ -652,13 +651,15 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     if eligible_for_rapid_drop.any() and booking_data_df is not None and not booking_data_df.empty:
         # Use pre-indexed booking data if available, otherwise create index
         if 'booking_grouped' not in locals():
-            print("    Creating booking data index for rapid drop detection...")
+            logger.debug("Creating booking data index for rapid drop detection...")
+            # Ensure AccountId is string for consistent lookups
+            booking_data_df['AccountId'] = booking_data_df['AccountId'].astype(str)
             booking_grouped = {
-                account_id: group for account_id, group in booking_data_df.groupby('AccountId')
+                str(account_id): group for account_id, group in booking_data_df.groupby('AccountId')
             }
         
         # FULLY VECTORIZED rapid drop detection - eliminate all loops
-        print("    Using fully vectorized rapid drop detection...")
+        logger.debug("Using fully vectorized rapid drop detection...")
         
         eligible_accounts = metrics_df[eligible_for_rapid_drop]
         total_eligible = len(eligible_accounts)
@@ -669,7 +670,8 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         if total_eligible > 0:
             # Get all eligible account data at once
             eligible_indices = eligible_accounts.index
-            account_ids = eligible_accounts['Account_Name_Clean'].values
+            # Convert account IDs to strings to match booking_grouped
+            account_ids = eligible_accounts.index.astype(str).values
             
             # Batch process revenue calculations using pre-indexed data
             current_revenues = np.zeros(total_eligible)
@@ -848,7 +850,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     logger.info(f"Rapid drop detection completed in {time.time() - rapid_drop_start:.1f}s")
     
     # Calculate retention priority
-    print("  Calculating retention priorities...")
+    logger.debug("Calculating retention priorities...")
     
     # Add data quality logging before priority calculation
     missing_current_tier = metrics_df['Current_Tier'].isna().sum()
@@ -873,7 +875,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     metrics_df.loc[metrics_df['Rating'] == 'Churned', 'Retention_Priority'] = ''
     
     # Build final results DataFrame
-    print("  Building final results...")
+    logger.debug("Building final results...")
     results_df = pd.DataFrame({
         'Account_Name': metrics_df['Account_Name_Clean'],
         'Current_Tier': metrics_df['Current_Tier'],
@@ -886,7 +888,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         'Rating': metrics_df['Rating'],
         'Months_Active': metrics_df['Months_Active'],
         'Retention_Priority': metrics_df['Retention_Priority'],
-        'Days_Since_Last_Booking': metrics_df['days_since_last'].astype('Int32'),
+        'Days_Since_Last_Booking': metrics_df['days_since_last'].fillna(-1).astype(int),
         # Hidden fields for report generation (prefix with _)
         '_retention_priority_score': metrics_df['retention_priority_score'],
         '_avg_lead_days': metrics_df['avg_lead_days'],
@@ -920,74 +922,55 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     if '_retention_priority_score' in results_df.columns:
         results_df['Retention_Priority_Score'] = results_df['_retention_priority_score']
     
-    # Print event frequency summary
-    print("\nEvent Frequency Summary:")
-    event_freq_counts = metrics_df['Event_Frequency_Current'].value_counts()
-    for freq_type in ['Continuous', 'Regular', 'Seasonal', 'Annual', 'Inactive']:
-        count = event_freq_counts.get(freq_type, 0)
-        print(f"  {freq_type}: {count:,} accounts")
-    
-    # Activity rating summary
+    # Log summary statistics
     if not results_df.empty:
+        # Event frequency summary
+        event_freq_counts = metrics_df['Event_Frequency_Current'].value_counts()
+        freq_summary = {freq: event_freq_counts.get(freq, 0) 
+                       for freq in ['Continuous', 'Regular', 'Seasonal', 'Annual', 'Inactive']}
+        logger.info(f"Event frequency distribution: {freq_summary}")
+        
+        # Activity rating summary
         rating_counts = results_df['Rating'].value_counts()
-        print("\nActivity Rating Summary:")
-        for rating in ['Active', 'Outreach', 'At Risk', 'Churned', 'Returned', 'New', 'Inactive']:
-            count = rating_counts.get(rating, 0)
-            print(f"  {rating}: {count:,} accounts")
+        rating_summary = {rating: rating_counts.get(rating, 0) 
+                         for rating in ['Active', 'Outreach', 'At Risk', 'Churned', 'Returned', 'New', 'Inactive']}
+        logger.info(f"Activity rating distribution: {rating_summary}")
         
         # Retention Priority summary
         priority_counts = results_df['Retention_Priority'].value_counts()
-        print("\nRetention Priority Summary:")
+        priority_summary = {}
         for priority in ['Very High', 'High', 'Medium', 'Low']:
             count = priority_counts.get(priority, 0)
             pct = (count / len(results_df) * 100) if len(results_df) > 0 else 0
-            print(f"  {priority}: {count:,} accounts ({pct:.1f}%)")
+            priority_summary[priority] = f"{count} ({pct:.1f}%)"
+        logger.info(f"Retention priority distribution: {priority_summary}")
         
-        # Show churned accounts (empty retention priority) separately
+        # Churned accounts summary
         churned_count = len(results_df[results_df['Rating'] == 'Churned'])
         if churned_count > 0:
-            churned_pct = (churned_count / len(results_df) * 100) if len(results_df) > 0 else 0
-            print(f"\n  Churned (No Priority): {churned_count:,} accounts ({churned_pct:.1f}%) - Excluded from standard CS workflows")
-        
-        # Months Active patterns summary
-        print("\nMonths Active Patterns (Top 10):")
-        # Convert lists to strings for value_counts
-        month_patterns_str = results_df['Months_Active'].apply(
-            lambda x: ','.join(x) if isinstance(x, list) else str(x)
-        ).value_counts().head(10)
-        for pattern, count in month_patterns_str.items():
-            if pattern:  # Skip empty patterns
-                print(f"  {pattern}: {count:,} accounts")
+            churned_pct = (churned_count / len(results_df) * 100)
+            logger.info(f"Churned accounts (excluded from priorities): {churned_count} ({churned_pct:.1f}%)")
         
         # Rapid Drop Alert summary
         if '_rapid_drop_alert' in results_df.columns:
             rapid_alerts = results_df['_rapid_drop_alert']
-            severe_alerts = (rapid_alerts == 3).sum()
-            significant_alerts = (rapid_alerts == 2).sum()
-            moderate_alerts = (rapid_alerts == 1).sum()
-            
-            if severe_alerts > 0 or significant_alerts > 0 or moderate_alerts > 0:
-                print("\nRapid Drop Alerts (High-Value Accounts):")
-                if severe_alerts > 0:
-                    print(f"  Severe (Level 3): {severe_alerts:,} accounts - Critical intervention needed")
-                if significant_alerts > 0:
-                    print(f"  Significant (Level 2): {significant_alerts:,} accounts - Immediate attention required")
-                if moderate_alerts > 0:
-                    print(f"  Moderate (Level 1): {moderate_alerts:,} accounts - Monitor closely")
+            rapid_summary = {
+                'severe': (rapid_alerts == 3).sum(),
+                'significant': (rapid_alerts == 2).sum(),
+                'moderate': (rapid_alerts == 1).sum()
+            }
+            if sum(rapid_summary.values()) > 0:
+                logger.info(f"Rapid drop alerts: {rapid_summary}")
         
-        # Annual Reachout summary
+        # Annual account summary
         annual_accounts = results_df[results_df['Event_Frequency_Current'] == 'Annual']
         if len(annual_accounts) > 0:
-            # Check which annual accounts got priority boost (score 18+ but not from other sources)
             annual_high_priority = annual_accounts[
                 (annual_accounts['_retention_priority_score'] >= 18) & 
-                (annual_accounts['Rating'].isin(['Active', 'Inactive', 'New'])) &  # Not already flagged for other issues
-                (annual_accounts['_rapid_drop_alert'] == 0)  # Not rapid drop
+                (annual_accounts['Rating'].isin(['Active', 'Inactive', 'New'])) &
+                (annual_accounts['_rapid_drop_alert'] == 0)
             ]
-            
             if len(annual_high_priority) > 0:
-                print(f"\nAnnual Event Reachouts:")
-                print(f"  {len(annual_high_priority):,} Annual accounts boosted to High priority for proactive outreach")
-                print(f"  Total Annual accounts: {len(annual_accounts):,}")
+                logger.info(f"Annual accounts - total: {len(annual_accounts)}, high priority outreach: {len(annual_high_priority)}")
     
     return results_df

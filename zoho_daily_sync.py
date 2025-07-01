@@ -93,7 +93,7 @@ def fetch_zoho_accounts_optimized(token, account_names_filter=None):
             page += 1
 
     zoho_accounts = {acc["Account_Name"]: acc for acc in all_accounts if "Account_Name" in acc}
-    logger.info(f"Fetched {len(zoho_accounts)} accounts from Zoho CRM")
+    logger.debug(f"Fetched {len(zoho_accounts)} accounts from Zoho CRM")
     return zoho_accounts
 
 
@@ -231,7 +231,6 @@ def sync_industry_data_vectorized(account_df, zoho_token):
     
     if len(updates_needed) == 0:
         logger.info("No account data updates needed")
-        print("No account data updates needed")
         return 0
     
     # More vectorized update building
@@ -265,7 +264,6 @@ def sync_industry_data_vectorized(account_df, zoho_token):
     
     if len(updates) > 0:
         logger.info(f"Updating {len(updates)} accounts with industry and account data")
-        print(f"Updating {len(updates)} accounts with industry and account data")
         
         # Batch update using the shared upsert function
         total_updated = 0
@@ -281,7 +279,6 @@ def sync_industry_data_vectorized(account_df, zoho_token):
         return total_updated
     else:
         logger.info("No account data updates needed")
-        print("No account data updates needed")
         return 0
 
 
@@ -348,6 +345,10 @@ def load_and_process_booking_data_optimized(s3_client, key_all, key_month):
     # Optimize memory
     booking_data_df = optimize_dtypes(booking_data_df)
     
+    # Log memory usage
+    memory_mb = booking_data_df.memory_usage(deep=True).sum() / 1024 / 1024
+    logger.debug(f"Peak booking data memory usage: {memory_mb:.1f} MB")
+    
     return account_metrics, booking_data_df
 
 
@@ -364,7 +365,7 @@ def sync_tier_data_optimized(results_df, zoho_token):
     
     # Log that these fields already exist
     if 'Retention_Priority_Score' in results_df.columns:
-        logger.info(f"Retention_Priority_Score already exists (sample values: {results_df['Retention_Priority_Score'].head(3).tolist()})")
+        logger.debug(f"Retention_Priority_Score already exists (sample values: {results_df['Retention_Priority_Score'].head(3).tolist()})")
     
     # Select columns for Zoho update - DO NOT rename, keep original field names
     update_columns = {
@@ -394,7 +395,7 @@ def sync_tier_data_optimized(results_df, zoho_token):
     # Remove hidden columns (those starting with underscore)
     hidden_cols = [col for col in zoho_updates_df.columns if col.startswith('_')]
     zoho_updates_df = zoho_updates_df.drop(columns=hidden_cols, errors='ignore')
-    logger.info(f"Removed {len(hidden_cols)} hidden columns for Zoho upload")
+    logger.debug(f"Removed {len(hidden_cols)} hidden columns for Zoho upload")
     
     # Select only the columns we need for Zoho
     update_df = zoho_updates_df[list(update_columns.keys())].rename(columns=update_columns)
@@ -413,7 +414,6 @@ def sync_tier_data_optimized(results_df, zoho_token):
     
     if len(update_df) == 0:
         logger.info("No tier updates needed")
-        print("No tier updates needed")
         return 0
     
     # Batch upsert to Zoho using DataFrame directly
@@ -458,10 +458,8 @@ def main():
     test_mode = os.getenv('TEST_MODE', '').lower() in ['1', 'true']
     if test_mode:
         logger.info("Running in TEST MODE - no actual Zoho updates will be made")
-        print("\n=== RUNNING IN TEST MODE ===")
     
     logger.info(f"Zoho Daily Sync (Optimized) Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}")
-    print(f"\n=== Zoho Daily Sync (Optimized) Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')} ===")
     
     try:
         # Initialize clients
@@ -480,17 +478,15 @@ def main():
         month = report_date.strftime("%m")
         
         logger.info(f"Processing data for: {report_date.strftime('%Y-%m-%d')}")
-        print(f"Processing data for: {report_date.strftime('%Y-%m-%d')}")
         
         # S3 keys
         key_all = f"{year}/{month}/{prefix}01-BookingDataAll-TBUK.csv"
         key_month = f"{year}/{month}/{prefix}-BookingData-TBUK.csv"
         
         # Load Account data using optimized loader
-        print(f"\nLoading Account report...")
+        logger.info("Loading Account report...")
         account_df = load_accounts_data(s3_client, report_date)
         logger.info(f"Loaded {len(account_df):,} accounts")
-        print(f"Loaded {len(account_df):,} accounts")
         
         # Handle deleted accounts first
         deleted_accounts = account_df[
@@ -500,14 +496,13 @@ def main():
         deleted_ids = []
         if len(deleted_accounts) > 0:
             logger.info(f"Processing {len(deleted_accounts)} deleted accounts")
-            print(f"\nProcessing {len(deleted_accounts)} deleted accounts...")
             # Get the account IDs of deleted accounts
             deleted_ids = deleted_accounts['Id'].astype(str).tolist()
             # Delete from Zoho
             deletion_results = delete_from_zoho(zoho_token, deleted_ids)
-            print(f"Deleted: {deletion_results['successful']} accounts")
+            logger.info(f"Deleted: {deletion_results['successful']} accounts")
             if deletion_results['failed'] > 0:
-                print(f"Failed to delete: {deletion_results['failed']} accounts")
+                logger.warning(f"Failed to delete: {deletion_results['failed']} accounts")
         
         # Remove deleted accounts from the dataframe so they won't be upserted
         if deleted_ids:
@@ -515,11 +510,11 @@ def main():
             logger.info(f"Filtered out {len(deleted_ids)} deleted accounts from further processing")
         
         # === INDUSTRY SYNC (Optimized) ===
-        print("\n--- Industry Sync ---")
+        logger.info("Starting Industry Sync")
         industry_updates = sync_industry_data_vectorized(account_df, zoho_token)
         
         # === TIER SYNC (Optimized) ===
-        print("\n--- Tier and Metrics Sync ---")
+        logger.info("Starting Tier and Metrics Sync")
         
         # Create account lookup
         account_lookup = {}
@@ -536,17 +531,15 @@ def main():
             logger.info(f"Created lookup for {len(account_lookup):,} accounts")
         
         # Load and process booking data efficiently
-        print("\nProcessing booking data (optimized)...")
+        logger.info("Processing booking data (optimized)...")
         account_metrics, booking_data_df = load_and_process_booking_data_optimized(
             s3_client, key_all, key_month
         )
         
         logger.info(f"Total unique accounts found: {len(account_metrics):,}")
-        print(f"Total unique accounts found: {len(account_metrics):,}")
         
         # Process accounts to calculate tiers and metrics
         logger.info("Processing accounts for tier calculations")
-        print("\nCalculating tiers and metrics...")
         results_df = process_accounts(account_metrics, account_lookup, booking_data_df)
         
         # Save tier updates CSV BEFORE any modifications
@@ -554,9 +547,17 @@ def main():
         # Correctly exclude underscore-prefixed detail columns
         columns_to_exclude = ['_rapid_drop_details', '_revenue_drop_details']
         csv_columns = [col for col in results_df.columns if col not in columns_to_exclude]
+        
+        # Debug: Log columns being saved
+        logger.debug(f"Columns in results_df: {list(results_df.columns)}")
+        logger.debug(f"Columns being saved to CSV: {csv_columns}")
+        
+        # Verify Days_Since_Last_Booking is present
+        if 'Days_Since_Last_Booking' not in csv_columns:
+            logger.error("Days_Since_Last_Booking missing from CSV columns!")
+        
         results_df[csv_columns].to_csv(csv_filename, index=False)
         logger.info(f"Saved tier updates to {csv_filename}")
-        print(f"\nSaved tier calculations to: {csv_filename}")
         
         # Sync tier data to Zoho (optimized) - this will modify results_df
         tier_updates = sync_tier_data_optimized(results_df, zoho_token)
@@ -564,84 +565,57 @@ def main():
         # Summary statistics (from original zoho_tiers.py)
         if not results_df.empty:
             tier_counts = results_df['Current_Tier'].value_counts()
-            print("\nTier Distribution:")
+            tier_summary = {}
             for tier in ['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1', 'NIL']:
                 count = tier_counts.get(tier, 0)
                 pct = (count / len(results_df) * 100) if len(results_df) > 0 else 0
-                print(f"  {tier}: {count:,} ({pct:.1f}%)")
+                tier_summary[tier] = f"{count} ({pct:.1f}%)"
+            logger.info(f"Tier distribution: {tier_summary}")
             
             # Tier changes
             tier_changes = results_df[results_df['Current_Tier'] != results_df['Previous_Tier']]
-            print(f"\nTier Changes: {len(tier_changes):,} accounts")
+            logger.info(f"Tier changes: {len(tier_changes):,} accounts")
             
-            # Show some tier change examples
+            # Log tier change summary
             if len(tier_changes) > 0:
-                print("\nExample tier changes (first 5):")
-                for _, row in tier_changes.head(5).iterrows():
-                    print(f"  Account {row['Account_Name']}: {row['Previous_Tier']} → {row['Current_Tier']}")
+                tier_change_summary = tier_changes.groupby(['Previous_Tier', 'Current_Tier']).size().to_dict()
+                logger.info(f"Tier change details: {tier_change_summary}")
             
             # Retention priority statistics
             if 'Retention_Priority' in results_df.columns:
-                very_high_accounts = results_df[results_df['Retention_Priority'] == 'Very High']
-                if len(very_high_accounts) > 0 and '_retention_priority_score' in results_df.columns:
-                    print(f"\nTop Very High Priority Accounts (showing first 5 of {len(very_high_accounts)}):") 
-                    top_very_high = very_high_accounts.nlargest(5, '_retention_priority_score')
-                    for _, row in top_very_high.iterrows():
-                        print(f"  Account {row['Account_Name']}: {row['Current_Tier']}, {row['Rating']}, Score: {row['_retention_priority_score']}")
+                priority_counts = results_df['Retention_Priority'].value_counts().to_dict()
+                logger.info(f"Retention priority distribution: {priority_counts}")
             
             # Annual events statistics
-            print("\n=== Annual Events Report ===")
             annual_count = len(results_df[results_df['Event_Frequency_Current'] == 'Annual'])
             annual_prev_count = len(results_df[results_df['Event_Frequency_Previous'] == 'Annual'])
-            print(f"Annual accounts (current): {annual_count}")
-            print(f"Annual accounts (previous): {annual_prev_count}")
-            
-            # Show tier filter impact
-            tier_3_plus = ['Key Account', 'High Value', 'Tier 4', 'Tier 3']
-            annual_tier_3_plus = len(results_df[
-                ((results_df['Event_Frequency_Current'] == 'Annual') | 
-                 (results_df['Event_Frequency_Previous'] == 'Annual')) &
-                (results_df['Current_Tier'].isin(tier_3_plus))
-            ])
-            print(f"Annual accounts that are Tier 3+: {annual_tier_3_plus}")
+            logger.info(f"Annual accounts - current: {annual_count}, previous: {annual_prev_count}")
         
         # Generate and send reports
-        print("\n--- Generating Reports ---")
+        logger.info("Generating and sending reports")
         
         # Email tier updates report
         email_tier_updates_report(results_df, csv_filename)
-        print(f"📧 Emailed tier updates report with retention priorities")
+        logger.info("Emailed tier updates report with retention priorities")
         
         # Generate upcoming annual events report
         upcoming_df = generate_upcoming_annual_events_report(results_df)
         if not upcoming_df.empty:
             annual_filename = f"upcoming_annual_events_{datetime.now(UK_TZ).strftime('%Y%m%d')}.csv"
             upcoming_df.to_csv(annual_filename, index=False)
-            print(f"Upcoming annual events needing outreach: {len(upcoming_df)}")
+            logger.info(f"Upcoming annual events needing outreach: {len(upcoming_df)}")
             email_upcoming_events_report(upcoming_df, annual_filename)
-            print(f"📧 Emailed upcoming annual events report")
+            logger.info("Emailed upcoming annual events report")
         else:
-            logger.info("No upcoming annual events requiring outreach")
-            print("No upcoming annual events requiring outreach in next 30 days")
+            logger.info("No upcoming annual events requiring outreach in next 30 days")
         
         # Summary
         elapsed_time = time.time() - start_time
-        print(f"\n=== Zoho Daily Sync Completed in {elapsed_time:.1f} seconds ===")
-        print(f"Industry updates: {industry_updates}")
-        print(f"Tier updates: {tier_updates}")
-        print(f"Deleted accounts processed: {len(deleted_accounts)}")
-        
-        # Memory usage summary
-        memory_mb = booking_data_df.memory_usage(deep=True).sum() / 1024 / 1024
-        logger.info(f"Peak booking data memory usage: {memory_mb:.1f} MB")
-        
         logger.info(f"Zoho Daily Sync completed successfully in {elapsed_time:.1f} seconds")
+        logger.info(f"Summary - Industry updates: {industry_updates}, Tier updates: {tier_updates}, Deleted accounts: {len(deleted_accounts)}")
         
     except Exception as e:
-        logger.error(f"Error in Zoho Daily Sync: {str(e)}")
-        print(f"\nERROR: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error in Zoho Daily Sync: {str(e)}", exc_info=True)
         sys.exit(1)
 
 

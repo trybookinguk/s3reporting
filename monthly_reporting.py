@@ -28,23 +28,100 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     """Calculate all required metrics."""
     metrics = {}
     
+    # The gateway column is 'GatewayGroup' (PascalCase, no space)
+    gateway_column = 'GatewayGroup' if 'GatewayGroup' in booking_df.columns else None
+    if gateway_column:
+        print(f"Using gateway column: '{gateway_column}'")
+    else:
+        print("Warning: 'GatewayGroup' column not found in booking data")
+    
     # 1. Total new accounts for last month
     # Ensure DateTimeCreated is datetime
     accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'], errors='coerce')
     
+    # Debug timezone info
+    if os.environ.get('DEBUG_MODE'):
+        print(f"\nDEBUG: DateTimeCreated column analysis:")
+        print(f"  Original dtype: {accounts_df['DateTimeCreated'].dtype}")
+        sample_dates = accounts_df['DateTimeCreated'].head(3)
+        print(f"  Sample values (first 3):")
+        for i, dt in enumerate(sample_dates):
+            print(f"    {i}: {dt} (type: {type(dt)})")
+    
     # Handle timezone - the S3 data is in UTC
     if accounts_df['DateTimeCreated'].dt.tz is None:
         # Data is timezone-naive, assume UTC and convert to Europe/London
+        if os.environ.get('DEBUG_MODE'):
+            print(f"  Timezone is None, localizing as UTC then converting to London")
         accounts_df['DateTimeCreated'] = accounts_df['DateTimeCreated'].dt.tz_localize('UTC').dt.tz_convert('Europe/London')
     else:
         # Data has timezone, convert to Europe/London
+        if os.environ.get('DEBUG_MODE'):
+            print(f"  Timezone exists: {accounts_df['DateTimeCreated'].dt.tz}, converting to London")
         accounts_df['DateTimeCreated'] = accounts_df['DateTimeCreated'].dt.tz_convert('Europe/London')
+    
+    if os.environ.get('DEBUG_MODE'):
+        print(f"  After conversion - timezone: {accounts_df['DateTimeCreated'].dt.tz}")
+        print(f"  Sample after conversion: {accounts_df['DateTimeCreated'].iloc[0]}")
     
     # Filter for accounts created in the last month
     last_month_accounts = filter_date_range(
         accounts_df, 'DateTimeCreated', 
         dates['last_month_start'], dates['last_month_end']
     )
+    
+    # Debug: Print detailed account information
+    if os.environ.get('DEBUG_MODE'):
+        print(f"\nDEBUG: Date filtering details:")
+        print(f"  Filter start: {dates['last_month_start']}")
+        print(f"  Filter end: {dates['last_month_end']}")
+        print(f"  Total accounts in file: {len(accounts_df)}")
+        print(f"  Accounts in date range: {len(last_month_accounts)}")
+        
+        # Show accounts at the boundaries
+        print(f"\nDEBUG: Boundary analysis:")
+        
+        # Get accounts just before and after the month
+        before_month = accounts_df[accounts_df['DateTimeCreated'] < dates['last_month_start']]
+        after_month = accounts_df[accounts_df['DateTimeCreated'] > dates['last_month_end']]
+        
+        # Show last 5 accounts before the month
+        if len(before_month) > 0:
+            print(f"\n  Last 5 accounts BEFORE {dates['month_name']}:")
+            for idx, acc in before_month.tail(5).iterrows():
+                print(f"    ID: {acc.get('Id', 'N/A'):8} Created: {acc['DateTimeCreated']}")
+        
+        # Show first and last 5 accounts in the month
+        if len(last_month_accounts) > 0:
+            print(f"\n  First 5 accounts IN {dates['month_name']}:")
+            for idx, acc in last_month_accounts.head(5).iterrows():
+                print(f"    ID: {acc.get('Id', 'N/A'):8} Created: {acc['DateTimeCreated']}")
+            
+            if len(last_month_accounts) > 10:
+                print(f"\n  ... ({len(last_month_accounts) - 10} accounts omitted) ...")
+            
+            print(f"\n  Last 5 accounts IN {dates['month_name']}:")
+            for idx, acc in last_month_accounts.tail(5).iterrows():
+                print(f"    ID: {acc.get('Id', 'N/A'):8} Created: {acc['DateTimeCreated']}")
+        
+        # Show first 5 accounts after the month
+        if len(after_month) > 0:
+            print(f"\n  First 5 accounts AFTER {dates['month_name']}:")
+            for idx, acc in after_month.head(5).iterrows():
+                print(f"    ID: {acc.get('Id', 'N/A'):8} Created: {acc['DateTimeCreated']}")
+        
+        # Check for timezone edge cases
+        print(f"\nDEBUG: Timezone check:")
+        print(f"  First account date: {last_month_accounts['DateTimeCreated'].min() if len(last_month_accounts) > 0 else 'None'}")
+        print(f"  Last account date: {last_month_accounts['DateTimeCreated'].max() if len(last_month_accounts) > 0 else 'None'}")
+        print(f"  Date range spans: {(last_month_accounts['DateTimeCreated'].max() - last_month_accounts['DateTimeCreated'].min()).days if len(last_month_accounts) > 0 else 0} days")
+        
+        # If requested, show ALL accounts in the month
+        if os.environ.get('DEBUG_SHOW_ALL_ACCOUNTS'):
+            print(f"\nDEBUG: ALL {len(last_month_accounts)} accounts in {dates['month_name']}:")
+            sorted_accounts = last_month_accounts.sort_values('DateTimeCreated')
+            for i, (idx, acc) in enumerate(sorted_accounts.iterrows(), 1):
+                print(f"  {i:3d}. ID: {acc.get('Id', 'N/A'):8} Created: {acc['DateTimeCreated']}")
     
     metrics['total_new_accounts'] = len(last_month_accounts)
     
@@ -108,11 +185,10 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     )
     
     # 6a. Gateway Group breakdown for last month
-    # Check if Gateway Group column exists
-    if 'Gateway Group' in last_month_bookings.columns:
+    if gateway_column:
         # Normalize gateway groups as requested
         gateway_df = last_month_bookings.copy()
-        gateway_df['Gateway_Normalized'] = gateway_df['Gateway Group'].fillna('Unknown')
+        gateway_df['Gateway_Normalized'] = gateway_df[gateway_column].fillna('Unknown')
         
         # Combine all Default gateways
         gateway_df.loc[gateway_df['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'Default (All)'
@@ -128,16 +204,16 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
         metrics['gateway_breakdown'] = gateway_breakdown.to_dict('index')
         
         # Also calculate for last year same month for comparison
-        if 'Gateway Group' in last_year_month_bookings.columns:
+        if gateway_column and gateway_column in last_year_month_bookings.columns:
             gateway_df_ly = last_year_month_bookings.copy()
-            gateway_df_ly['Gateway_Normalized'] = gateway_df_ly['Gateway Group'].fillna('Unknown')
+            gateway_df_ly['Gateway_Normalized'] = gateway_df_ly[gateway_column].fillna('Unknown')
             gateway_df_ly.loc[gateway_df_ly['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'Default (All)'
             gateway_df_ly.loc[gateway_df_ly['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe Connect (All)'
             
             gateway_breakdown_ly = gateway_df_ly.groupby('Gateway_Normalized')['TotalFees'].sum().round(2)
             metrics['gateway_breakdown_ly'] = gateway_breakdown_ly.to_dict()
     else:
-        print("Warning: 'Gateway Group' column not found in booking data")
+        print(f"Warning: 'GatewayGroup' column not found. Available columns: {sorted(last_month_bookings.columns)[:10]}...")
         metrics['gateway_breakdown'] = None
         metrics['gateway_breakdown_ly'] = None
     
@@ -175,10 +251,11 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     )
     
     # 7a. YTD Gateway Group breakdown
-    if 'Gateway Group' in ytd_bookings.columns:
+    # Use the same gateway column name we found earlier
+    if gateway_column and gateway_column in ytd_bookings.columns:
         # Normalize gateway groups for YTD
         gateway_ytd_df = ytd_bookings.copy()
-        gateway_ytd_df['Gateway_Normalized'] = gateway_ytd_df['Gateway Group'].fillna('Unknown')
+        gateway_ytd_df['Gateway_Normalized'] = gateway_ytd_df[gateway_column].fillna('Unknown')
         gateway_ytd_df.loc[gateway_ytd_df['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'Default (All)'
         gateway_ytd_df.loc[gateway_ytd_df['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe Connect (All)'
         
@@ -189,9 +266,9 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
         metrics['gateway_ytd_breakdown'] = gateway_ytd_breakdown.to_dict('index')
         
         # YTD last year for comparison
-        if 'Gateway Group' in ytd_bookings_ly.columns:
+        if gateway_column and gateway_column in ytd_bookings_ly.columns:
             gateway_ytd_df_ly = ytd_bookings_ly.copy()
-            gateway_ytd_df_ly['Gateway_Normalized'] = gateway_ytd_df_ly['Gateway Group'].fillna('Unknown')
+            gateway_ytd_df_ly['Gateway_Normalized'] = gateway_ytd_df_ly[gateway_column].fillna('Unknown')
             gateway_ytd_df_ly.loc[gateway_ytd_df_ly['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'Default (All)'
             gateway_ytd_df_ly.loc[gateway_ytd_df_ly['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe Connect (All)'
             
@@ -406,8 +483,9 @@ def main():
         print(f"\nSummary for {dates['month_name']}:")
         print(f"- New accounts: {metrics['total_new_accounts']:,}")
         if os.environ.get('DEBUG_MODE'):
-            print(f"  (Total accounts in file: {metrics.get('_debug_total_accounts', 'N/A'):,})")
-            print(f"  (Date range: {metrics.get('_debug_date_range', 'N/A')})")
+            print(f"  (DEBUG: Total accounts in file: {metrics.get('_debug_total_accounts', 'N/A'):,})")
+            print(f"  (DEBUG: Date range checked: {metrics.get('_debug_date_range', 'N/A')})")
+            print(f"  (DEBUG: Expected 400, got {metrics['total_new_accounts']}, difference: {400 - metrics['total_new_accounts']})")
         print(f"- Accounts with events: {metrics['accounts_with_events']:,} ({metrics['accounts_with_events_pct']:.1f}%)")
         print(f"- Accounts with sales: {metrics['accounts_with_sales']:,} ({metrics['accounts_with_sales_pct']:.1f}%)")
         print(f"- Total fees: £{metrics['total_fees_last_month']:,.2f} (YoY: {metrics['fees_yoy_change']:+.1f}%)")

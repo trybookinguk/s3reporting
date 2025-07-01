@@ -11,6 +11,16 @@ on:
         required: false
         type: boolean
         default: true
+      debug_mode:
+        description: 'Debug mode - show detailed debugging information'
+        required: false
+        type: boolean
+        default: false
+      show_all_accounts:
+        description: 'Show all accounts in the month (requires debug mode)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   monthly-report:
@@ -51,6 +61,14 @@ jobs:
           MAILGUN_SMTP_PASSWORD: ${{ secrets.MAILGUN_SMTP_PASSWORD }}
           MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
           TEST_MODE: ${{ github.event.inputs.test_mode }}
+          DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
+          DEBUG_SHOW_ALL_ACCOUNTS: ${{ github.event.inputs.show_all_accounts }}
         run: |
           echo "Running Monthly Report..."
+          if [[ "$DEBUG_MODE" == "true" ]]; then
+            echo "Debug mode enabled"
+            if [[ "$DEBUG_SHOW_ALL_ACCOUNTS" == "true" ]]; then
+              echo "Will show all accounts in the month"
+            fi
+          fi
           python monthly_reporting.py

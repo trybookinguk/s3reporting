@@ -36,7 +36,7 @@ def main():
     validate_environment_variables([
         'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
         'ZOHO_CLIENT_ID', 'ZOHO_CLIENT_SECRET', 'ZOHO_REFRESH_TOKEN',
-        'ZOHO_ORG_ID', 'MAILGUN_SMTP_LOGIN', 'MAILGUN_SMTP_PASSWORD',
+        'MAILGUN_SMTP_LOGIN', 'MAILGUN_SMTP_PASSWORD',
         'MAILGUN_DOMAIN'
     ])
     

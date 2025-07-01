@@ -15,7 +15,6 @@ ZOHO_CLIENT_ID = os.environ.get("ZOHO_CLIENT_ID")
 ZOHO_CLIENT_SECRET = os.environ.get("ZOHO_CLIENT_SECRET")
 ZOHO_REFRESH_TOKEN = os.environ.get("ZOHO_REFRESH_TOKEN")
 ZOHO_PORTAL_NAME = os.environ.get("ZOHO_PORTAL_NAME")
-ZOHO_ORG_ID = os.environ.get("ZOHO_ORG_ID")
 
 ZOHO_DOMAIN = "https://www.zohoapis.com"
 

@@ -188,13 +188,16 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     if gateway_column:
         # Normalize gateway groups as requested
         gateway_df = last_month_bookings.copy()
+        # Handle categorical column type
+        if gateway_df[gateway_column].dtype.name == 'category':
+            gateway_df[gateway_column] = gateway_df[gateway_column].astype(str)
         gateway_df['Gateway_Normalized'] = gateway_df[gateway_column].fillna('Unknown')
         
         # Combine all Default gateways
-        gateway_df.loc[gateway_df['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'Default (All)'
+        gateway_df.loc[gateway_df['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'TryBooking Gateway'
         
         # Combine all Stripe Connect gateways
-        gateway_df.loc[gateway_df['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe Connect (All)'
+        gateway_df.loc[gateway_df['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe'
         
         # Calculate fees by gateway group
         gateway_breakdown = gateway_df.groupby('Gateway_Normalized')['TotalFees'].agg(['sum', 'count']).round(2)
@@ -206,9 +209,12 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
         # Also calculate for last year same month for comparison
         if gateway_column and gateway_column in last_year_month_bookings.columns:
             gateway_df_ly = last_year_month_bookings.copy()
+            # Handle categorical column type
+            if gateway_df_ly[gateway_column].dtype.name == 'category':
+                gateway_df_ly[gateway_column] = gateway_df_ly[gateway_column].astype(str)
             gateway_df_ly['Gateway_Normalized'] = gateway_df_ly[gateway_column].fillna('Unknown')
-            gateway_df_ly.loc[gateway_df_ly['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'Default (All)'
-            gateway_df_ly.loc[gateway_df_ly['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe Connect (All)'
+            gateway_df_ly.loc[gateway_df_ly['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'TryBooking Gateway'
+            gateway_df_ly.loc[gateway_df_ly['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe'
             
             gateway_breakdown_ly = gateway_df_ly.groupby('Gateway_Normalized')['TotalFees'].sum().round(2)
             metrics['gateway_breakdown_ly'] = gateway_breakdown_ly.to_dict()
@@ -255,9 +261,12 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     if gateway_column and gateway_column in ytd_bookings.columns:
         # Normalize gateway groups for YTD
         gateway_ytd_df = ytd_bookings.copy()
+        # Handle categorical column type
+        if gateway_ytd_df[gateway_column].dtype.name == 'category':
+            gateway_ytd_df[gateway_column] = gateway_ytd_df[gateway_column].astype(str)
         gateway_ytd_df['Gateway_Normalized'] = gateway_ytd_df[gateway_column].fillna('Unknown')
-        gateway_ytd_df.loc[gateway_ytd_df['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'Default (All)'
-        gateway_ytd_df.loc[gateway_ytd_df['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe Connect (All)'
+        gateway_ytd_df.loc[gateway_ytd_df['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'TryBooking Gateway'
+        gateway_ytd_df.loc[gateway_ytd_df['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe'
         
         gateway_ytd_breakdown = gateway_ytd_df.groupby('Gateway_Normalized')['TotalFees'].agg(['sum', 'count']).round(2)
         gateway_ytd_breakdown['percentage'] = (gateway_ytd_breakdown['sum'] / gateway_ytd_breakdown['sum'].sum() * 100).round(1)
@@ -268,9 +277,12 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
         # YTD last year for comparison
         if gateway_column and gateway_column in ytd_bookings_ly.columns:
             gateway_ytd_df_ly = ytd_bookings_ly.copy()
+            # Handle categorical column type
+            if gateway_ytd_df_ly[gateway_column].dtype.name == 'category':
+                gateway_ytd_df_ly[gateway_column] = gateway_ytd_df_ly[gateway_column].astype(str)
             gateway_ytd_df_ly['Gateway_Normalized'] = gateway_ytd_df_ly[gateway_column].fillna('Unknown')
-            gateway_ytd_df_ly.loc[gateway_ytd_df_ly['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'Default (All)'
-            gateway_ytd_df_ly.loc[gateway_ytd_df_ly['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe Connect (All)'
+            gateway_ytd_df_ly.loc[gateway_ytd_df_ly['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'TryBooking Gateway'
+            gateway_ytd_df_ly.loc[gateway_ytd_df_ly['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe'
             
             gateway_ytd_breakdown_ly = gateway_ytd_df_ly.groupby('Gateway_Normalized')['TotalFees'].sum().round(2)
             metrics['gateway_ytd_breakdown_ly'] = gateway_ytd_breakdown_ly.to_dict()

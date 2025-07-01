@@ -11,18 +11,18 @@ def get_last_month_dates():
     """Calculate date ranges for last month and last year comparison."""
     today = datetime.now(UK_TZ)
     
-    # Last month
-    last_month_end = today.replace(day=1) - timedelta(days=1)
-    last_month_start = last_month_end.replace(day=1)
+    # Last month - ensure we get clean dates
+    last_month_end = today.replace(day=1, hour=23, minute=59, second=59, microsecond=999999) - timedelta(days=1)
+    last_month_start = last_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     
     # Same month last year
     last_year_month_start = last_month_start - relativedelta(years=1)
     last_year_month_end = last_month_end - relativedelta(years=1)
     
     return {
-        'last_month_start': pd.Timestamp(last_month_start).tz_localize(None).tz_localize('Europe/London'),
+        'last_month_start': pd.Timestamp(last_month_start).tz_localize(None).tz_localize('Europe/London').replace(hour=0, minute=0, second=0),
         'last_month_end': pd.Timestamp(last_month_end).tz_localize(None).tz_localize('Europe/London').replace(hour=23, minute=59, second=59),
-        'last_year_month_start': pd.Timestamp(last_year_month_start).tz_localize(None).tz_localize('Europe/London'),
+        'last_year_month_start': pd.Timestamp(last_year_month_start).tz_localize(None).tz_localize('Europe/London').replace(hour=0, minute=0, second=0),
         'last_year_month_end': pd.Timestamp(last_year_month_end).tz_localize(None).tz_localize('Europe/London').replace(hour=23, minute=59, second=59),
         'month_name': last_month_start.strftime('%B %Y'),
         'month_name_ly': last_year_month_start.strftime('%B %Y')

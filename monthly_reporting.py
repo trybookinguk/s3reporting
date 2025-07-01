@@ -294,8 +294,8 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     return metrics
 
 
-def create_email_content(metrics, dates):
-    """Create HTML email content."""
+def create_md_email_content(metrics, dates):
+    """Create HTML email content for MD with full financial details."""
     html_content = f"""
     <html>
     <body style="font-family: Arial, sans-serif;">
@@ -435,6 +435,32 @@ def create_email_content(metrics, dates):
     return html_content
 
 
+def create_staff_email_content(metrics, dates):
+    """Create HTML email content for general staff with limited financial details."""
+    html_content = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif;">
+        <h2>TryBooking UK - Monthly Report for {dates['month_name']}</h2>
+        
+        <h3>New Account Summary</h3>
+        <ul>
+            <li>Total new accounts: <strong>{metrics['total_new_accounts']:,}</strong></li>
+            <li>Accounts that created events: <strong>{metrics['accounts_with_events']:,}</strong> ({metrics['accounts_with_events_pct']:.1f}%)</li>
+            <li>Accounts that sold tickets: <strong>{metrics['accounts_with_sales']:,}</strong> ({metrics['accounts_with_sales_pct']:.1f}%)</li>
+        </ul>
+        
+        <h3>Transaction Metrics</h3>
+        <ul>
+            <li>Total transactions: <strong>{metrics['total_transactions']:,}</strong></li>
+            <li>Average transaction value: <strong>£{metrics['avg_transaction_value']:.2f}</strong></li>
+            <li>Average tickets per transaction: <strong>{metrics['avg_tickets_per_transaction']:.1f}</strong></li>
+        </ul>
+    </body>
+    </html>
+    """
+    
+    return html_content
+
 
 def main():
     """Main execution function."""
@@ -523,13 +549,29 @@ def main():
                     yoy = calculate_yoy_change(data['sum'], ly_revenue)
                     print(f"  (Last year YTD: £{ly_revenue:,.2f}, YoY: {yoy:+.1f}%)")
         
-        # Create and send email
-        html_content = create_email_content(metrics, dates)
+        # Create and send MD email (full financial details)
+        print("\nPreparing MD email with full financial details...")
+        md_html_content = create_md_email_content(metrics, dates)
         send_html_email(
-            to='alex@trybooking.co.uk',
-            subject=f"Monthly Report - {dates['month_name']}",
-            html_content=html_content
+            to='alex@trybooking.co.uk' if TEST_MODE else 'joan@trybooking.co.uk',
+            cc=None,
+            bcc='alex@trybooking.co.uk',
+            subject=f"{'[TEST] ' if TEST_MODE else ''}Monthly Report - {dates['month_name']} (MD Update)",
+            html_content=md_html_content
         )
+        print(f"MD update email sent to: {'alex@trybooking.co.uk (TEST MODE)' if TEST_MODE else 'joan@trybooking.co.uk'}")
+        
+        # Create and send general staff email (limited financial details)
+        print("\nPreparing general staff email (limited financial details)...")
+        staff_html_content = create_staff_email_content(metrics, dates)
+        send_html_email(
+            to='alex@trybooking.co.uk' if TEST_MODE else ['louise@trybooking.co.uk', 'jules@trybooking.co.uk'],
+            cc=None,
+            bcc='alex@trybooking.co.uk',
+            subject=f"{'[TEST] ' if TEST_MODE else ''}Monthly Report - {dates['month_name']}",
+            html_content=staff_html_content
+        )
+        print(f"General staff email sent to: {'alex@trybooking.co.uk (TEST MODE)' if TEST_MODE else 'louise@trybooking.co.uk, jules@trybooking.co.uk'}")
         
         print(f"\n=== Monthly Reporting Completed in {time.time() - start_time:.1f} seconds ===")
         

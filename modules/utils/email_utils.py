@@ -9,7 +9,7 @@ from .config import (
 )
 
 
-def send_html_email(to, subject, html_content, cc=None, plain_text=None, attachments=None):
+def send_html_email(to, subject, html_content, cc=None, bcc=None, plain_text=None, attachments=None):
     """
     Send an HTML email via Mailgun SMTP.
     
@@ -18,6 +18,7 @@ def send_html_email(to, subject, html_content, cc=None, plain_text=None, attachm
         subject: Email subject (will be prefixed with [TEST] in test mode)
         html_content: HTML body content
         cc: CC recipients - string or list (optional)
+        bcc: BCC recipients - string or list (optional)
         plain_text: Plain text alternative (optional, auto-generated if not provided)
         attachments: List of tuples (filename, content, maintype, subtype) (optional)
     
@@ -39,6 +40,15 @@ def send_html_email(to, subject, html_content, cc=None, plain_text=None, attachm
             msg['Cc'] = ', '.join(cc)
         else:
             msg['Cc'] = cc
+    
+    # Add BCC if provided (BCC is not added to headers but used in send)
+    all_recipients = [to] if isinstance(to, str) else list(to)
+    if cc:
+        cc_list = [cc] if isinstance(cc, str) else list(cc)
+        all_recipients.extend(cc_list)
+    if bcc:
+        bcc_list = [bcc] if isinstance(bcc, str) else list(bcc)
+        all_recipients.extend(bcc_list)
     
     # Add test prefix if in test mode
     msg['Subject'] = f"{'[TEST] ' if TEST_MODE else ''}{subject}"
@@ -65,7 +75,11 @@ def send_html_email(to, subject, html_content, cc=None, plain_text=None, attachm
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
         server.starttls()
         server.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-        server.send_message(msg)
+        # If we have BCC recipients, use sendmail instead of send_message
+        if bcc:
+            server.sendmail(msg['From'], all_recipients, msg.as_string())
+        else:
+            server.send_message(msg)
     
     print("Email sent successfully!")
 

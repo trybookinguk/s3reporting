@@ -29,6 +29,11 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     metrics = {}
     
     # 1. Total new accounts for last month
+    # Convert DateTimeCreated to datetime and ensure timezone
+    accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'])
+    if accounts_df['DateTimeCreated'].dt.tz is None:
+        accounts_df['DateTimeCreated'] = accounts_df['DateTimeCreated'].dt.tz_localize('Europe/London')
+    
     last_month_accounts = filter_date_range(
         accounts_df, 'DateTimeCreated', 
         dates['last_month_start'], dates['last_month_end']
@@ -83,12 +88,28 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     # 7. YTD fees
     ytd_dates = get_ytd_dates()
     
-    # Current YTD (from BookingDataAll for previous months + BookingData for current month)
+    # Current YTD - combine BookingDataAll (historical) + current month BookingData
+    # BookingDataAll contains data up to the 1st of current month
+    # BookingData contains current month data
+    
+    # Historical data from BookingDataAll (Jan 1 to last month end)
     ytd_bookings_historical = filter_successful_transactions(
         filter_date_range(booking_all_df, 'TransactionDate',
-                         ytd_dates['ytd_start'], ytd_dates['ytd_end'])
+                         ytd_dates['ytd_start'], dates['last_month_end'])
     )
-    metrics['total_fees_ytd'] = ytd_bookings_historical['TotalFees'].sum()
+    
+    # Current month data from BookingData (if we're past the 1st of the month)
+    current_month_start = pd.Timestamp.now('Europe/London').replace(day=1, hour=0, minute=0, second=0)
+    if pd.Timestamp.now('Europe/London').day > 1:
+        # We have some current month data
+        current_month_bookings = filter_successful_transactions(
+            filter_date_range(booking_df, 'TransactionDate',
+                             current_month_start, pd.Timestamp.now('Europe/London'))
+        )
+        metrics['total_fees_ytd'] = ytd_bookings_historical['TotalFees'].sum() + current_month_bookings['TotalFees'].sum()
+    else:
+        # Running on the 1st - no current month data yet
+        metrics['total_fees_ytd'] = ytd_bookings_historical['TotalFees'].sum()
     
     # Last year YTD
     ytd_bookings_ly = filter_successful_transactions(
@@ -184,16 +205,29 @@ def main():
         
         # Load data
         print("\nLoading data from S3...")
+        
+        # Load accounts data for the last month
         accounts_df = load_accounts_data(s3_client, dates['last_month_end'])
         print(f"Total accounts loaded: {len(accounts_df):,}")
         
-        booking_df = load_booking_data(s3_client, dates['last_month_end'])
-        print(f"Total booking records loaded: {len(booking_df):,}")
-        
-        # For BookingDataAll, we need the PREVIOUS month's file since this report runs on the 1st
-        # but the current month's BookingDataAll isn't generated until the 2nd
+        # Load BookingDataAll (historical data up to 1st of current month)
         booking_all_df = load_booking_data(s3_client, dates['last_month_end'], data_type='BookingDataAll')
         print(f"Total historical booking records loaded: {len(booking_all_df):,}")
+        
+        # Load BookingData for last month
+        booking_month_df = load_booking_data(s3_client, dates['last_month_end'])
+        print(f"Last month booking records loaded: {len(booking_month_df):,}")
+        
+        # Combine BookingDataAll and BookingData for complete dataset
+        # Remove duplicates based on BookingTransactionId
+        print("\nCombining booking data...")
+        booking_df = pd.concat([booking_all_df, booking_month_df], ignore_index=True)
+        if 'BookingTransactionId' in booking_df.columns:
+            initial_count = len(booking_df)
+            booking_df = booking_df.drop_duplicates(subset=['BookingTransactionId'])
+            duplicates_removed = initial_count - len(booking_df)
+            print(f"Removed {duplicates_removed:,} duplicate transactions")
+        print(f"Total unique booking records: {len(booking_df):,}")
         
         # Calculate metrics
         print("\nCalculating metrics...")

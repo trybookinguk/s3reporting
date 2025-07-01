@@ -378,7 +378,7 @@ def main():
         # Process accounts to calculate tiers and metrics
         logger.info("Processing accounts for tier calculations")
         print("\nCalculating tiers and metrics...")
-        results_df = process_accounts(account_metrics, booking_data_df, account_lookup)
+        results_df = process_accounts(account_metrics, account_lookup, booking_data_df)
         
         # Sync tier data to Zoho (optimized)
         tier_updates = sync_tier_data_optimized(results_df, zoho_token)

@@ -556,7 +556,7 @@ def main():
             to='alex@trybooking.co.uk' if TEST_MODE else 'joan@trybooking.co.uk',
             cc=None,
             bcc='alex@trybooking.co.uk',
-            subject=f"Monthly Report - {dates['month_name']} (MD Update)",
+            subject=f"Monthly Report - {dates['month_name']}",
             html_content=md_html_content
         )
         print(f"MD update email sent to: {'alex@trybooking.co.uk (TEST MODE)' if TEST_MODE else 'joan@trybooking.co.uk'}")

@@ -260,8 +260,14 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         lookup_df = lookup_df.reset_index().rename(columns={'index': 'Account_Name_Clean'})
         
         # Merge with metrics_df
+        # Select only the data columns (Account_Name_Clean is already the index-turned-column)
+        data_columns = ['Industry', 'Postcode', 'DateTimeCreated', 'LastEventCreation']
+        # Only select columns that actually exist in lookup_df
+        available_columns = [col for col in data_columns if col in lookup_df.columns]
+        available_columns.insert(0, 'Account_Name_Clean')  # Add Account_Name_Clean at the beginning
+        
         metrics_df = metrics_df.merge(
-            lookup_df[['Account_Name_Clean', 'Industry', 'Postcode', 'DateTimeCreated', 'LastEventCreation']],
+            lookup_df[available_columns],
             on='Account_Name_Clean',
             how='left'
         )

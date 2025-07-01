@@ -1,6 +1,7 @@
 """
 Zoho CRM API integration for TryBooking tier updates.
 """
+import json
 import requests
 import time
 from typing import List, Dict, Optional, Union, Tuple
@@ -518,7 +519,17 @@ def delete_from_zoho(token: str, account_ids: List[str]) -> Dict[str, Union[int,
             search_response = retry_with_backoff(session.get)(search_url, headers=headers, params=params)
             search_response.raise_for_status()
             
-            search_result = search_response.json()
+            # Handle empty or non-JSON responses
+            try:
+                search_result = search_response.json()
+            except json.JSONDecodeError:
+                print(f"  Batch {batch_num}: Empty or invalid JSON response from search")
+                for acc_id in batch_account_ids:
+                    all_failed.append({
+                        "id": acc_id,
+                        "error": "Invalid response from Zoho API"
+                    })
+                continue
             if not search_result.get("data"):
                 # No records found to delete
                 for acc_id in batch_account_ids:
@@ -546,7 +557,17 @@ def delete_from_zoho(token: str, account_ids: List[str]) -> Dict[str, Union[int,
                 delete_response = retry_with_backoff(session.delete)(delete_url, headers=headers)
                 delete_response.raise_for_status()
                 
-                delete_result = delete_response.json()
+                # Handle empty or non-JSON responses
+                try:
+                    delete_result = delete_response.json()
+                except json.JSONDecodeError:
+                    print(f"  Batch {batch_num}: Empty or invalid JSON response from delete")
+                    for zoho_id, orig_id in account_id_map.items():
+                        all_failed.append({
+                            "id": orig_id,
+                            "error": "Invalid response from Zoho delete API"
+                        })
+                    continue
                 if delete_result.get("data"):
                     for item in delete_result["data"]:
                         zoho_id = item.get("details", {}).get("id")

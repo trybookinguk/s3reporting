@@ -20,10 +20,10 @@ def get_last_month_dates():
     last_year_month_end = last_month_end - relativedelta(years=1)
     
     return {
-        'last_month_start': pd.Timestamp(last_month_start, tz='Europe/London'),
-        'last_month_end': pd.Timestamp(last_month_end, tz='Europe/London').replace(hour=23, minute=59, second=59),
-        'last_year_month_start': pd.Timestamp(last_year_month_start, tz='Europe/London'),
-        'last_year_month_end': pd.Timestamp(last_year_month_end, tz='Europe/London').replace(hour=23, minute=59, second=59),
+        'last_month_start': pd.Timestamp(last_month_start).tz_localize(None).tz_localize('Europe/London'),
+        'last_month_end': pd.Timestamp(last_month_end).tz_localize(None).tz_localize('Europe/London').replace(hour=23, minute=59, second=59),
+        'last_year_month_start': pd.Timestamp(last_year_month_start).tz_localize(None).tz_localize('Europe/London'),
+        'last_year_month_end': pd.Timestamp(last_year_month_end).tz_localize(None).tz_localize('Europe/London').replace(hour=23, minute=59, second=59),
         'month_name': last_month_start.strftime('%B %Y'),
         'month_name_ly': last_year_month_start.strftime('%B %Y')
     }
@@ -40,10 +40,10 @@ def get_ytd_dates():
     ytd_end_ly = ytd_end - relativedelta(years=1)
     
     return {
-        'ytd_start': pd.Timestamp(current_year_start, tz='Europe/London'),
-        'ytd_end': pd.Timestamp(ytd_end, tz='Europe/London').replace(hour=23, minute=59, second=59),
-        'ytd_start_ly': pd.Timestamp(last_year_start, tz='Europe/London'),
-        'ytd_end_ly': pd.Timestamp(ytd_end_ly, tz='Europe/London').replace(hour=23, minute=59, second=59)
+        'ytd_start': pd.Timestamp(current_year_start).tz_localize(None).tz_localize('Europe/London'),
+        'ytd_end': pd.Timestamp(ytd_end).tz_localize(None).tz_localize('Europe/London').replace(hour=23, minute=59, second=59),
+        'ytd_start_ly': pd.Timestamp(last_year_start).tz_localize(None).tz_localize('Europe/London'),
+        'ytd_end_ly': pd.Timestamp(ytd_end_ly).tz_localize(None).tz_localize('Europe/London').replace(hour=23, minute=59, second=59)
     }
 
 

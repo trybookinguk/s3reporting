@@ -50,7 +50,13 @@ def fetch_and_process_data(s3_client):
     
     print(f"Fetching data from S3: {s3_key}")
     df = download_s3_file_cached(s3_client, s3_key)
+    
+    # Convert datetime columns
     df['DateTimeCreated'] = pd.to_datetime(df['DateTimeCreated'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
+    
+    # Convert FirstEventCreation to datetime, handling empty values
+    df['FirstEventCreation'] = pd.to_datetime(df['FirstEventCreation'], errors='coerce', utc=True)
+    df.loc[df['FirstEventCreation'].notna(), 'FirstEventCreation'] = df.loc[df['FirstEventCreation'].notna(), 'FirstEventCreation'].dt.tz_convert('Europe/London')
     
     return df
 
@@ -58,31 +64,42 @@ def fetch_and_process_data(s3_client):
 def analyze_accounts(df, week_start, week_end, last_year_week_start, last_year_week_end):
     """Analyze account data for current and previous year."""
     # Filter data
-    current_week = df[(df['DateTimeCreated'] >= week_start) & (df['DateTimeCreated'] <= week_end)]
-    last_year_week = df[(df['DateTimeCreated'] >= last_year_week_start) & (df['DateTimeCreated'] <= last_year_week_end)]
+    current_week = df[(df['DateTimeCreated'] >= week_start) & (df['DateTimeCreated'] <= week_end)].copy()
+    last_year_week = df[(df['DateTimeCreated'] >= last_year_week_start) & (df['DateTimeCreated'] <= last_year_week_end)].copy()
     
     # Basic stats
     total_accounts = len(current_week)
     total_accounts_ly = len(last_year_week)
     
-    # Accounts with events
-    with_events = current_week[current_week['HasEvents'] == 1]
-    without_events = current_week[current_week['HasEvents'] == 0]
-    ly_with_events = last_year_week[last_year_week['HasEvents'] == 1]
+    # Determine if accounts have events based on FirstEventCreation
+    current_week['HasEvents'] = current_week['FirstEventCreation'].notna()
+    last_year_week['HasEvents'] = last_year_week['FirstEventCreation'].notna()
     
-    # Event creation analysis
-    current_week['FirstEventCreation'] = pd.to_datetime(current_week['FirstEventCreation'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
-    week_1 = current_week[current_week['FirstEventCreation'] <= current_week['DateTimeCreated'] + pd.Timedelta(weeks=1)]
-    week_2 = current_week[(current_week['FirstEventCreation'] > current_week['DateTimeCreated'] + pd.Timedelta(weeks=1)) & 
-                         (current_week['FirstEventCreation'] <= current_week['DateTimeCreated'] + pd.Timedelta(weeks=2))]
-    week_3 = current_week[(current_week['FirstEventCreation'] > current_week['DateTimeCreated'] + pd.Timedelta(weeks=2)) & 
-                         (current_week['FirstEventCreation'] <= current_week['DateTimeCreated'] + pd.Timedelta(weeks=3))]
-    week_4 = current_week[(current_week['FirstEventCreation'] > current_week['DateTimeCreated'] + pd.Timedelta(weeks=3)) & 
-                         (current_week['FirstEventCreation'] <= current_week['DateTimeCreated'] + pd.Timedelta(weeks=4))]
-    more_than_month = current_week[current_week['FirstEventCreation'] > current_week['DateTimeCreated'] + pd.Timedelta(weeks=4)]
+    # Accounts with events
+    with_events = current_week[current_week['HasEvents']]
+    without_events = current_week[~current_week['HasEvents']]
+    ly_with_events = last_year_week[last_year_week['HasEvents']]
+    
+    # Event creation analysis - only for accounts that have events
+    if not with_events.empty:
+        with_events['FirstEventCreation'] = pd.to_datetime(with_events['FirstEventCreation'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
+        week_1 = with_events[with_events['FirstEventCreation'] <= with_events['DateTimeCreated'] + pd.Timedelta(weeks=1)]
+        week_2 = with_events[(with_events['FirstEventCreation'] > with_events['DateTimeCreated'] + pd.Timedelta(weeks=1)) & 
+                             (with_events['FirstEventCreation'] <= with_events['DateTimeCreated'] + pd.Timedelta(weeks=2))]
+        week_3 = with_events[(with_events['FirstEventCreation'] > with_events['DateTimeCreated'] + pd.Timedelta(weeks=2)) & 
+                             (with_events['FirstEventCreation'] <= with_events['DateTimeCreated'] + pd.Timedelta(weeks=3))]
+        week_4 = with_events[(with_events['FirstEventCreation'] > with_events['DateTimeCreated'] + pd.Timedelta(weeks=3)) & 
+                             (with_events['FirstEventCreation'] <= with_events['DateTimeCreated'] + pd.Timedelta(weeks=4))]
+        more_than_month = with_events[with_events['FirstEventCreation'] > with_events['DateTimeCreated'] + pd.Timedelta(weeks=4)]
+    else:
+        week_1 = week_2 = week_3 = week_4 = more_than_month = pd.DataFrame()
     
     # Days to create stats
-    with_events['DaysToCreate'] = (with_events['FirstEventCreation'] - with_events['DateTimeCreated']).dt.days
+    if not with_events.empty:
+        with_events = with_events.copy()
+        with_events['DaysToCreate'] = (with_events['FirstEventCreation'] - with_events['DateTimeCreated']).dt.days
+    else:
+        with_events['DaysToCreate'] = pd.Series(dtype='float64')
     
     return {
         'week_start': week_start,
@@ -137,11 +154,11 @@ def create_email_content(stats):
         <h3>Time to First Event Creation</h3>
         <table border="1" cellpadding="5" cellspacing="0">
             <tr><th>Period</th><th>Count</th><th>Percentage</th></tr>
-            <tr><td>Within 1 week</td><td>{len(stats['week_1'])}</td><td>{(len(stats['week_1']) / len(stats['with_events']) * 100):.1f}%</td></tr>
-            <tr><td>Week 2</td><td>{len(stats['week_2'])}</td><td>{(len(stats['week_2']) / len(stats['with_events']) * 100):.1f}%</td></tr>
-            <tr><td>Week 3</td><td>{len(stats['week_3'])}</td><td>{(len(stats['week_3']) / len(stats['with_events']) * 100):.1f}%</td></tr>
-            <tr><td>Week 4</td><td>{len(stats['week_4'])}</td><td>{(len(stats['week_4']) / len(stats['with_events']) * 100):.1f}%</td></tr>
-            <tr><td>More than 1 month</td><td>{len(stats['more_than_month'])}</td><td>{(len(stats['more_than_month']) / len(stats['with_events']) * 100):.1f}%</td></tr>
+            <tr><td>Within 1 week</td><td>{len(stats['week_1'])}</td><td>{(len(stats['week_1']) / len(stats['with_events']) * 100) if len(stats['with_events']) > 0 else 0:.1f}%</td></tr>
+            <tr><td>Week 2</td><td>{len(stats['week_2'])}</td><td>{(len(stats['week_2']) / len(stats['with_events']) * 100) if len(stats['with_events']) > 0 else 0:.1f}%</td></tr>
+            <tr><td>Week 3</td><td>{len(stats['week_3'])}</td><td>{(len(stats['week_3']) / len(stats['with_events']) * 100) if len(stats['with_events']) > 0 else 0:.1f}%</td></tr>
+            <tr><td>Week 4</td><td>{len(stats['week_4'])}</td><td>{(len(stats['week_4']) / len(stats['with_events']) * 100) if len(stats['with_events']) > 0 else 0:.1f}%</td></tr>
+            <tr><td>More than 1 month</td><td>{len(stats['more_than_month'])}</td><td>{(len(stats['more_than_month']) / len(stats['with_events']) * 100) if len(stats['with_events']) > 0 else 0:.1f}%</td></tr>
         </table>
         
         <p><strong>Average days to create first event:</strong> {stats['avg_days']:.1f} days</p>

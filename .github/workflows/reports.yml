@@ -117,11 +117,3 @@ jobs:
             python weekly_reporting_unified.py
           fi
           
-      - name: Upload Account Reports
-        if: always() && (github.event_name == 'schedule' || github.event.inputs.run_accounts == 'true')
-        uses: actions/upload-artifact@v4
-        with:
-          name: weekly-account-reports
-          path: |
-            weekly_accounts_*.csv
-          retention-days: 30

@@ -32,10 +32,10 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     # Ensure DateTimeCreated is datetime
     accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'], errors='coerce')
     
-    # Handle timezone - the data might be timezone-naive or already have timezone
+    # Handle timezone - the S3 data is in UTC
     if accounts_df['DateTimeCreated'].dt.tz is None:
-        # Data is timezone-naive, localize to Europe/London
-        accounts_df['DateTimeCreated'] = accounts_df['DateTimeCreated'].dt.tz_localize('Europe/London')
+        # Data is timezone-naive, assume UTC and convert to Europe/London
+        accounts_df['DateTimeCreated'] = accounts_df['DateTimeCreated'].dt.tz_localize('UTC').dt.tz_convert('Europe/London')
     else:
         # Data has timezone, convert to Europe/London
         accounts_df['DateTimeCreated'] = accounts_df['DateTimeCreated'].dt.tz_convert('Europe/London')
@@ -107,6 +107,40 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
         metrics['total_fees_last_year_month']
     )
     
+    # 6a. Gateway Group breakdown for last month
+    # Check if Gateway Group column exists
+    if 'Gateway Group' in last_month_bookings.columns:
+        # Normalize gateway groups as requested
+        gateway_df = last_month_bookings.copy()
+        gateway_df['Gateway_Normalized'] = gateway_df['Gateway Group'].fillna('Unknown')
+        
+        # Combine all Default gateways
+        gateway_df.loc[gateway_df['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'Default (All)'
+        
+        # Combine all Stripe Connect gateways
+        gateway_df.loc[gateway_df['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe Connect (All)'
+        
+        # Calculate fees by gateway group
+        gateway_breakdown = gateway_df.groupby('Gateway_Normalized')['TotalFees'].agg(['sum', 'count']).round(2)
+        gateway_breakdown['percentage'] = (gateway_breakdown['sum'] / gateway_breakdown['sum'].sum() * 100).round(1)
+        gateway_breakdown = gateway_breakdown.sort_values('sum', ascending=False)
+        
+        metrics['gateway_breakdown'] = gateway_breakdown.to_dict('index')
+        
+        # Also calculate for last year same month for comparison
+        if 'Gateway Group' in last_year_month_bookings.columns:
+            gateway_df_ly = last_year_month_bookings.copy()
+            gateway_df_ly['Gateway_Normalized'] = gateway_df_ly['Gateway Group'].fillna('Unknown')
+            gateway_df_ly.loc[gateway_df_ly['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'Default (All)'
+            gateway_df_ly.loc[gateway_df_ly['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe Connect (All)'
+            
+            gateway_breakdown_ly = gateway_df_ly.groupby('Gateway_Normalized')['TotalFees'].sum().round(2)
+            metrics['gateway_breakdown_ly'] = gateway_breakdown_ly.to_dict()
+    else:
+        print("Warning: 'Gateway Group' column not found in booking data")
+        metrics['gateway_breakdown'] = None
+        metrics['gateway_breakdown_ly'] = None
+    
     # 7. YTD fees
     ytd_dates = get_ytd_dates()
     
@@ -139,6 +173,33 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
         metrics['total_fees_ytd'],
         metrics['total_fees_ytd_ly']
     )
+    
+    # 7a. YTD Gateway Group breakdown
+    if 'Gateway Group' in ytd_bookings.columns:
+        # Normalize gateway groups for YTD
+        gateway_ytd_df = ytd_bookings.copy()
+        gateway_ytd_df['Gateway_Normalized'] = gateway_ytd_df['Gateway Group'].fillna('Unknown')
+        gateway_ytd_df.loc[gateway_ytd_df['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'Default (All)'
+        gateway_ytd_df.loc[gateway_ytd_df['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe Connect (All)'
+        
+        gateway_ytd_breakdown = gateway_ytd_df.groupby('Gateway_Normalized')['TotalFees'].agg(['sum', 'count']).round(2)
+        gateway_ytd_breakdown['percentage'] = (gateway_ytd_breakdown['sum'] / gateway_ytd_breakdown['sum'].sum() * 100).round(1)
+        gateway_ytd_breakdown = gateway_ytd_breakdown.sort_values('sum', ascending=False)
+        
+        metrics['gateway_ytd_breakdown'] = gateway_ytd_breakdown.to_dict('index')
+        
+        # YTD last year for comparison
+        if 'Gateway Group' in ytd_bookings_ly.columns:
+            gateway_ytd_df_ly = ytd_bookings_ly.copy()
+            gateway_ytd_df_ly['Gateway_Normalized'] = gateway_ytd_df_ly['Gateway Group'].fillna('Unknown')
+            gateway_ytd_df_ly.loc[gateway_ytd_df_ly['Gateway_Normalized'].str.contains('Default', case=False, na=False), 'Gateway_Normalized'] = 'Default (All)'
+            gateway_ytd_df_ly.loc[gateway_ytd_df_ly['Gateway_Normalized'].str.contains('Stripe Connect', case=False, na=False), 'Gateway_Normalized'] = 'Stripe Connect (All)'
+            
+            gateway_ytd_breakdown_ly = gateway_ytd_df_ly.groupby('Gateway_Normalized')['TotalFees'].sum().round(2)
+            metrics['gateway_ytd_breakdown_ly'] = gateway_ytd_breakdown_ly.to_dict()
+    else:
+        metrics['gateway_ytd_breakdown'] = None
+        metrics['gateway_ytd_breakdown_ly'] = None
     
     return metrics
 
@@ -185,7 +246,97 @@ def create_email_content(metrics, dates):
                 <td>{'+' if metrics['fees_ytd_yoy_change'] > 0 else ''}{metrics['fees_ytd_yoy_change']:.1f}%</td>
             </tr>
         </table>
+    """
+    
+    # Add Gateway breakdown if available
+    if metrics.get('gateway_breakdown'):
+        html_content += f"""
+        <h3>Revenue by Gateway Group - {dates['month_name']}</h3>
+        <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
+            <tr>
+                <th>Gateway Group</th>
+                <th>Revenue</th>
+                <th>% of Total</th>
+                <th>Transactions</th>"""
         
+        # Add last year column if data available
+        if metrics.get('gateway_breakdown_ly'):
+            html_content += "<th>Last Year Revenue</th><th>YoY Change</th>"
+            
+        html_content += "</tr>"
+        
+        # Add rows for each gateway
+        for gateway, data in metrics['gateway_breakdown'].items():
+            revenue = data['sum']
+            percentage = data['percentage']
+            count = data['count']
+            
+            html_content += f"""
+            <tr>
+                <td>{gateway}</td>
+                <td>£{revenue:,.2f}</td>
+                <td>{percentage:.1f}%</td>
+                <td>{count:,}</td>"""
+            
+            # Add last year comparison if available
+            if metrics.get('gateway_breakdown_ly'):
+                ly_revenue = metrics['gateway_breakdown_ly'].get(gateway, 0)
+                if ly_revenue > 0:
+                    yoy_change = calculate_yoy_change(revenue, ly_revenue)
+                    html_content += f"<td>£{ly_revenue:,.2f}</td>"
+                    html_content += f"<td>{'+' if yoy_change > 0 else ''}{yoy_change:.1f}%</td>"
+                else:
+                    html_content += "<td>-</td><td>New</td>"
+            
+            html_content += "</tr>"
+        
+        html_content += "</table>"
+    
+    # Add YTD Gateway breakdown if available
+    if metrics.get('gateway_ytd_breakdown'):
+        html_content += f"""
+        <h3>YTD Revenue by Gateway Group</h3>
+        <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
+            <tr>
+                <th>Gateway Group</th>
+                <th>YTD Revenue</th>
+                <th>% of Total</th>
+                <th>Transactions</th>"""
+        
+        # Add last year column if data available
+        if metrics.get('gateway_ytd_breakdown_ly'):
+            html_content += "<th>Last Year YTD</th><th>YoY Change</th>"
+            
+        html_content += "</tr>"
+        
+        # Add rows for each gateway
+        for gateway, data in metrics['gateway_ytd_breakdown'].items():
+            revenue = data['sum']
+            percentage = data['percentage']
+            count = data['count']
+            
+            html_content += f"""
+            <tr>
+                <td>{gateway}</td>
+                <td>£{revenue:,.2f}</td>
+                <td>{percentage:.1f}%</td>
+                <td>{count:,}</td>"""
+            
+            # Add last year comparison if available
+            if metrics.get('gateway_ytd_breakdown_ly'):
+                ly_revenue = metrics['gateway_ytd_breakdown_ly'].get(gateway, 0)
+                if ly_revenue > 0:
+                    yoy_change = calculate_yoy_change(revenue, ly_revenue)
+                    html_content += f"<td>£{ly_revenue:,.2f}</td>"
+                    html_content += f"<td>{'+' if yoy_change > 0 else ''}{yoy_change:.1f}%</td>"
+                else:
+                    html_content += "<td>-</td><td>New</td>"
+            
+            html_content += "</tr>"
+        
+        html_content += "</table>"
+    
+    html_content += """
         <br>
         <p style="color: #666; font-size: 12px;">This is an automated monthly report generated by TryBooking UK reporting system.</p>
     </body>
@@ -261,6 +412,25 @@ def main():
         print(f"- Accounts with sales: {metrics['accounts_with_sales']:,} ({metrics['accounts_with_sales_pct']:.1f}%)")
         print(f"- Total fees: £{metrics['total_fees_last_month']:,.2f} (YoY: {metrics['fees_yoy_change']:+.1f}%)")
         print(f"- YTD fees: £{metrics['total_fees_ytd']:,.2f} (YoY: {metrics['fees_ytd_yoy_change']:+.1f}%)")
+        
+        # Print gateway breakdown if available
+        if metrics.get('gateway_breakdown'):
+            print(f"\nRevenue by Gateway Group - {dates['month_name']}:")
+            for gateway, data in metrics['gateway_breakdown'].items():
+                print(f"- {gateway}: £{data['sum']:,.2f} ({data['percentage']:.1f}%, {data['count']:,} transactions)")
+                if metrics.get('gateway_breakdown_ly') and gateway in metrics['gateway_breakdown_ly']:
+                    ly_revenue = metrics['gateway_breakdown_ly'][gateway]
+                    yoy = calculate_yoy_change(data['sum'], ly_revenue)
+                    print(f"  (Last year: £{ly_revenue:,.2f}, YoY: {yoy:+.1f}%)")
+        
+        if metrics.get('gateway_ytd_breakdown'):
+            print(f"\nYTD Revenue by Gateway Group:")
+            for gateway, data in metrics['gateway_ytd_breakdown'].items():
+                print(f"- {gateway}: £{data['sum']:,.2f} ({data['percentage']:.1f}%, {data['count']:,} transactions)")
+                if metrics.get('gateway_ytd_breakdown_ly') and gateway in metrics['gateway_ytd_breakdown_ly']:
+                    ly_revenue = metrics['gateway_ytd_breakdown_ly'][gateway]
+                    yoy = calculate_yoy_change(data['sum'], ly_revenue)
+                    print(f"  (Last year YTD: £{ly_revenue:,.2f}, YoY: {yoy:+.1f}%)")
         
         # Create and send email
         html_content = create_email_content(metrics, dates)

@@ -94,47 +94,48 @@ def prepare_booking_data_with_industry(booking_df, accounts_df):
     """
     Merge industry from accounts into booking data.
     
-    Note: As of the current S3 exports, BookingData files already include
-    Industry and SubIndustry columns, so this function will typically just
-    return the booking data as-is. The merge logic is retained for backwards
-    compatibility or in case the S3 export format changes.
+    IMPORTANT: We use Industry from Accounts as the authoritative source,
+    NOT from BookingData (even though BookingData contains Industry columns).
+    This ensures consistency and uses the most up-to-date industry classifications.
     
     Args:
         booking_df: DataFrame with booking data
         accounts_df: DataFrame with account data including Industry
         
     Returns:
-        DataFrame with booking data including Industry column
+        DataFrame with booking data including Industry column from accounts
     """
-    # Check if Industry already exists in booking data FIRST
-    # (BookingData files from S3 include Industry per CLAUDE.md documentation)
-    if 'Industry' in booking_df.columns:
-        print("  Industry column already exists in booking data")
-        # The booking data already has Industry from S3 export
-        # Check if SubIndustry also exists
-        if 'SubIndustry' in booking_df.columns:
-            print("  SubIndustry column also already exists in booking data")
-        # Just return it as-is
-        return booking_df.copy()
-        
-    # If Industry doesn't exist in bookings, merge it from accounts
-    print("  Industry column not found in booking data, checking accounts...")
-    
-    # Check if Industry column exists in accounts
+    # Check if we have the required columns in accounts
     if 'Industry' not in accounts_df.columns:
-        print("WARNING: Industry column not found in accounts data either!")
-        print(f"Available columns in accounts: {list(accounts_df.columns)[:10]}...")
-        # Return booking_df unchanged if no Industry column anywhere
-        return booking_df
-    # Prepare account industry data
-    account_industry = accounts_df[['Id', 'Industry']].copy()
+        print("ERROR: Industry column not found in accounts data!")
+        print(f"Available columns in accounts: {list(accounts_df.columns)[:15]}...")
+        raise ValueError("Cannot proceed without Industry in accounts data")
+    
+    # First, drop any existing Industry/SubIndustry columns from booking data
+    # We want to use the authoritative data from accounts
+    booking_df = booking_df.copy()
+    cols_to_drop = [col for col in ['Industry', 'SubIndustry'] if col in booking_df.columns]
+    if cols_to_drop:
+        print(f"  Dropping existing columns from booking data: {cols_to_drop}")
+        booking_df = booking_df.drop(columns=cols_to_drop)
+    
+    # Prepare account industry data (get both Industry and SubIndustry if available)
+    cols_to_merge = ['Id', 'Industry']
+    if 'SubIndustry' in accounts_df.columns:
+        cols_to_merge.append('SubIndustry')
+        print("  Will merge both Industry and SubIndustry from accounts")
+    else:
+        print("  Will merge Industry only from accounts (SubIndustry not found)")
+    
+    account_industry = accounts_df[cols_to_merge].copy()
     account_industry['Id'] = account_industry['Id'].astype(str)
     
     # Ensure AccountId is string for consistent merging
     booking_df = booking_df.copy()
     booking_df['AccountId'] = booking_df['AccountId'].astype(str)
     
-    # Merge industry into bookings
+    # Merge industry from accounts into bookings
+    print(f"  Merging industry data from {len(account_industry):,} accounts...")
     booking_with_industry = booking_df.merge(
         account_industry,
         left_on='AccountId',
@@ -145,6 +146,12 @@ def prepare_booking_data_with_industry(booking_df, accounts_df):
     # Drop the duplicate Id column
     if 'Id' in booking_with_industry.columns:
         booking_with_industry = booking_with_industry.drop(columns=['Id'])
+    
+    # Report merge results
+    matched = booking_with_industry['Industry'].notna().sum()
+    unmatched = booking_with_industry['Industry'].isna().sum()
+    print(f"  Merge complete: {matched:,} transactions matched to accounts with industry")
+    print(f"  Unmatched: {unmatched:,} transactions have no industry (orphaned or missing accounts)")
     
     return booking_with_industry
 

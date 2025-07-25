@@ -247,7 +247,9 @@ def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataF
     region_dist = accounts_df['Region'].value_counts().to_dict()
     
     # Postcode area distribution (for accounts with postcodes)
-    postcode_areas = accounts_df[accounts_df['Has_Postcode']]['Postcode'].apply(extract_postcode_areas_vectorized)
+    # Use vectorized operation directly on the Series, not apply
+    postcode_series = accounts_df[accounts_df['Has_Postcode']]['Postcode']
+    postcode_areas = extract_postcode_areas_vectorized(postcode_series)
     postcode_area_dist = postcode_areas.dropna().value_counts().to_dict()
     
     summary = {

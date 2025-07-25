@@ -53,7 +53,7 @@ jobs:
     
     - name: Upload Reports as Artifacts
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: regional-reports-${{ github.run_id }}
         path: |

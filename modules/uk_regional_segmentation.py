@@ -43,6 +43,16 @@ for region, postcodes in UK_REGIONS.items():
     for postcode in postcodes:
         POSTCODE_TO_REGION[postcode] = region
 
+# Set of all valid UK postcode areas for validation
+VALID_UK_POSTCODE_AREAS = set(POSTCODE_TO_REGION.keys()) | {'BFPO'}
+
+
+def is_valid_uk_postcode_area(area: str) -> bool:
+    """Check if a postcode area is a valid UK postcode area."""
+    if not area or not isinstance(area, str):
+        return False
+    return area.upper() in VALID_UK_POSTCODE_AREAS
+
 
 def extract_postcode_areas_vectorized(postcodes: pd.Series) -> pd.Series:
     """
@@ -258,11 +268,15 @@ def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataF
     # Use vectorized operation directly on the Series, not apply
     postcode_series = accounts_df[accounts_df['Has_Postcode']]['Postcode']
     postcode_areas = extract_postcode_areas_vectorized(postcode_series)
-    postcode_area_dist = postcode_areas.dropna().value_counts().to_dict()
+    # Filter to only valid UK postcode areas
+    valid_postcode_areas = postcode_areas[postcode_areas.isin(VALID_UK_POSTCODE_AREAS)]
+    postcode_area_dist = valid_postcode_areas.value_counts().to_dict()
     
     # Event postcode area distribution
     event_postcode_areas = events_df['PostcodeArea'].dropna()
-    event_postcode_dist = event_postcode_areas.value_counts().to_dict()
+    # Filter to only valid UK postcode areas
+    valid_event_areas = event_postcode_areas[event_postcode_areas.isin(VALID_UK_POSTCODE_AREAS)]
+    event_postcode_dist = valid_event_areas.value_counts().to_dict()
     
     summary = {
         'accounts': {

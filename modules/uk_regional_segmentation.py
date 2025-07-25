@@ -57,8 +57,8 @@ def extract_postcode_areas_vectorized(postcodes: pd.Series) -> pd.Series:
     # Handle null values
     valid_mask = postcodes.notna() & (postcodes != '')
     
-    # Initialize result with None
-    result = pd.Series(None, index=postcodes.index)
+    # Initialize result with None (as object dtype to handle strings)
+    result = pd.Series(None, index=postcodes.index, dtype='object')
     
     if valid_mask.any():
         # Clean postcodes: strip, uppercase
@@ -134,7 +134,7 @@ def assign_account_regions(accounts_df: pd.DataFrame, events_df: pd.DataFrame,
     
     # For accounts without valid postcode, use event data
     missing_region_mask = result_df['Region'] == 'Unknown'
-    accounts_needing_fallback = result_df[missing_region_mask]['AccountId'].unique()
+    accounts_needing_fallback = result_df[missing_region_mask]['Id'].unique()
     
     if len(accounts_needing_fallback) > 0:
         logger.info(f"Processing {len(accounts_needing_fallback):,} accounts using event postcodes...")
@@ -159,7 +159,7 @@ def assign_account_regions(accounts_df: pd.DataFrame, events_df: pd.DataFrame,
             
             # Merge results back
             for _, row in account_regions.iterrows():
-                account_mask = (result_df['AccountId'] == row['AccountId']) & missing_region_mask
+                account_mask = (result_df['Id'] == row['AccountId']) & missing_region_mask
                 if account_mask.any():
                     result_df.loc[account_mask, 'Region'] = row['event_region']
                     result_df.loc[account_mask, 'Region_Source'] = 'Events'

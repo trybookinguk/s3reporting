@@ -189,9 +189,12 @@ def main():
         # Create account report
         logger.info("\nCreating account regional report...")
         account_report = accounts_with_regions[[
-            'AccountId', 'AccountName', 'Industry', 'SubIndustry', 
+            'Id', 'AccountName', 'Industry', 'SubIndustry', 
             'Region', 'Has_Postcode'
         ]].copy()
+        
+        # Rename Id to AccountId for clarity in the report
+        account_report = account_report.rename(columns={'Id': 'AccountId'})
         
         # Convert boolean to Yes/No for clarity
         account_report['Has_Postcode'] = account_report['Has_Postcode'].map({True: 'Yes', False: 'No'})

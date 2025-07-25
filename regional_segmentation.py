@@ -165,7 +165,8 @@ def main():
         logger.info(f"Loaded {len(accounts_df):,} accounts")
         
         logger.info("Loading booking data...")
-        booking_df = load_booking_data(s3_client, latest_date)
+        # Use BookingDataAll to get all historical events for comprehensive regional analysis
+        booking_df = load_booking_data(s3_client, latest_date, data_type='BookingDataAll')
         logger.info(f"Loaded {len(booking_df):,} booking records")
         
         # Get unique events with their details

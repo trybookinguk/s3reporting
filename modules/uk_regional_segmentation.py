@@ -214,14 +214,15 @@ def process_event_regions(events_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataFrame, 
-                                total_accounts: int = None) -> Dict:
+                                total_accounts: int = None, accounts_with_events: int = None) -> Dict:
     """
     Generate comprehensive data quality metrics.
     
     Args:
-        accounts_df: Processed accounts DataFrame with regions (only accounts with events)
+        accounts_df: Processed accounts DataFrame with regions (accounts with events or postcodes)
         events_df: Processed events DataFrame with regions
         total_accounts: Total number of accounts in the system (before filtering)
+        accounts_with_events: Number of accounts that have events
         
     Returns:
         Dictionary with summary statistics
@@ -232,7 +233,14 @@ def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataF
     else:
         total_accounts_all = total_accounts
     
-    accounts_with_events = len(accounts_df)
+    # Accounts analyzed (with events or postcodes)
+    accounts_analyzed = len(accounts_df)
+    
+    # Use provided count or default
+    if accounts_with_events is None:
+        accounts_with_events_count = accounts_analyzed
+    else:
+        accounts_with_events_count = accounts_with_events
     accounts_with_postcode = accounts_df['Has_Postcode'].sum()
     accounts_with_region = (accounts_df['Region'] != 'Unknown').sum()
     accounts_from_account = (accounts_df['Region_Source'] == 'Account').sum()
@@ -255,15 +263,17 @@ def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataF
     summary = {
         'accounts': {
             'total_all': total_accounts_all,
-            'with_events': accounts_with_events,
-            'with_events_pct': (accounts_with_events / total_accounts_all * 100) if total_accounts_all > 0 else 0,
+            'with_events': accounts_with_events_count,
+            'with_events_pct': (accounts_with_events_count / total_accounts_all * 100) if total_accounts_all > 0 else 0,
+            'analyzed': accounts_analyzed,
+            'analyzed_pct': (accounts_analyzed / total_accounts_all * 100) if total_accounts_all > 0 else 0,
             'with_postcode': accounts_with_postcode,
-            'with_postcode_pct': (accounts_with_postcode / accounts_with_events * 100) if accounts_with_events > 0 else 0,
+            'with_postcode_pct': (accounts_with_postcode / accounts_analyzed * 100) if accounts_analyzed > 0 else 0,
             'with_region': accounts_with_region,
-            'with_region_pct': (accounts_with_region / accounts_with_events * 100) if accounts_with_events > 0 else 0,
+            'with_region_pct': (accounts_with_region / accounts_analyzed * 100) if accounts_analyzed > 0 else 0,
             'from_account_postcode': accounts_from_account,
             'from_event_postcodes': accounts_from_events,
-            'without_region': accounts_with_events - accounts_with_region
+            'without_region': accounts_analyzed - accounts_with_region
         },
         'events': {
             'total': total_events,

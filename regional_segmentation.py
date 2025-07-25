@@ -40,8 +40,10 @@ def create_summary_html(summary: dict, timestamp: str) -> str:
     account_data = [
         ['Total Accounts', f"{summary['accounts']['total_all']:,}"],
         ['Accounts With Events', f"{summary['accounts']['with_events']:,} ({summary['accounts']['with_events_pct']:.1f}%)"],
+        ['Accounts Analyzed', f"{summary['accounts']['analyzed']:,} ({summary['accounts']['analyzed_pct']:.1f}%)"],
+        ['  (Have events or postcodes)', ''],
         ['', ''],  # Blank row for separation
-        ['Of Accounts With Events:', ''],
+        ['Of Accounts Analyzed:', ''],
         ['- Have Account Postcode', f"{summary['accounts']['with_postcode']:,} ({summary['accounts']['with_postcode_pct']:.1f}%)"],
         ['- Have Region Assigned', f"{summary['accounts']['with_region']:,} ({summary['accounts']['with_region_pct']:.1f}%)"],
         ['  • From Account Postcode', f"{summary['accounts']['from_account_postcode']:,}"],
@@ -63,10 +65,10 @@ def create_summary_html(summary: dict, timestamp: str) -> str:
     region_df = pd.DataFrame(region_data, columns=['Region', 'Account Count'])
     region_df = region_df.sort_values('Account Count', ascending=False)
     
-    # Calculate percentages
-    total_with_region = summary['accounts']['with_region']
-    if total_with_region > 0:
-        region_df['Percentage'] = (region_df['Account Count'] / total_with_region * 100).round(1).astype(str) + '%'
+    # Calculate percentages based on total analyzed
+    total_analyzed = summary['accounts']['analyzed']
+    if total_analyzed > 0:
+        region_df['Percentage'] = (region_df['Account Count'] / total_analyzed * 100).round(1).astype(str) + '%'
     else:
         region_df['Percentage'] = '0%'
     
@@ -90,16 +92,16 @@ def create_summary_html(summary: dict, timestamp: str) -> str:
 <h3>Event Data Quality Summary</h3>
 {create_html_table(event_df)}
 
-<h3>Regional Distribution (Accounts with Events and Assigned Regions)</h3>
+<h3>Regional Distribution (All Analyzed Accounts)</h3>
 {create_html_table(region_df)}
 
 {postcode_html}
 
 <p>The attached CSV files contain:</p>
 <ul>
-<li><strong>account_regional_report_*.csv</strong> - Accounts with events and their assigned regions</li>
+<li><strong>account_regional_report_*.csv</strong> - Accounts with events or postcodes and their assigned regions</li>
 <li><strong>event_regional_report_*.csv</strong> - All events with their postcode areas and regions</li>
-<li><strong>accounts_without_region_*.csv</strong> - Accounts with events but no determinable region (if any)</li>
+<li><strong>accounts_without_region_*.csv</strong> - Analyzed accounts with no determinable region (if any)</li>
 </ul>
 
 <p>Best regards,<br>
@@ -119,8 +121,10 @@ ACCOUNT DATA QUALITY SUMMARY
 ============================
 Total Accounts: {summary['accounts']['total_all']:,}
 Accounts With Events: {summary['accounts']['with_events']:,} ({summary['accounts']['with_events_pct']:.1f}%)
+Accounts Analyzed: {summary['accounts']['analyzed']:,} ({summary['accounts']['analyzed_pct']:.1f}%)
+  (Have events or postcodes)
 
-Of Accounts With Events:
+Of Accounts Analyzed:
 - Have Account Postcode: {summary['accounts']['with_postcode']:,} ({summary['accounts']['with_postcode_pct']:.1f}%)
 - Have Region Assigned: {summary['accounts']['with_region']:,} ({summary['accounts']['with_region_pct']:.1f}%)
   • From Account Postcode: {summary['accounts']['from_account_postcode']:,}
@@ -140,8 +144,8 @@ REGIONAL DISTRIBUTION
     # Add regional distribution
     for region, count in sorted(summary['regional_distribution'].items(), 
                                key=lambda x: x[1], reverse=True):
-        if summary['accounts']['with_events'] > 0:
-            pct = count / summary['accounts']['with_events'] * 100
+        if summary['accounts']['analyzed'] > 0:
+            pct = count / summary['accounts']['analyzed'] * 100
             text += f"{region}: {count:,} ({pct:.1f}%)\n"
         else:
             text += f"{region}: {count:,} (0%)\n"
@@ -157,9 +161,9 @@ REGIONAL DISTRIBUTION
     
     text += """
 The attached CSV files contain:
-- account_regional_report_*.csv - Accounts with events and their assigned regions
+- account_regional_report_*.csv - Accounts with events or postcodes and their assigned regions
 - event_regional_report_*.csv - All events with their postcode areas and regions
-- accounts_without_region_*.csv - Accounts with events but no determinable region
+- accounts_without_region_*.csv - Analyzed accounts with no determinable region
 
 Best regards,
 TryBooking Reporting System
@@ -209,16 +213,24 @@ def main():
         accounts_with_events_ids = booking_df['AccountId'].unique()
         logger.info(f"Found {len(accounts_with_events_ids):,} accounts with events")
         
-        # Filter accounts to only those with events
-        accounts_with_events_df = accounts_df[accounts_df['Id'].isin(accounts_with_events_ids)]
-        logger.info(f"Filtered to {len(accounts_with_events_df):,} accounts that have issued tickets")
+        # Also include accounts that have postcodes but may not have events yet
+        accounts_with_postcodes = accounts_df[accounts_df['Postcode'].notna() & (accounts_df['Postcode'] != '')]
+        logger.info(f"Found {len(accounts_with_postcodes):,} accounts with postcodes")
         
-        # Keep track of all accounts for reporting
+        # Combine: accounts with events OR accounts with postcodes
+        accounts_to_analyze = accounts_df[
+            (accounts_df['Id'].isin(accounts_with_events_ids)) | 
+            (accounts_df['Postcode'].notna() & (accounts_df['Postcode'] != ''))
+        ]
+        logger.info(f"Total accounts to analyze: {len(accounts_to_analyze):,} (with events or postcodes)")
+        
+        # Keep track of counts for reporting
         total_accounts_count = len(accounts_df)
+        accounts_with_events_count = len(accounts_df[accounts_df['Id'].isin(accounts_with_events_ids)])
         
-        # Process regions (only for accounts with events)
-        logger.info("\nAssigning regions to accounts with events...")
-        accounts_with_regions = assign_account_regions(accounts_with_events_df, events_df)
+        # Process regions for accounts with events or postcodes
+        logger.info("\nAssigning regions to accounts...")
+        accounts_with_regions = assign_account_regions(accounts_to_analyze, events_df)
         
         logger.info("\nProcessing event regions...")
         events_with_regions = process_event_regions(events_df)
@@ -270,11 +282,21 @@ def main():
                 'Id', 'AccountName', 'Industry', 'SubIndustry', 'Has_Postcode'
             ]].copy()
             unknown_report = unknown_report.rename(columns={'Id': 'AccountId'})
+            # Check if accounts have events to provide better reason
+            unknown_report['Has_Events'] = unknown_report['AccountId'].isin(accounts_with_events_ids)
             unknown_report['Has_Postcode'] = unknown_report['Has_Postcode'].map({True: 'Yes', False: 'No'})
-            unknown_report['Reason'] = unknown_report['Has_Postcode'].map({
-                'Yes': 'Invalid/Unrecognized Postcode',
-                'No': 'No Postcode in Account or Events'
-            })
+            
+            # Determine reason based on both flags
+            def get_reason(row):
+                if row['Has_Postcode'] == 'Yes':
+                    return 'Invalid/Unrecognized Postcode'
+                elif row['Has_Events']:
+                    return 'No Postcode in Account or Events'
+                else:
+                    return 'No Events Created Yet'
+            
+            unknown_report['Reason'] = unknown_report.apply(get_reason, axis=1)
+            unknown_report = unknown_report.drop('Has_Events', axis=1)  # Remove temporary column
             
             # Sort by account name
             unknown_report = unknown_report.sort_values('AccountName')
@@ -289,7 +311,7 @@ def main():
         # Generate summary
         logger.info("\nGenerating data quality summary...")
         summary = generate_data_quality_summary(accounts_with_regions, events_with_regions, 
-                                              total_accounts_count)
+                                              total_accounts_count, accounts_with_events_count)
         
         # Create email content
         html_content = create_summary_html(summary, datetime.now(UK_TZ).strftime('%d %B %Y at %H:%M'))

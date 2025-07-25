@@ -408,12 +408,6 @@ def main():
         accounts_df = download_s3_file_cached(s3_client, key_account)
         print(f"  Loaded {len(accounts_df):,} accounts")
         
-        # Debug: Check what columns we have
-        print(f"  Account columns: {list(accounts_df.columns)[:15]}...")
-        if 'Industry' not in accounts_df.columns:
-            print("  ERROR: Industry column not found in accounts data!")
-            print("  Cannot proceed with industry analysis without Industry data.")
-            sys.exit(1)
         
         # Ensure DateTimeCreated is datetime
         accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'])
@@ -421,23 +415,22 @@ def main():
         # Load all booking data
         booking_df = load_all_booking_data(s3_client, report_date)
         
-        # Merge industry into bookings
-        print("\nMerging industry data into bookings...")
+        # Check for Industry in booking data (should already exist per CLAUDE.md)
+        print("\nPreparing booking data with industry information...")
         booking_with_industry = prepare_booking_data_with_industry(booking_df, accounts_df)
-        print(f"  Total transactions after merge: {len(booking_with_industry):,}")
         
-        # Check if Industry column exists
+        # Verify we have Industry data
         if 'Industry' not in booking_with_industry.columns:
-            print("  WARNING: Industry column not found after merge!")
-            print(f"  Available columns: {list(booking_with_industry.columns)[:10]}...")
-        else:
-            # Check industry distribution
-            industry_counts = booking_with_industry['Industry'].value_counts(dropna=False)
-            print(f"  Transactions with valid industry: {booking_with_industry['Industry'].notna().sum():,}")
-            print(f"  Transactions with null industry: {booking_with_industry['Industry'].isna().sum():,}")
-            
-        # Don't filter at this stage - let each function handle filtering as needed
-        print(f"  Proceeding with {len(booking_with_industry):,} transactions")
+            print("  ERROR: Industry column not found in booking data!")
+            print("  Cannot proceed with industry analysis.")
+            sys.exit(1)
+        
+        # Show industry data summary
+        valid_industry_count = booking_with_industry['Industry'].notna().sum()
+        null_industry_count = booking_with_industry['Industry'].isna().sum()
+        print(f"  Total transactions: {len(booking_with_industry):,}")
+        print(f"  Transactions with industry: {valid_industry_count:,} ({valid_industry_count/len(booking_with_industry)*100:.1f}%)")
+        print(f"  Transactions without industry: {null_industry_count:,} ({null_industry_count/len(booking_with_industry)*100:.1f}%)")
         
         # Calculate all-time metrics
         all_time_metrics = calculate_all_time_metrics(accounts_df, booking_with_industry)

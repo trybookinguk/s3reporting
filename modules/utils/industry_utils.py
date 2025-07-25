@@ -94,6 +94,11 @@ def prepare_booking_data_with_industry(booking_df, accounts_df):
     """
     Merge industry from accounts into booking data.
     
+    Note: As of the current S3 exports, BookingData files already include
+    Industry and SubIndustry columns, so this function will typically just
+    return the booking data as-is. The merge logic is retained for backwards
+    compatibility or in case the S3 export format changes.
+    
     Args:
         booking_df: DataFrame with booking data
         accounts_df: DataFrame with account data including Industry
@@ -101,13 +106,26 @@ def prepare_booking_data_with_industry(booking_df, accounts_df):
     Returns:
         DataFrame with booking data including Industry column
     """
+    # Check if Industry already exists in booking data FIRST
+    # (BookingData files from S3 include Industry per CLAUDE.md documentation)
+    if 'Industry' in booking_df.columns:
+        print("  Industry column already exists in booking data")
+        # The booking data already has Industry from S3 export
+        # Check if SubIndustry also exists
+        if 'SubIndustry' in booking_df.columns:
+            print("  SubIndustry column also already exists in booking data")
+        # Just return it as-is
+        return booking_df.copy()
+        
+    # If Industry doesn't exist in bookings, merge it from accounts
+    print("  Industry column not found in booking data, checking accounts...")
+    
     # Check if Industry column exists in accounts
     if 'Industry' not in accounts_df.columns:
-        print("WARNING: Industry column not found in accounts data!")
+        print("WARNING: Industry column not found in accounts data either!")
         print(f"Available columns in accounts: {list(accounts_df.columns)[:10]}...")
-        # Return booking_df unchanged if no Industry column
+        # Return booking_df unchanged if no Industry column anywhere
         return booking_df
-        
     # Prepare account industry data
     account_industry = accounts_df[['Id', 'Industry']].copy()
     account_industry['Id'] = account_industry['Id'].astype(str)

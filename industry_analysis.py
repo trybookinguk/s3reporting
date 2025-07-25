@@ -75,7 +75,7 @@ def calculate_all_time_metrics(accounts_df, booking_df):
     valid_accounts = filter_valid_industries(accounts_df)
     
     # Group accounts by industry
-    industry_accounts = valid_accounts.groupby('Industry').agg({
+    industry_accounts = valid_accounts.groupby('Industry', observed=True).agg({
         'Id': 'count',
         'DateTimeCreated': ['min', 'max']
     }).round(2)
@@ -83,8 +83,15 @@ def calculate_all_time_metrics(accounts_df, booking_df):
     industry_accounts.columns = ['total_accounts', 'first_account_date', 'latest_account_date']
     
     # Calculate revenue by industry from bookings
-    if not booking_df.empty:
-        industry_revenue = booking_df.groupby('Industry').agg({
+    if not booking_df.empty and 'Industry' in booking_df.columns:
+        # Filter valid industries for revenue calculations
+        valid_booking_df = filter_valid_industries(booking_df)
+        
+        if valid_booking_df.empty:
+            print("  WARNING: No valid industry data found in bookings")
+            return all_time_metrics
+            
+        industry_revenue = valid_booking_df.groupby('Industry', observed=True).agg({
             'PaymentReceived': 'sum',
             'TotalFees': 'sum',
             'EventId': 'nunique',
@@ -116,6 +123,12 @@ def calculate_all_time_metrics(accounts_df, booking_df):
         
     else:
         all_time_metrics = industry_accounts
+        # Add empty revenue columns if no booking data
+        all_time_metrics['total_revenue'] = 0
+        all_time_metrics['total_fees'] = 0
+        all_time_metrics['unique_events'] = 0
+        all_time_metrics['total_transactions'] = 0
+        all_time_metrics['avg_revenue_per_account'] = 0
     
     # Sort by total revenue descending
     all_time_metrics = all_time_metrics.sort_values('total_revenue', ascending=False)
@@ -143,7 +156,7 @@ def calculate_period_metrics(booking_df, accounts_df, start_date, end_date, peri
     accounts_with_sales = set(period_bookings['AccountId'].unique())
     
     # Calculate metrics by industry
-    industry_metrics = period_bookings.groupby('Industry').agg({
+    industry_metrics = period_bookings.groupby('Industry', observed=True).agg({
         'AccountId': 'nunique',
         'EventId': 'nunique',
         'PaymentReceived': 'sum',
@@ -385,10 +398,20 @@ def main():
         # Merge industry into bookings
         print("\nMerging industry data into bookings...")
         booking_with_industry = prepare_booking_data_with_industry(booking_df, accounts_df)
+        print(f"  Total transactions after merge: {len(booking_with_industry):,}")
         
-        # Filter valid industries
-        booking_with_industry = filter_valid_industries(booking_with_industry)
-        print(f"  Valid transactions with industry: {len(booking_with_industry):,}")
+        # Check if Industry column exists
+        if 'Industry' not in booking_with_industry.columns:
+            print("  WARNING: Industry column not found after merge!")
+            print(f"  Available columns: {list(booking_with_industry.columns)[:10]}...")
+        else:
+            # Check industry distribution
+            industry_counts = booking_with_industry['Industry'].value_counts(dropna=False)
+            print(f"  Transactions with valid industry: {booking_with_industry['Industry'].notna().sum():,}")
+            print(f"  Transactions with null industry: {booking_with_industry['Industry'].isna().sum():,}")
+            
+        # Don't filter at this stage - let each function handle filtering as needed
+        print(f"  Proceeding with {len(booking_with_industry):,} transactions")
         
         # Calculate all-time metrics
         all_time_metrics = calculate_all_time_metrics(accounts_df, booking_with_industry)

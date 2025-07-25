@@ -139,7 +139,10 @@ def calculate_all_time_metrics(accounts_df, booking_df):
 @timer_decorator
 def calculate_period_metrics(booking_df, accounts_df, start_date, end_date, period_name):
     """Calculate metrics for a specific period."""
-    print(f"\nCalculating {period_name} metrics ({start_date.date()} to {end_date.date()})...")
+    # Handle both date and datetime objects
+    start_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
+    end_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
+    print(f"\nCalculating {period_name} metrics ({start_str} to {end_str})...")
     
     # Filter bookings to period
     period_bookings = booking_df[
@@ -150,6 +153,17 @@ def calculate_period_metrics(booking_df, accounts_df, start_date, end_date, peri
     print(f"  Found {len(period_bookings):,} transactions in period")
     
     if period_bookings.empty:
+        return pd.DataFrame()
+    
+    # Check if Industry column exists
+    if 'Industry' not in period_bookings.columns:
+        print(f"  WARNING: No Industry column in period bookings")
+        return pd.DataFrame()
+    
+    # Filter valid industries
+    period_bookings = filter_valid_industries(period_bookings)
+    if period_bookings.empty:
+        print(f"  WARNING: No valid industries found in period")
         return pd.DataFrame()
     
     # Get unique accounts with sales in period
@@ -181,6 +195,11 @@ def calculate_period_metrics(booking_df, accounts_df, start_date, end_date, peri
 def analyze_account_movements(accounts_df, booking_df, current_start, current_end, previous_start, previous_end):
     """Analyze account movements between periods."""
     print("\nAnalyzing account movements between periods...")
+    
+    # Check if we have Industry data
+    if 'Industry' not in booking_df.columns or 'Industry' not in accounts_df.columns:
+        print("  WARNING: No Industry data available for movement analysis")
+        return pd.DataFrame()
     
     # Get accounts active in each period
     current_bookings = booking_df[
@@ -388,6 +407,13 @@ def main():
         print(f"\nLoading accounts data from: {key_account}")
         accounts_df = download_s3_file_cached(s3_client, key_account)
         print(f"  Loaded {len(accounts_df):,} accounts")
+        
+        # Debug: Check what columns we have
+        print(f"  Account columns: {list(accounts_df.columns)[:15]}...")
+        if 'Industry' not in accounts_df.columns:
+            print("  ERROR: Industry column not found in accounts data!")
+            print("  Cannot proceed with industry analysis without Industry data.")
+            sys.exit(1)
         
         # Ensure DateTimeCreated is datetime
         accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'])

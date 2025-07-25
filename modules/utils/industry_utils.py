@@ -101,6 +101,13 @@ def prepare_booking_data_with_industry(booking_df, accounts_df):
     Returns:
         DataFrame with booking data including Industry column
     """
+    # Check if Industry column exists in accounts
+    if 'Industry' not in accounts_df.columns:
+        print("WARNING: Industry column not found in accounts data!")
+        print(f"Available columns in accounts: {list(accounts_df.columns)[:10]}...")
+        # Return booking_df unchanged if no Industry column
+        return booking_df
+        
     # Prepare account industry data
     account_industry = accounts_df[['Id', 'Industry']].copy()
     account_industry['Id'] = account_industry['Id'].astype(str)

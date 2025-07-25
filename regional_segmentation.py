@@ -22,7 +22,8 @@ from modules.utils import (
     create_html_table,
     UK_TZ,
     get_s3_client,
-    get_latest_data_date
+    get_latest_data_date,
+    validate_environment_variables
 )
 
 # Setup logging
@@ -141,6 +142,12 @@ TryBooking Reporting System
 
 def main():
     """Main function to generate regional segmentation reports."""
+    # Validate environment variables
+    validate_environment_variables([
+        'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
+        'MAILGUN_SMTP_LOGIN', 'MAILGUN_SMTP_PASSWORD', 'MAILGUN_DOMAIN'
+    ])
+    
     logger.info("="*60)
     logger.info("Starting Regional Segmentation Analysis")
     logger.info("="*60)

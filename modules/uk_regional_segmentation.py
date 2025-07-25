@@ -119,12 +119,12 @@ def assign_account_regions(accounts_df: pd.DataFrame, events_df: pd.DataFrame,
     # Create a copy to avoid modifying original
     result_df = accounts_df.copy()
     
-    # Track data quality
-    result_df['Has_Postcode'] = result_df['AccountPostcode'].notna() & (result_df['AccountPostcode'] != '')
+    # Track data quality - accounts data uses 'Postcode' column
+    result_df['Has_Postcode'] = result_df['Postcode'].notna() & (result_df['Postcode'] != '')
     
     # Extract postcode areas and assign regions from account postcodes
     logger.info("Processing account postcodes...")
-    account_areas = extract_postcode_areas_vectorized(result_df['AccountPostcode'])
+    account_areas = extract_postcode_areas_vectorized(result_df['Postcode'])
     result_df['Region'] = get_regions_vectorized(account_areas)
     result_df['Region_Source'] = 'No Data'
     

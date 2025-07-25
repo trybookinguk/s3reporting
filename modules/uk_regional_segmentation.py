@@ -213,19 +213,26 @@ def process_event_regions(events_df: pd.DataFrame) -> pd.DataFrame:
     return result_df
 
 
-def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataFrame) -> Dict:
+def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataFrame, 
+                                total_accounts: int = None) -> Dict:
     """
     Generate comprehensive data quality metrics.
     
     Args:
-        accounts_df: Processed accounts DataFrame with regions
+        accounts_df: Processed accounts DataFrame with regions (only accounts with events)
         events_df: Processed events DataFrame with regions
+        total_accounts: Total number of accounts in the system (before filtering)
         
     Returns:
         Dictionary with summary statistics
     """
     # Account metrics
-    total_accounts = len(accounts_df)
+    if total_accounts is None:
+        total_accounts_all = len(accounts_df)
+    else:
+        total_accounts_all = total_accounts
+    
+    accounts_with_events = len(accounts_df)
     accounts_with_postcode = accounts_df['Has_Postcode'].sum()
     accounts_with_region = (accounts_df['Region'] != 'Unknown').sum()
     accounts_from_account = (accounts_df['Region_Source'] == 'Account').sum()
@@ -239,16 +246,22 @@ def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataF
     # Regional distribution
     region_dist = accounts_df['Region'].value_counts().to_dict()
     
+    # Postcode area distribution (for accounts with postcodes)
+    postcode_areas = accounts_df[accounts_df['Has_Postcode']]['Postcode'].apply(extract_postcode_areas_vectorized)
+    postcode_area_dist = postcode_areas.dropna().value_counts().to_dict()
+    
     summary = {
         'accounts': {
-            'total': total_accounts,
+            'total_all': total_accounts_all,
+            'with_events': accounts_with_events,
+            'with_events_pct': (accounts_with_events / total_accounts_all * 100) if total_accounts_all > 0 else 0,
             'with_postcode': accounts_with_postcode,
-            'with_postcode_pct': (accounts_with_postcode / total_accounts * 100) if total_accounts > 0 else 0,
+            'with_postcode_pct': (accounts_with_postcode / accounts_with_events * 100) if accounts_with_events > 0 else 0,
             'with_region': accounts_with_region,
-            'with_region_pct': (accounts_with_region / total_accounts * 100) if total_accounts > 0 else 0,
+            'with_region_pct': (accounts_with_region / accounts_with_events * 100) if accounts_with_events > 0 else 0,
             'from_account_postcode': accounts_from_account,
             'from_event_postcodes': accounts_from_events,
-            'without_region': total_accounts - accounts_with_region
+            'without_region': accounts_with_events - accounts_with_region
         },
         'events': {
             'total': total_events,
@@ -257,7 +270,8 @@ def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataF
             'with_region': events_with_region,
             'with_region_pct': (events_with_region / total_events * 100) if total_events > 0 else 0
         },
-        'regional_distribution': region_dist
+        'regional_distribution': region_dist,
+        'postcode_area_distribution': postcode_area_dist
     }
     
     return summary

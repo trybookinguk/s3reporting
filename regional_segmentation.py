@@ -102,6 +102,7 @@ def create_summary_html(summary: dict, timestamp: str) -> str:
 <li><strong>account_regional_report_*.csv</strong> - Accounts with events or postcodes and their assigned regions</li>
 <li><strong>event_regional_report_*.csv</strong> - All events with their postcode areas and regions</li>
 <li><strong>accounts_without_region_*.csv</strong> - Analysed accounts with no determinable region (if any)</li>
+<li><strong>postcode_area_summary_*.csv</strong> - All postcode areas with account counts</li>
 </ul>
 
 <p>Best regards,<br>
@@ -164,6 +165,7 @@ The attached CSV files contain:
 - account_regional_report_*.csv - Accounts with events or postcodes and their assigned regions
 - event_regional_report_*.csv - All events with their postcode areas and regions
 - accounts_without_region_*.csv - Analysed accounts with no determinable region
+- postcode_area_summary_*.csv - All postcode areas with account counts
 
 Best regards,
 TryBooking Reporting System
@@ -272,6 +274,27 @@ def main():
         event_report.to_csv(event_filename, index=False)
         logger.info(f"Saved event report: {event_filename} ({len(event_report):,} rows)")
         
+        # Generate summary first to get postcode distribution
+        logger.info("\nGenerating data quality summary...")
+        summary = generate_data_quality_summary(accounts_with_regions, events_with_regions, 
+                                              total_accounts_count, accounts_with_events_count)
+        
+        # Create postcode area summary report
+        logger.info("\nCreating postcode area summary report...")
+        if 'postcode_area_distribution' in summary:
+            postcode_area_data = [
+                {'Postcode Area': area, 'Account Count': count}
+                for area, count in sorted(summary['postcode_area_distribution'].items(), 
+                                         key=lambda x: x[1], reverse=True)
+            ]
+            postcode_area_df = pd.DataFrame(postcode_area_data)
+            postcode_area_filename = f'postcode_area_summary_{timestamp}.csv'
+            postcode_area_df.to_csv(postcode_area_filename, index=False)
+            logger.info(f"Saved postcode area summary: {postcode_area_filename} ({len(postcode_area_df):,} areas)")
+        else:
+            postcode_area_filename = None
+            logger.info("No postcode area data - skipping postcode area summary")
+        
         # Create report for accounts without regions
         logger.info("\nCreating accounts without region report...")
         accounts_without_region = accounts_with_regions[accounts_with_regions['Region'] == 'Unknown'].copy()
@@ -308,11 +331,6 @@ def main():
             unknown_filename = None
             logger.info("No accounts without regions - skipping unknown regions report")
         
-        # Generate summary
-        logger.info("\nGenerating data quality summary...")
-        summary = generate_data_quality_summary(accounts_with_regions, events_with_regions, 
-                                              total_accounts_count, accounts_with_events_count)
-        
         # Create email content
         html_content = create_summary_html(summary, datetime.now(UK_TZ).strftime('%d %B %Y at %H:%M'))
         plain_text = create_summary_text(summary, datetime.now(UK_TZ).strftime('%d %B %Y at %H:%M'))
@@ -333,6 +351,12 @@ def main():
             with open(unknown_filename, 'rb') as f:
                 unknown_data = f.read()
                 attachments.append((unknown_filename, unknown_data, 'text', 'csv'))
+        
+        # Add postcode area summary if it exists
+        if postcode_area_filename:
+            with open(postcode_area_filename, 'rb') as f:
+                postcode_data = f.read()
+                attachments.append((postcode_area_filename, postcode_data, 'text', 'csv'))
         
         # Send email
         logger.info("\nSending email report...")

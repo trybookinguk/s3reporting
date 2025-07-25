@@ -1,0 +1,62 @@
+name: Regional Segmentation Reports
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug_mode:
+        description: 'Enable debug output'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  generate-regional-reports:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Cache Python dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-regional-${{ hashFiles('requirements.txt') }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Cache S3 files
+      uses: actions/cache@v3
+      with:
+        path: .cache
+        key: s3-cache-${{ runner.os }}-regional-${{ github.run_id }}
+        restore-keys: |
+          s3-cache-${{ runner.os }}-regional-
+    
+    - name: Generate Regional Reports
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        MAILGUN_SMTP_LOGIN: ${{ secrets.MAILGUN_SMTP_LOGIN }}
+        MAILGUN_SMTP_PASSWORD: ${{ secrets.MAILGUN_SMTP_PASSWORD }}
+        MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
+        DEBUG_MODE: ${{ inputs.debug_mode || 'false' }}
+      run: |
+        python regional_segmentation.py
+    
+    - name: Upload Reports as Artifacts
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: regional-reports-${{ github.run_id }}
+        path: |
+          account_regional_report_*.csv
+          event_regional_report_*.csv
+        retention-days: 30

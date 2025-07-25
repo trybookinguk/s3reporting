@@ -20,7 +20,9 @@ from modules.utils import (
     load_booking_data,
     send_html_email,
     create_html_table,
-    UK_TZ
+    UK_TZ,
+    get_s3_client,
+    get_latest_data_date
 )
 
 # Setup logging
@@ -146,13 +148,17 @@ def main():
     start_time = time.time()
     
     try:
+        # Initialize S3 client
+        s3_client = get_s3_client()
+        latest_date = get_latest_data_date()
+        
         # Load data
         logger.info("Loading accounts data...")
-        accounts_df = load_accounts_data()
+        accounts_df = load_accounts_data(s3_client, latest_date)
         logger.info(f"Loaded {len(accounts_df):,} accounts")
         
         logger.info("Loading booking data...")
-        booking_df = load_booking_data()
+        booking_df = load_booking_data(s3_client, latest_date)
         logger.info(f"Loaded {len(booking_df):,} booking records")
         
         # Get unique events with their details

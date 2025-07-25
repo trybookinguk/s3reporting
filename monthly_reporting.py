@@ -19,6 +19,10 @@ from modules.utils.metrics_calculator import (
     calculate_yoy_change, calculate_percentage, calculate_transaction_metrics,
     calculate_fee_metrics, filter_date_range
 )
+from modules.utils.industry_utils import (
+    calculate_industry_breakdown, prepare_booking_data_with_industry,
+    format_industry_metrics_table
+)
 from modules.utils.validation import validate_environment_variables
 from modules.utils.performance import timer_decorator
 
@@ -257,7 +261,26 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
         metrics['total_fees_ytd_ly']
     )
     
-    # 7a. YTD Gateway Group breakdown
+    # 7a. Industry breakdown for last month
+    # Merge industry from accounts into last month's bookings
+    last_month_bookings_with_industry = prepare_booking_data_with_industry(
+        last_month_bookings, accounts_df
+    )
+    
+    # Calculate industry metrics
+    industry_breakdown = calculate_industry_breakdown(
+        last_month_bookings_with_industry,
+        ['EventId', 'TicketQuantity', 'PaymentReceived']
+    )
+    
+    if not industry_breakdown.empty:
+        metrics['industry_breakdown'] = industry_breakdown.to_dict('records')
+        print(f"\nIndustry breakdown calculated: {len(industry_breakdown)} industries")
+    else:
+        metrics['industry_breakdown'] = None
+        print("\nWarning: No valid industry data found for breakdown")
+    
+    # 7b. YTD Gateway Group breakdown
     # Use the same gateway column name we found earlier
     if gateway_column and gateway_column in ytd_bookings.columns:
         # Normalize gateway groups for YTD
@@ -427,6 +450,17 @@ def create_md_email_content(metrics, dates):
         
         html_content += "</table>"
     
+    # Add Industry breakdown if available
+    if metrics.get('industry_breakdown'):
+        # Convert list of dicts back to DataFrame for formatting
+        industry_df = pd.DataFrame(metrics['industry_breakdown'])
+        industry_table = format_industry_metrics_table(
+            industry_df,
+            f"Revenue by Industry - {dates['month_name']}",
+            include_tickets=True
+        )
+        html_content += industry_table
+    
     html_content += """
     </body>
     </html>
@@ -454,7 +488,23 @@ def create_staff_email_content(metrics, dates):
             <li>Total transactions: <strong>{metrics['total_transactions']:,}</strong></li>
             <li>Average transaction value: <strong>£{metrics['avg_transaction_value']:.2f}</strong></li>
             <li>Average tickets per transaction: <strong>{metrics['avg_tickets_per_transaction']:.1f}</strong></li>
-        </ul>
+        </ul>"""
+    
+    # Add top 5 industries summary for staff
+    if metrics.get('industry_breakdown'):
+        industry_data = metrics['industry_breakdown']
+        html_content += """
+        <h3>Top 5 Industries by Events</h3>
+        <ul>"""
+        
+        for industry in industry_data[:5]:
+            html_content += f"""
+            <li>{industry['Industry']}: <strong>{industry['events']:,}</strong> events ({industry['events_pct']:.1f}%)</li>"""
+        
+        html_content += """
+        </ul>"""
+    
+    html_content += """
     </body>
     </html>
     """
@@ -548,6 +598,16 @@ def main():
                     ly_revenue = metrics['gateway_ytd_breakdown_ly'][gateway]
                     yoy = calculate_yoy_change(data['sum'], ly_revenue)
                     print(f"  (Last year YTD: £{ly_revenue:,.2f}, YoY: {yoy:+.1f}%)")
+        
+        # Print industry breakdown if available
+        if metrics.get('industry_breakdown'):
+            print(f"\nRevenue by Industry - {dates['month_name']}:")
+            for industry in metrics['industry_breakdown'][:5]:
+                print(f"- {industry['Industry']}: {industry['events']:,} events, "
+                      f"{industry['tickets']:,} tickets, £{industry['revenue']:,.2f} "
+                      f"({industry['revenue_pct']:.1f}% of total)")
+            if len(metrics['industry_breakdown']) > 5:
+                print(f"  ... and {len(metrics['industry_breakdown']) - 5} more industries")
         
         # Create and send MD email (full financial details)
         print("\nPreparing MD email with full financial details...")

@@ -128,3 +128,38 @@ def create_html_table(data, headers=None, style="border-collapse: collapse;"):
     html += '</table>'
     
     return html
+
+
+def send_html_email_with_attachments(to, subject, html_content, attachments=None, cc=None, bcc=None):
+    """
+    Send an HTML email with CSV file attachments.
+    
+    Args:
+        to: Recipient email address(es) - string or list
+        subject: Email subject
+        html_content: HTML body content
+        attachments: List of file paths to attach as CSV files
+        cc: CC recipients (optional)
+        bcc: BCC recipients (optional)
+    """
+    attachment_tuples = []
+    
+    if attachments:
+        for filepath in attachments:
+            try:
+                with open(filepath, 'rb') as f:
+                    content = f.read()
+                    filename = filepath.split('/')[-1]  # Get just the filename
+                    attachment_tuples.append((filename, content, 'text', 'csv'))
+                    print(f"  Attached: {filename}")
+            except Exception as e:
+                print(f"  Warning: Could not attach {filepath}: {str(e)}")
+    
+    send_html_email(
+        to=to,
+        subject=subject,
+        html_content=html_content,
+        cc=cc,
+        bcc=bcc,
+        attachments=attachment_tuples if attachment_tuples else None
+    )

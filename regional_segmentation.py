@@ -102,7 +102,7 @@ def create_summary_html(summary: dict, timestamp: str) -> str:
 <li><strong>account_regional_report_*.csv</strong> - Accounts with events or postcodes and their assigned regions</li>
 <li><strong>event_regional_report_*.csv</strong> - All events with their postcode areas and regions</li>
 <li><strong>accounts_without_region_*.csv</strong> - Analysed accounts with no determinable region (if any)</li>
-<li><strong>postcode_area_summary_*.csv</strong> - All postcode areas with account counts</li>
+<li><strong>postcode_area_summary_*.csv</strong> - All postcode areas with account and event counts</li>
 </ul>
 
 <p>Best regards,<br>
@@ -165,7 +165,7 @@ The attached CSV files contain:
 - account_regional_report_*.csv - Accounts with events or postcodes and their assigned regions
 - event_regional_report_*.csv - All events with their postcode areas and regions
 - accounts_without_region_*.csv - Analysed accounts with no determinable region
-- postcode_area_summary_*.csv - All postcode areas with account counts
+- postcode_area_summary_*.csv - All postcode areas with account and event counts
 
 Best regards,
 TryBooking Reporting System
@@ -282,11 +282,22 @@ def main():
         # Create postcode area summary report
         logger.info("\nCreating postcode area summary report...")
         if 'postcode_area_distribution' in summary:
-            postcode_area_data = [
-                {'Postcode Area': area, 'Account Count': count}
-                for area, count in sorted(summary['postcode_area_distribution'].items(), 
-                                         key=lambda x: x[1], reverse=True)
-            ]
+            # Get all unique postcode areas from both accounts and events
+            all_areas = set(summary['postcode_area_distribution'].keys()) | set(summary.get('event_postcode_distribution', {}).keys())
+            
+            postcode_area_data = []
+            for area in sorted(all_areas):
+                account_count = summary['postcode_area_distribution'].get(area, 0)
+                event_count = summary.get('event_postcode_distribution', {}).get(area, 0)
+                postcode_area_data.append({
+                    'Postcode Area': area,
+                    'Account Count': account_count,
+                    'Event Count': event_count
+                })
+            
+            # Sort by account count (primary), then event count (secondary)
+            postcode_area_data.sort(key=lambda x: (x['Account Count'], x['Event Count']), reverse=True)
+            
             postcode_area_df = pd.DataFrame(postcode_area_data)
             postcode_area_filename = f'postcode_area_summary_{timestamp}.csv'
             postcode_area_df.to_csv(postcode_area_filename, index=False)

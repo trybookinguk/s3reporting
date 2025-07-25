@@ -260,6 +260,10 @@ def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataF
     postcode_areas = extract_postcode_areas_vectorized(postcode_series)
     postcode_area_dist = postcode_areas.dropna().value_counts().to_dict()
     
+    # Event postcode area distribution
+    event_postcode_areas = events_df['PostcodeArea'].dropna()
+    event_postcode_dist = event_postcode_areas.value_counts().to_dict()
+    
     summary = {
         'accounts': {
             'total_all': total_accounts_all,
@@ -283,7 +287,8 @@ def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataF
             'with_region_pct': (events_with_region / total_events * 100) if total_events > 0 else 0
         },
         'regional_distribution': region_dist,
-        'postcode_area_distribution': postcode_area_dist
+        'postcode_area_distribution': postcode_area_dist,
+        'event_postcode_distribution': event_postcode_dist
     }
     
     return summary

@@ -233,7 +233,7 @@ def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataF
     else:
         total_accounts_all = total_accounts
     
-    # Accounts analyzed (with events or postcodes)
+    # Accounts analysed (with events or postcodes)
     accounts_analyzed = len(accounts_df)
     
     # Use provided count or default

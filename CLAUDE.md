@@ -7,6 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 You should ultrathink all instructions, and ensure a rock solid solution is implemented whilst still being maintainable.
 It is critical that you do not assume context that hasn't been provided. If you require 
 
+## Style Guidelines
+
+- Use British spellings always.
+
 ## Commands
 
 ### Running Scripts Locally
@@ -137,4 +141,3 @@ Our platform provides several reports via S3 that can be used for data analysis.
 | GiftCertificateTypeName | The name of the gift certificate used for the transaction. |
 | GiftCertificateId | The unique ID for the gift certificate used for the transaction (if applicable) |
 | BookingCountryCode | Always GBR - internal region code. |
-

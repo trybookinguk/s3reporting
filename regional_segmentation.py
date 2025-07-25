@@ -40,10 +40,10 @@ def create_summary_html(summary: dict, timestamp: str) -> str:
     account_data = [
         ['Total Accounts', f"{summary['accounts']['total_all']:,}"],
         ['Accounts With Events', f"{summary['accounts']['with_events']:,} ({summary['accounts']['with_events_pct']:.1f}%)"],
-        ['Accounts Analyzed', f"{summary['accounts']['analyzed']:,} ({summary['accounts']['analyzed_pct']:.1f}%)"],
+        ['Accounts Analysed', f"{summary['accounts']['analyzed']:,} ({summary['accounts']['analyzed_pct']:.1f}%)"],
         ['  (Have events or postcodes)', ''],
         ['', ''],  # Blank row for separation
-        ['Of Accounts Analyzed:', ''],
+        ['Of Accounts Analysed:', ''],
         ['- Have Account Postcode', f"{summary['accounts']['with_postcode']:,} ({summary['accounts']['with_postcode_pct']:.1f}%)"],
         ['- Have Region Assigned', f"{summary['accounts']['with_region']:,} ({summary['accounts']['with_region_pct']:.1f}%)"],
         ['  • From Account Postcode', f"{summary['accounts']['from_account_postcode']:,}"],
@@ -92,7 +92,7 @@ def create_summary_html(summary: dict, timestamp: str) -> str:
 <h3>Event Data Quality Summary</h3>
 {create_html_table(event_df)}
 
-<h3>Regional Distribution (All Analyzed Accounts)</h3>
+<h3>Regional Distribution (All Analysed Accounts)</h3>
 {create_html_table(region_df)}
 
 {postcode_html}
@@ -101,7 +101,7 @@ def create_summary_html(summary: dict, timestamp: str) -> str:
 <ul>
 <li><strong>account_regional_report_*.csv</strong> - Accounts with events or postcodes and their assigned regions</li>
 <li><strong>event_regional_report_*.csv</strong> - All events with their postcode areas and regions</li>
-<li><strong>accounts_without_region_*.csv</strong> - Analyzed accounts with no determinable region (if any)</li>
+<li><strong>accounts_without_region_*.csv</strong> - Analysed accounts with no determinable region (if any)</li>
 </ul>
 
 <p>Best regards,<br>
@@ -121,10 +121,10 @@ ACCOUNT DATA QUALITY SUMMARY
 ============================
 Total Accounts: {summary['accounts']['total_all']:,}
 Accounts With Events: {summary['accounts']['with_events']:,} ({summary['accounts']['with_events_pct']:.1f}%)
-Accounts Analyzed: {summary['accounts']['analyzed']:,} ({summary['accounts']['analyzed_pct']:.1f}%)
+Accounts Analysed: {summary['accounts']['analyzed']:,} ({summary['accounts']['analyzed_pct']:.1f}%)
   (Have events or postcodes)
 
-Of Accounts Analyzed:
+Of Accounts Analysed:
 - Have Account Postcode: {summary['accounts']['with_postcode']:,} ({summary['accounts']['with_postcode_pct']:.1f}%)
 - Have Region Assigned: {summary['accounts']['with_region']:,} ({summary['accounts']['with_region_pct']:.1f}%)
   • From Account Postcode: {summary['accounts']['from_account_postcode']:,}
@@ -163,7 +163,7 @@ REGIONAL DISTRIBUTION
 The attached CSV files contain:
 - account_regional_report_*.csv - Accounts with events or postcodes and their assigned regions
 - event_regional_report_*.csv - All events with their postcode areas and regions
-- accounts_without_region_*.csv - Analyzed accounts with no determinable region
+- accounts_without_region_*.csv - Analysed accounts with no determinable region
 
 Best regards,
 TryBooking Reporting System
@@ -289,7 +289,7 @@ def main():
             # Determine reason based on both flags
             def get_reason(row):
                 if row['Has_Postcode'] == 'Yes':
-                    return 'Invalid/Unrecognized Postcode'
+                    return 'Invalid/Unrecognised Postcode'
                 elif row['Has_Events']:
                     return 'No Postcode in Account or Events'
                 else:

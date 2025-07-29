@@ -416,6 +416,7 @@ def create_md_email_content(metrics, dates):
     <body style="font-family: Arial, sans-serif;">
         <h2>Monthly Report for {dates['month_name']}</h2>
         
+        <h2>Account Acquisition</h2>
         <h3>New Account Summary</h3>
         <ul>
             <li>Total new accounts: <strong>{metrics['total_new_accounts']:,}</strong>"""
@@ -427,12 +428,24 @@ def create_md_email_content(metrics, dates):
             <span style="color: {variance_color};">{'+' if metrics['monthly_target_variance'] >= 0 else ''}{metrics['monthly_target_variance']:,} 
             / {metrics['monthly_target_percentage']:.1f}%</span>)"""
     
-    html_content += f"""</li>
+    html_content += f"""</li>"""
+    
+    # Add YTD progress if available
+    if metrics.get('ytd_target'):
+        variance_color = 'green' if metrics['ytd_target_variance'] >= 0 else 'red'
+        html_content += f"""
+            <li>YTD new accounts: <strong>{metrics['ytd_new_accounts']:,}</strong> 
+                (Target: {metrics['ytd_target']:,}, 
+                <span style="color: {variance_color};">{'+' if metrics['ytd_target_variance'] >= 0 else ''}{metrics['ytd_target_variance']:,} 
+                / {metrics['ytd_target_percentage']:.1f}%</span>)</li>"""
+    
+    html_content += f"""
             <li>Accounts that created events: <strong>{metrics['accounts_with_events']:,}</strong> ({metrics['accounts_with_events_pct']:.1f}%)</li>
             <li>Accounts that sold tickets: <strong>{metrics['accounts_with_sales']:,}</strong> ({metrics['accounts_with_sales_pct']:.1f}%)</li>
         </ul>
         
-        <h3>Ticket Sales and Revenue</h3>
+        <h2>Sales Performance</h2>
+        <h3>Transaction Summary</h3>
         <ul>
             <li>Total transactions: <strong>{metrics['total_transactions']:,}</strong></li>
             <li>Total ticket revenue: <strong>£{metrics['total_revenue']:,.2f}</strong></li>
@@ -440,7 +453,8 @@ def create_md_email_content(metrics, dates):
             <li>Average tickets per transaction: <strong>{metrics['avg_tickets_per_transaction']:.1f}</strong></li>
         </ul>
         
-        <h3>Revenue Performance</h3>
+        <h2>Financial Performance</h2>
+        <h3>Fee Revenue Summary</h3>
         <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
             <tr>
                 <th>Metric</th>
@@ -463,51 +477,12 @@ def create_md_email_content(metrics, dates):
         </table>
     """
     
-    # Add Account Targets section if available
-    if metrics.get('monthly_target') or metrics.get('ytd_target'):
-        html_content += """
-        <h3>Account Acquisition vs Targets</h3>
-        <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
-            <tr>
-                <th>Period</th>
-                <th>Target</th>
-                <th>Achieved</th>
-                <th>Variance</th>
-                <th>% of Target</th>
-            </tr>"""
-        
-        if metrics.get('monthly_target'):
-            variance_color = 'green' if metrics['monthly_target_variance'] >= 0 else 'red'
-            html_content += f"""
-            <tr>
-                <td>{dates['month_name']}</td>
-                <td>{metrics['monthly_target']:,}</td>
-                <td>{metrics['monthly_target_achieved']:,}</td>
-                <td style="color: {variance_color};">{'+' if metrics['monthly_target_variance'] >= 0 else ''}{metrics['monthly_target_variance']:,}</td>
-                <td style="color: {variance_color};">{metrics['monthly_target_percentage']:.1f}%</td>
-            </tr>"""
-        
-        if metrics.get('ytd_target'):
-            variance_color = 'green' if metrics['ytd_target_variance'] >= 0 else 'red'
-            html_content += f"""
-            <tr>
-                <td>YTD (Jan-{dates['month_name']})</td>
-                <td>{metrics['ytd_target']:,}</td>
-                <td>{metrics['ytd_target_achieved']:,}</td>
-                <td style="color: {variance_color};">{'+' if metrics['ytd_target_variance'] >= 0 else ''}{metrics['ytd_target_variance']:,}</td>
-                <td style="color: {variance_color};">{metrics['ytd_target_percentage']:.1f}%</td>
-            </tr>"""
-        
-        html_content += """
-        </table>"""
-    
-    html_content += """
-    """
     
     # Add Gateway breakdown if available
     if metrics.get('gateway_breakdown'):
         html_content += f"""
-        <h3>TryBooking vs Stripe Payments - {dates['month_name']}</h3>
+        <h2>Payment Gateway Analysis</h2>
+        <h3>TryBooking vs Stripe - {dates['month_name']}</h3>
         <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
             <tr>
                 <th>Gateway Group</th>
@@ -551,7 +526,7 @@ def create_md_email_content(metrics, dates):
     # Add YTD Gateway breakdown if available
     if metrics.get('gateway_ytd_breakdown'):
         html_content += f"""
-        <h3>YTD Revenue by Gateway Group</h3>
+        <h3>TryBooking vs Stripe - YTD</h3>
         <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
             <tr>
                 <th>Gateway Group</th>
@@ -596,7 +571,9 @@ def create_md_email_content(metrics, dates):
     if metrics.get('industry_breakdown'):
         # Custom industry table with fees instead of tickets
         html_content += f"""
+        <h2>Industry Analysis</h2>
         <h3>Revenue by Industry - {dates['month_name']}</h3>
+        <p><em>Total industries: {len(metrics['industry_breakdown'])}</em></p>
         <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
             <tr>
                 <th>Industry</th>
@@ -613,7 +590,8 @@ def create_md_email_content(metrics, dates):
                              key=lambda x: x.get('TotalFees', 0), 
                              reverse=True)
         
-        for industry in industry_data[:10]:  # Top 10 industries
+        # Show all industries
+        for industry in industry_data:
             html_content += f"""
             <tr>
                 <td>{industry['Industry']}</td>
@@ -654,7 +632,18 @@ def create_staff_email_content(metrics, dates):
             <span style="color: {variance_color};">{'+' if metrics['monthly_target_variance'] >= 0 else ''}{metrics['monthly_target_variance']:,} 
             / {metrics['monthly_target_percentage']:.1f}%</span>)"""
     
-    html_content += f"""</li>
+    html_content += f"""</li>"""
+    
+    # Add YTD progress if available
+    if metrics.get('ytd_target'):
+        variance_color = 'green' if metrics['ytd_target_variance'] >= 0 else 'red'
+        html_content += f"""
+            <li>YTD new accounts: <strong>{metrics['ytd_new_accounts']:,}</strong> 
+                (Target: {metrics['ytd_target']:,}, 
+                <span style="color: {variance_color};">{'+' if metrics['ytd_target_variance'] >= 0 else ''}{metrics['ytd_target_variance']:,} 
+                / {metrics['ytd_target_percentage']:.1f}%</span>)</li>"""
+    
+    html_content += f"""
             <li>Accounts that created events: <strong>{metrics['accounts_with_events']:,}</strong> ({metrics['accounts_with_events_pct']:.1f}%)</li>
             <li>Accounts that sold tickets: <strong>{metrics['accounts_with_sales']:,}</strong> ({metrics['accounts_with_sales_pct']:.1f}%)</li>
         </ul>"""

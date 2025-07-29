@@ -63,22 +63,41 @@ def calculate_industry_breakdown(bookings_df, metrics_to_calculate):
     if 'PaymentReceived' in metrics_to_calculate:
         industry_metrics['revenue'] = industry_groups['PaymentReceived'].sum()
     
+    if 'TotalFees' in metrics_to_calculate:
+        industry_metrics['TotalFees'] = industry_groups['TotalFees'].sum()
+    
     # Calculate percentages
     totals = {
         'events': industry_metrics['events'].sum() if 'events' in industry_metrics else 0,
         'tickets': industry_metrics['tickets'].sum() if 'tickets' in industry_metrics else 0,
-        'revenue': industry_metrics['revenue'].sum() if 'revenue' in industry_metrics else 0
+        'revenue': industry_metrics['revenue'].sum() if 'revenue' in industry_metrics else 0,
+        'TotalFees': industry_metrics['TotalFees'].sum() if 'TotalFees' in industry_metrics else 0
     }
     
     # Add percentage columns
     if 'events' in industry_metrics:
-        industry_metrics['events_pct'] = (industry_metrics['events'] / totals['events'] * 100).round(1)
+        if totals['events'] > 0:
+            industry_metrics['events_pct'] = (industry_metrics['events'] / totals['events'] * 100).round(1)
+        else:
+            industry_metrics['events_pct'] = 0.0
         
     if 'tickets' in industry_metrics:
-        industry_metrics['tickets_pct'] = (industry_metrics['tickets'] / totals['tickets'] * 100).round(1)
+        if totals['tickets'] > 0:
+            industry_metrics['tickets_pct'] = (industry_metrics['tickets'] / totals['tickets'] * 100).round(1)
+        else:
+            industry_metrics['tickets_pct'] = 0.0
         
     if 'revenue' in industry_metrics:
-        industry_metrics['revenue_pct'] = (industry_metrics['revenue'] / totals['revenue'] * 100).round(1)
+        if totals['revenue'] > 0:
+            industry_metrics['revenue_pct'] = (industry_metrics['revenue'] / totals['revenue'] * 100).round(1)
+        else:
+            industry_metrics['revenue_pct'] = 0.0
+    
+    if 'TotalFees' in industry_metrics:
+        if totals['TotalFees'] > 0:
+            industry_metrics['TotalFees_pct'] = (industry_metrics['TotalFees'] / totals['TotalFees'] * 100).round(1)
+        else:
+            industry_metrics['TotalFees_pct'] = 0.0
     
     # Sort by revenue descending (or events if no revenue)
     sort_by = 'revenue' if 'revenue' in industry_metrics else 'events'

@@ -447,7 +447,6 @@ def create_md_email_content(metrics, dates):
         <h2>Ticket Revenue Data</h2>
         <h3>Revenue Summary</h3>
         <ul>
-            <li>Total ticket revenue: <strong>£{metrics['total_revenue']:,.2f}</strong></li>
             <li>Average transaction value: <strong>£{metrics['avg_transaction_value']:.2f}</strong></li>
             <li>Average tickets per transaction: <strong>{metrics['avg_tickets_per_transaction']:.1f}</strong></li>
         </ul>

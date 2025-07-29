@@ -34,12 +34,13 @@ def load_account_targets():
     try:
         with open(targets_file, 'r') as f:
             data = json.load(f)
+            print(f"Loaded targets from {targets_file}")
             return data.get('targets', {})
     except FileNotFoundError:
-        print("Warning: account_targets.json not found")
+        print(f"Warning: account_targets.json not found at {targets_file}")
         return {}
     except json.JSONDecodeError:
-        print("Warning: account_targets.json is invalid")
+        print(f"Warning: account_targets.json is invalid at {targets_file}")
         return {}
 
 
@@ -57,7 +58,7 @@ def get_target_for_month(targets, year, month_name):
 
 
 def calculate_ytd_cumulative(targets, year, current_month_name):
-    """Calculate cumulative YTD target up to the current month in the execution year."""
+    """Calculate cumulative YTD target up to and including the specified month."""
     year_str = str(year)
     if year_str not in targets or 'monthly' not in targets[year_str]:
         return None
@@ -191,8 +192,9 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
     if targets:
         # Get target for the reporting month
         report_year = dates['last_month_start'].year
-        report_month_name = dates['month_name']
+        report_month_name = dates['month_only']  # Use month name without year
         
+        print(f"Looking for target: Year={report_year}, Month={report_month_name}")
         month_target = get_target_for_month(targets, report_year, report_month_name)
         if month_target:
             metrics['monthly_target'] = month_target
@@ -213,7 +215,7 @@ def calculate_metrics(accounts_df, booking_df, booking_all_df, dates):
         )
         metrics['ytd_new_accounts'] = len(ytd_accounts)
         
-        # Get YTD target based on reporting month
+        # Get YTD target based on reporting month (using month name without year)
         ytd_target = calculate_ytd_cumulative(targets, report_year, report_month_name)
         if ytd_target:
             metrics['ytd_target'] = ytd_target
@@ -434,12 +436,12 @@ def create_md_email_content(metrics, dates):
     if metrics.get('ytd_target'):
         variance_color = 'green' if metrics['ytd_target_variance'] >= 0 else 'red'
         html_content += f"""
-            <li>YTD new accounts (Jan-{dates['month_name']}): <strong>{metrics['ytd_new_accounts']:,}</strong> 
+            <li>YTD new accounts (Jan-{dates['month_only']}): <strong>{metrics['ytd_new_accounts']:,}</strong> 
                 (Target: {metrics['ytd_target']:,}, 
                 <span style="color: {variance_color};">{'+' if metrics['ytd_target_variance'] >= 0 else ''}{metrics['ytd_target_variance']:,} 
                 / {metrics['ytd_target_percentage']:.1f}%</span>)</li>"""
     
-    html_content += """
+    html_content += f"""
         </ul>
         
         <h2>Ticket Revenue Data</h2>
@@ -634,7 +636,7 @@ def create_staff_email_content(metrics, dates):
     if metrics.get('ytd_target'):
         variance_color = 'green' if metrics['ytd_target_variance'] >= 0 else 'red'
         html_content += f"""
-            <li>YTD new accounts (Jan-{dates['month_name']}): <strong>{metrics['ytd_new_accounts']:,}</strong> 
+            <li>YTD new accounts (Jan-{dates['month_only']}): <strong>{metrics['ytd_new_accounts']:,}</strong> 
                 (Target: {metrics['ytd_target']:,}, 
                 <span style="color: {variance_color};">{'+' if metrics['ytd_target_variance'] >= 0 else ''}{metrics['ytd_target_variance']:,} 
                 / {metrics['ytd_target_percentage']:.1f}%</span>)</li>"""
@@ -649,7 +651,7 @@ def create_staff_email_content(metrics, dates):
         progress_color = 'green' if metrics['ytd_target_percentage'] >= 100 else 'orange' if metrics['ytd_target_percentage'] >= 90 else 'red'
         html_content += f"""
         <h3>Year-to-Date Progress</h3>
-        <p>YTD new accounts (Jan-{dates['month_name']}): <strong>{metrics['ytd_new_accounts']:,}</strong> of {metrics['ytd_target']:,} target 
+        <p>YTD new accounts (Jan-{dates['month_only']}): <strong>{metrics['ytd_new_accounts']:,}</strong> of {metrics['ytd_target']:,} target 
         (<span style="color: {progress_color};">{metrics['ytd_target_percentage']:.1f}%</span>)</p>"""
     
     # Add industry breakdown table for staff (percentages only)
@@ -764,7 +766,7 @@ def main():
         
         # Print target comparison
         if metrics.get('ytd_target'):
-            print(f"\nYTD Target Comparison (Jan-{dates['month_name']}):")
+            print(f"\nYTD Target Comparison (Jan-{dates['month_only']}):")
             print(f"- YTD new accounts: {metrics['ytd_new_accounts']:,} of {metrics['ytd_target']:,} ({metrics['ytd_target_percentage']:.1f}%)")
             print(f"- YTD variance: {'+' if metrics['ytd_target_variance'] >= 0 else ''}{metrics['ytd_target_variance']:,}")
         

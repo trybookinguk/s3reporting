@@ -25,7 +25,8 @@ def get_last_month_dates():
         'last_year_month_start': pd.Timestamp(last_year_month_start).tz_localize(None).tz_localize('Europe/London').replace(hour=0, minute=0, second=0),
         'last_year_month_end': pd.Timestamp(last_year_month_end).tz_localize(None).tz_localize('Europe/London').replace(hour=23, minute=59, second=59),
         'month_name': last_month_start.strftime('%B %Y'),
-        'month_name_ly': last_year_month_start.strftime('%B %Y')
+        'month_name_ly': last_year_month_start.strftime('%B %Y'),
+        'month_only': last_month_start.strftime('%B')  # Just month name without year
     }
 
 

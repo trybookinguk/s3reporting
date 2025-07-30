@@ -5,10 +5,12 @@ PPC Reporting Script for TryBooking UK.
 This script integrates Google Analytics 4 data with S3 booking data to track
 campaign conversions and revenue attribution for PPC campaigns.
 
+Always runs from June 1, 2024 to today's date.
+
 Usage:
-    python ppc_reporting.py --start-date 2024-01-01 --end-date 2024-01-31
-    python ppc_reporting.py --start-date 2024-01-01 --end-date 2024-01-31 --output-file report.csv
-    python ppc_reporting.py --start-date 2024-01-01 --end-date 2024-01-31 --test-mode
+    python ppc_reporting.py
+    python ppc_reporting.py --output-file report.csv
+    python ppc_reporting.py --test-mode
 """
 
 import os
@@ -200,8 +202,8 @@ class PPCReporter:
             dimensions=dimensions,
             metrics=metrics,
             date_ranges=[DateRange(
-                start_date=self.start_date.strftime('%Y-%m-%d'),
-                end_date=self.end_date.strftime('%Y-%m-%d')
+                start_date='2024-06-01',
+                end_date='today'
             )],
             dimension_filter=dimension_filter,
             limit=10000  # GA4 API limit
@@ -645,25 +647,17 @@ def main():
     """Main entry point."""
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Generate PPC conversion report')
-    parser.add_argument('--start-date', required=True, help='Start date (YYYY-MM-DD)')
-    parser.add_argument('--end-date', required=True, help='End date (YYYY-MM-DD)')
     parser.add_argument('--property-id', help='GA4 property ID (can also use GA4_PROPERTY_ID env var)')
     parser.add_argument('--output-file', help='Output CSV file path')
     parser.add_argument('--test-mode', action='store_true', help='Run in test mode')
     
     args = parser.parse_args()
     
-    # Validate dates
-    try:
-        start_date = pd.to_datetime(args.start_date).tz_localize('Europe/London')
-        end_date = pd.to_datetime(args.end_date).tz_localize('Europe/London').replace(hour=23, minute=59, second=59)
-    except Exception as e:
-        logger.error(f"Invalid date format: {e}")
-        sys.exit(1)
+    # Fixed date range: June 1, 2024 to today
+    start_date = pd.to_datetime('2024-06-01').tz_localize('Europe/London')
+    end_date = pd.to_datetime('today').tz_localize('Europe/London').replace(hour=23, minute=59, second=59)
     
-    if start_date > end_date:
-        logger.error("Start date must be before end date")
-        sys.exit(1)
+    logger.info(f"Running PPC report from {start_date.date()} to {end_date.date()}")
     
     # Get property ID from args or environment
     property_id = args.property_id or os.environ.get('GA4_PROPERTY_ID')

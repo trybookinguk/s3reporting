@@ -85,7 +85,9 @@ class PPCReporter:
         try:
             with open(config_path, 'r') as f:
                 config = json.load(f)
-                return [c for c in config['campaigns'] if c.get('active', True)]
+                active_campaigns = [c for c in config['campaigns'] if c.get('active', True)]
+                logger.info(f"Loaded {len(active_campaigns)} active campaigns for exact matching")
+                return active_campaigns
         except Exception as e:
             logger.error(f"Failed to load campaign config: {e}")
             raise
@@ -110,20 +112,29 @@ class PPCReporter:
             logger.error(f"Failed to initialize GA4 client: {e}")
             raise
     
-    def _is_tracked_campaign(self, campaign_name: str) -> bool:
-        """Check if a campaign should be tracked based on configuration."""
-        if not campaign_name or campaign_name == '(not set)':
-            return True  # Include non-campaign traffic for analysis
+    def _is_tracked_campaign(self, campaign_name: str, source: str = None, medium: str = None) -> bool:
+        """Check if a campaign should be tracked based on exact matching.
         
-        # Check against configured campaigns
-        campaign_lower = campaign_name.lower()
+        Args:
+            campaign_name: The campaign name from GA4
+            source: The traffic source (optional, for disambiguation)
+            medium: The traffic medium (optional, for disambiguation)
+        """
+        if not campaign_name or campaign_name == '(not set)':
+            return False  # Exclude non-campaign traffic
+        
+        # Check for exact match against configured campaigns
         for campaign in self.campaigns:
-            if campaign['campaign_name'].lower() in campaign_lower:
+            # First check campaign name
+            if campaign['campaign_name'] == campaign_name:
+                # If source/medium are specified in config, they must also match
+                if 'source' in campaign and source and campaign['source'] != source:
+                    continue
+                if 'medium' in campaign and medium and campaign['medium'] != medium:
+                    continue
                 return True
         
-        # Also check for general PPC indicators
-        ppc_indicators = ['cpc', 'ppc', 'paid', 'shopping', 'display']
-        return any(indicator in campaign_lower for indicator in ppc_indicators)
+        return False
     
     @timer_decorator
     def fetch_ga4_data(self, property_id: str) -> pd.DataFrame:
@@ -230,13 +241,21 @@ class PPCReporter:
             df['date'] = pd.to_datetime(df['date'], format='%Y%m%d')
             df['conversion_date'] = df['date']  # Alias for clarity
             
-            # Filter for tracked campaigns
+            # Filter for tracked campaigns (exact match only)
             initial_count = len(df)
-            df['is_tracked_campaign'] = df['campaign'].apply(self._is_tracked_campaign)
+            df['is_tracked_campaign'] = df.apply(
+                lambda row: self._is_tracked_campaign(
+                    row['campaign'], 
+                    row.get('source', None), 
+                    row.get('medium', None)
+                ), 
+                axis=1
+            )
             df = df[df['is_tracked_campaign']].drop(columns=['is_tracked_campaign'])
             
             if initial_count != len(df):
                 logger.info(f"Filtered to {len(df)} conversions from tracked campaigns (from {initial_count} total)")
+                logger.info(f"Active campaigns: {[(c['campaign_name'], c.get('source', 'any'), c.get('medium', 'any')) for c in self.campaigns]}")
         
         logger.info(f"Retrieved {len(df)} conversion records from GA4")
         return df

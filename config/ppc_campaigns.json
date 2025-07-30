@@ -1,133 +1,100 @@
 {
   "campaigns": [
     {
-      "campaign_name": "Brand - Search - UK",
+      "campaign_name": "Organic Keywords 2025 - Max Conversions (Was max clicks)",
       "source": "google",
       "medium": "cpc",
-      "category": "brand",
-      "platform": "search",
-      "region": "uk",
+      "platform": "google_ads",
       "active": true
     },
     {
-      "campaign_name": "Generic - Search - UK",
+      "campaign_name": "We Are Digital - Organic Keywords - Paid Testing",
       "source": "google",
       "medium": "cpc",
-      "category": "generic",
-      "platform": "search",
-      "region": "uk",
+      "platform": "google_ads",
       "active": true
     },
     {
-      "campaign_name": "Competitor - Search - UK",
+      "campaign_name": "Eventbrite Gorilla Campaign",
       "source": "google",
       "medium": "cpc",
-      "category": "competitor",
-      "platform": "search",
-      "region": "uk",
+      "platform": "google_ads",
       "active": true
     },
     {
-      "campaign_name": "Display - Remarketing - UK",
+      "campaign_name": "Display Ads - 2024",
       "source": "google",
       "medium": "display",
-      "category": "remarketing",
-      "platform": "display",
-      "region": "uk",
+      "platform": "google_ads",
       "active": true
     },
     {
-      "campaign_name": "Facebook - Prospecting - UK",
-      "source": "facebook",
-      "medium": "social",
-      "category": "prospecting",
-      "platform": "social",
-      "region": "uk",
-      "active": true
-    },
-    {
-      "campaign_name": "Facebook - Retargeting - UK",
-      "source": "facebook",
-      "medium": "social",
-      "category": "retargeting",
-      "platform": "social",
-      "region": "uk",
-      "active": true
-    },
-    {
-      "campaign_name": "LinkedIn - B2B - UK",
-      "source": "linkedin",
-      "medium": "social",
-      "category": "b2b",
-      "platform": "social",
-      "region": "uk",
-      "active": true
-    },
-    {
-      "campaign_name": "Bing - Brand - UK",
+      "campaign_name": "Bing - We Are Digital - Organic Keywords - Paid Testing",
       "source": "bing",
       "medium": "cpc",
-      "category": "brand",
-      "platform": "search",
-      "region": "uk",
+      "platform": "bing_ads",
       "active": true
     },
     {
-      "campaign_name": "Bing - Generic - UK",
+      "campaign_name": "Bing - Eventbrite Gorilla Campaign",
       "source": "bing",
       "medium": "cpc",
-      "category": "generic",
-      "platform": "search",
-      "region": "uk",
+      "platform": "bing_ads",
       "active": true
     },
     {
-      "campaign_name": "YouTube - Brand Awareness - UK",
-      "source": "youtube",
-      "medium": "video",
-      "category": "awareness",
-      "platform": "video",
-      "region": "uk",
+      "campaign_name": "Bing - DGTL - Retargeting - TryBooking UK",
+      "source": "bing",
+      "medium": "display",
+      "platform": "bing_ads",
       "active": true
     },
     {
-      "campaign_name": "Shopping - Product Feed - UK",
-      "source": "google",
-      "medium": "shopping",
-      "category": "shopping",
-      "platform": "shopping",
-      "region": "uk",
+      "campaign_name": "Eventbrite Gorilla Campaign",
+      "source": "bing",
+      "medium": "cpc",
+      "platform": "bing_ads",
       "active": true
     },
     {
-      "campaign_name": "Instagram - Stories - UK",
-      "source": "instagram",
-      "medium": "social",
-      "category": "stories",
-      "platform": "social",
-      "region": "uk",
+      "campaign_name": "Eventbrite King Kong Campaign",
+      "source": "bing",
+      "medium": "cpc",
+      "platform": "bing_ads",
+      "active": true
+    },
+    {
+      "campaign_name": "Bing - Eventbrite King Kong Campaign",
+      "source": "bing",
+      "medium": "cpc",
+      "platform": "bing_ads",
+      "active": true
+    },
+    {
+      "campaign_name": "DGTL - Retargeting - TryBooking UK",
+      "source": "bing",
+      "medium": "cpc",
+      "platform": "bing_ads",
+      "active": true
+    },
+    {
+      "campaign_name": "We Are Digital - Organic Keywords - Paid Testing",
+      "source": "bing",
+      "medium": "cpc",
+      "platform": "bing_ads",
       "active": true
     }
   ],
   "utm_parameters": {
-    "utm_source": ["google", "facebook", "linkedin", "bing", "youtube", "instagram"],
-    "utm_medium": ["cpc", "display", "social", "video", "shopping"],
-    "utm_campaign_patterns": [
-      "brand",
-      "generic",
-      "competitor",
-      "remarketing",
-      "retargeting",
-      "prospecting",
-      "awareness",
-      "shopping"
-    ]
+    "utm_source": ["google", "bing"],
+    "utm_medium": ["cpc", "ppc","display"],
+    "notes": "Only track exact campaign names listed above - no pattern matching"
   },
   "reporting_settings": {
-    "default_date_range": "last_30_days",
+    "default_date_range": "last_90_days",
     "timezone": "Europe/London",
     "currency": "GBP",
     "exclude_internal_traffic": true,
-    "minimum_sessions_threshold": 10
+    "exact_match_only": true
   }
 }

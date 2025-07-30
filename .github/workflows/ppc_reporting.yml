@@ -58,7 +58,7 @@ jobs:
           ${{ github.event.inputs.test_mode == 'true' && '--test-mode' || '' }}
     
     - name: Upload report artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ppc-report-2024-06-01-to-${{ steps.date.outputs.date }}
         path: ppc_report_*.csv

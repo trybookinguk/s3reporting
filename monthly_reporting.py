@@ -578,8 +578,8 @@ def create_md_email_content(metrics, dates):
                 <th>Events</th>
                 <th>% of Events</th>
                 <th>Ticket Revenue</th>
-                <th>% of Revenue</th>
-                <th>Our Fees</th>
+                <th>% of Ticket Revenue</th>
+                <th>TB Fees</th>
                 <th>% of Fees</th>
             </tr>"""
         
@@ -807,7 +807,7 @@ def main():
         print("\nPreparing MD email with full financial details...")
         md_html_content = create_md_email_content(metrics, dates)
         send_html_email(
-            to='alex@trybooking.co.uk' if TEST_MODE else 'joan@trybooking.co.uk',
+            to='alex@trybooking.co.uk' if TEST_MODE else 'joan@trybooking.co.uk, henry@trybooking.co.uk',
             cc=None,
             bcc='alex@trybooking.co.uk',
             subject=f"Monthly Report - {dates['month_name']}",

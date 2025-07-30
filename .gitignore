@@ -10,3 +10,16 @@ __pycache__/
 *.pyd
 .Python
 *.pkl
+
+# Google Analytics credentials
+ga-key.json
+google-credentials.json
+*-service-account-key.json
+
+# Environment files
+.env
+.env.local
+
+# Report outputs
+ppc_report_*.csv
+/reports/

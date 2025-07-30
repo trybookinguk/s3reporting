@@ -1,0 +1,84 @@
+name: PPC Reporting
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: 'Start date (YYYY-MM-DD)'
+        required: true
+        type: string
+      end_date:
+        description: 'End date (YYYY-MM-DD)'
+        required: true
+        type: string
+      test_mode:
+        description: 'Run in test mode'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    # Run monthly on the 2nd at 09:00 UTC (10:00 UK time)
+    - cron: '0 9 2 * *'
+
+jobs:
+  ppc-report:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install boto3 pandas requests pytz python-dateutil
+        pip install google-analytics-data google-auth google-auth-oauthlib google-auth-httplib2
+    
+    - name: Setup Google credentials
+      run: |
+        echo "${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}" | base64 -d > /tmp/ga-key.json
+        echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/ga-key.json" >> $GITHUB_ENV
+    
+    - name: Determine date range
+      id: dates
+      run: |
+        if [ "${{ github.event_name }}" = "schedule" ]; then
+          # For scheduled runs, report on previous month
+          START_DATE=$(date -d "first day of last month" +%Y-%m-%d)
+          END_DATE=$(date -d "last day of last month" +%Y-%m-%d)
+        else
+          # For manual runs, use provided inputs
+          START_DATE="${{ github.event.inputs.start_date }}"
+          END_DATE="${{ github.event.inputs.end_date }}"
+        fi
+        echo "start_date=$START_DATE" >> $GITHUB_OUTPUT
+        echo "end_date=$END_DATE" >> $GITHUB_OUTPUT
+        echo "Report period: $START_DATE to $END_DATE"
+    
+    - name: Run PPC Report
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
+        TEST_MODE: ${{ github.event.inputs.test_mode }}
+      run: |
+        python ppc_reporting.py \
+          --start-date ${{ steps.dates.outputs.start_date }} \
+          --end-date ${{ steps.dates.outputs.end_date }} \
+          --output-file ppc_report_${{ steps.dates.outputs.start_date }}_${{ steps.dates.outputs.end_date }}.csv
+    
+    - name: Upload report artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ppc-report-${{ steps.dates.outputs.start_date }}-${{ steps.dates.outputs.end_date }}
+        path: ppc_report_*.csv
+        retention-days: 90
+    
+    - name: Cleanup credentials
+      if: always()
+      run: |
+        rm -f /tmp/ga-key.json

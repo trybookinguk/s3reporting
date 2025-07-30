@@ -1,0 +1,133 @@
+{
+  "campaigns": [
+    {
+      "campaign_name": "Brand - Search - UK",
+      "source": "google",
+      "medium": "cpc",
+      "category": "brand",
+      "platform": "search",
+      "region": "uk",
+      "active": true
+    },
+    {
+      "campaign_name": "Generic - Search - UK",
+      "source": "google",
+      "medium": "cpc",
+      "category": "generic",
+      "platform": "search",
+      "region": "uk",
+      "active": true
+    },
+    {
+      "campaign_name": "Competitor - Search - UK",
+      "source": "google",
+      "medium": "cpc",
+      "category": "competitor",
+      "platform": "search",
+      "region": "uk",
+      "active": true
+    },
+    {
+      "campaign_name": "Display - Remarketing - UK",
+      "source": "google",
+      "medium": "display",
+      "category": "remarketing",
+      "platform": "display",
+      "region": "uk",
+      "active": true
+    },
+    {
+      "campaign_name": "Facebook - Prospecting - UK",
+      "source": "facebook",
+      "medium": "social",
+      "category": "prospecting",
+      "platform": "social",
+      "region": "uk",
+      "active": true
+    },
+    {
+      "campaign_name": "Facebook - Retargeting - UK",
+      "source": "facebook",
+      "medium": "social",
+      "category": "retargeting",
+      "platform": "social",
+      "region": "uk",
+      "active": true
+    },
+    {
+      "campaign_name": "LinkedIn - B2B - UK",
+      "source": "linkedin",
+      "medium": "social",
+      "category": "b2b",
+      "platform": "social",
+      "region": "uk",
+      "active": true
+    },
+    {
+      "campaign_name": "Bing - Brand - UK",
+      "source": "bing",
+      "medium": "cpc",
+      "category": "brand",
+      "platform": "search",
+      "region": "uk",
+      "active": true
+    },
+    {
+      "campaign_name": "Bing - Generic - UK",
+      "source": "bing",
+      "medium": "cpc",
+      "category": "generic",
+      "platform": "search",
+      "region": "uk",
+      "active": true
+    },
+    {
+      "campaign_name": "YouTube - Brand Awareness - UK",
+      "source": "youtube",
+      "medium": "video",
+      "category": "awareness",
+      "platform": "video",
+      "region": "uk",
+      "active": true
+    },
+    {
+      "campaign_name": "Shopping - Product Feed - UK",
+      "source": "google",
+      "medium": "shopping",
+      "category": "shopping",
+      "platform": "shopping",
+      "region": "uk",
+      "active": true
+    },
+    {
+      "campaign_name": "Instagram - Stories - UK",
+      "source": "instagram",
+      "medium": "social",
+      "category": "stories",
+      "platform": "social",
+      "region": "uk",
+      "active": true
+    }
+  ],
+  "utm_parameters": {
+    "utm_source": ["google", "facebook", "linkedin", "bing", "youtube", "instagram"],
+    "utm_medium": ["cpc", "display", "social", "video", "shopping"],
+    "utm_campaign_patterns": [
+      "brand",
+      "generic",
+      "competitor",
+      "remarketing",
+      "retargeting",
+      "prospecting",
+      "awareness",
+      "shopping"
+    ]
+  },
+  "reporting_settings": {
+    "default_date_range": "last_30_days",
+    "timezone": "Europe/London",
+    "currency": "GBP",
+    "exclude_internal_traffic": true,
+    "minimum_sessions_threshold": 10
+  }
+}

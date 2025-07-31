@@ -330,12 +330,13 @@ class PPCReporter:
         if all_bookings:
             self.booking_data = pd.concat(all_bookings, ignore_index=True)
             
-            # Parse TransactionDate
+            # Parse TransactionDate - all dates are in UTC
             if 'TransactionDate' in self.booking_data.columns:
                 self.booking_data['TransactionDate'] = pd.to_datetime(
                     self.booking_data['TransactionDate'], 
-                    errors='coerce'
-                ).dt.tz_localize(None).dt.tz_localize('Europe/London')
+                    errors='coerce',
+                    utc=True
+                )
             
             logger.info(f"Loaded {len(self.booking_data)} total booking records")
         else:

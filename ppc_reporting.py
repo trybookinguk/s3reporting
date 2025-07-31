@@ -96,15 +96,32 @@ class PPCReporter:
             
     def _init_ga4_client(self) -> BetaAnalyticsDataClient:
         """Initialize Google Analytics 4 client."""
-        # Check for service account credentials
-        credentials_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
-        if not credentials_path:
-            raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable not set")
-        
-        if not os.path.exists(credentials_path):
-            raise ValueError(f"Service account file not found: {credentials_path}")
-        
         try:
+            # First try using GA4_SERVICE_ACCOUNT_KEY environment variable directly
+            service_account_key = os.environ.get('GA4_SERVICE_ACCOUNT_KEY')
+            if service_account_key:
+                import json
+                try:
+                    # Parse the JSON key
+                    key_data = json.loads(service_account_key)
+                    credentials = service_account.Credentials.from_service_account_info(
+                        key_data,
+                        scopes=['https://www.googleapis.com/auth/analytics.readonly']
+                    )
+                    return BetaAnalyticsDataClient(credentials=credentials)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse GA4_SERVICE_ACCOUNT_KEY: {e}")
+                    logger.error("Make sure the key is valid JSON format")
+                    raise
+            
+            # Fall back to GOOGLE_APPLICATION_CREDENTIALS file path
+            credentials_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+            if not credentials_path:
+                raise ValueError("Neither GA4_SERVICE_ACCOUNT_KEY nor GOOGLE_APPLICATION_CREDENTIALS environment variable is set")
+            
+            if not os.path.exists(credentials_path):
+                raise ValueError(f"Service account file not found: {credentials_path}")
+            
             credentials = service_account.Credentials.from_service_account_file(
                 credentials_path,
                 scopes=['https://www.googleapis.com/auth/analytics.readonly']
@@ -666,7 +683,13 @@ def main():
         sys.exit(1)
     
     # Validate required environment variables
-    required_vars = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'GOOGLE_APPLICATION_CREDENTIALS']
+    required_vars = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY']
+    
+    # Check for GA4 credentials (either direct key or file path)
+    if not (os.environ.get('GA4_SERVICE_ACCOUNT_KEY') or os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')):
+        logger.error("Either GA4_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS must be set")
+        sys.exit(1)
+    
     try:
         validate_environment_variables(required_vars)
     except ValueError as e:

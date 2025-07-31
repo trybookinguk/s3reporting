@@ -39,7 +39,8 @@ from google.oauth2 import service_account
 # Import shared modules
 from modules.utils.config import UK_TZ, TEST_MODE
 from modules.utils.s3_data_loader import get_s3_client, download_s3_file_cached
-from modules.utils.date_utils import get_file_date_info
+from modules.utils.date_utils import get_file_date_info, get_latest_data_date
+from modules.utils.data_loaders import load_accounts_data, load_booking_data
 from modules.utils.performance import timer_decorator
 from modules.utils.validation import validate_environment_variables
 
@@ -302,16 +303,12 @@ class PPCReporter:
         if not self.s3_client:
             self.s3_client = get_s3_client()
         
-        # Load accounts data
-        logger.info("Loading accounts data from S3")
-        accounts_key = f"{datetime.now().year}/Accounts-TBUK.csv"
-        self.accounts_data = download_s3_file_cached(self.s3_client, accounts_key)
+        # Get the latest available data date
+        latest_date = get_latest_data_date(self.s3_client)
         
-        # Convert date columns
-        self.accounts_data['DateTimeCreated'] = pd.to_datetime(
-            self.accounts_data['DateTimeCreated'], 
-            errors='coerce'
-        ).dt.tz_localize(None).dt.tz_localize('Europe/London')
+        # Load accounts data using shared utility
+        logger.info("Loading accounts data from S3")
+        self.accounts_data = load_accounts_data(self.s3_client, latest_date)
         
         logger.info(f"Loaded {len(self.accounts_data)} accounts")
         

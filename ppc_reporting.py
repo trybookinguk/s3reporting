@@ -382,6 +382,12 @@ class PPCReporter:
             logger.warning("No booking data found for converted events")
             return pd.DataFrame()
         
+        # Check if we have AccountId column
+        if 'AccountId' not in event_bookings.columns:
+            logger.error(f"AccountId column not found. Available columns: {list(event_bookings.columns)[:10]}...")
+            # If AccountId is missing, we can't proceed with the matching
+            return pd.DataFrame()
+        
         # Calculate total revenue per event (all fees)
         event_bookings['TotalRevenue'] = (
             event_bookings['PaymentReceived'].fillna(0) +

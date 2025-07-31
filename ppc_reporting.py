@@ -304,7 +304,7 @@ class PPCReporter:
             self.s3_client = get_s3_client()
         
         # Get the latest available data date
-        latest_date = get_latest_data_date(self.s3_client)
+        latest_date = get_latest_data_date()
         
         # Load accounts data using shared utility
         logger.info("Loading accounts data from S3")

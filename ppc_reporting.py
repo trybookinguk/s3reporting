@@ -314,13 +314,16 @@ class PPCReporter:
         
         # Load booking data for the reporting period
         booking_keys = self._get_booking_keys()
+        logger.info(f"Booking keys to load: {booking_keys}")
         all_bookings = []
         
         for key in booking_keys:
             logger.info(f"Loading booking data from {key}")
             try:
                 df = download_s3_file_cached(self.s3_client, key)
-                all_bookings.append(df)
+                if not df.empty:
+                    logger.info(f"  Loaded {len(df)} rows with columns: {list(df.columns)[:10]}...")
+                    all_bookings.append(df)
             except Exception as e:
                 logger.warning(f"Failed to load {key}: {e}")
         
@@ -343,15 +346,25 @@ class PPCReporter:
         """Generate S3 keys for booking data files."""
         keys = []
         
-        # Current month file
-        current_info = get_file_date_info(self.end_date)
-        keys.append(f"{current_info['folder_year']}/{current_info['folder_month']}/"
-                   f"{current_info['file_prefix']}-BookingData-TBUK.csv")
+        # For June 2024 to now, we need historical data and current month
+        # BookingDataAll contains all data up to the start of the current month
+        # BookingData contains current month data
         
-        # If date range spans multiple months, add historical files
-        if self.start_date.month != self.end_date.month or self.start_date.year != self.end_date.year:
-            # Add BookingDataAll for previous months
-            keys.append(f"{self.end_date.year}/BookingDataAll-TBUK.csv")
+        # Get current month booking data
+        current_info = get_file_date_info(self.end_date)
+        current_key = f"{current_info['folder_year']}/{current_info['folder_month']}/" \
+                     f"{current_info['file_prefix']}-BookingData-TBUK.csv"
+        keys.append(current_key)
+        
+        # Since we're always going back to June 2024, we need BookingDataAll
+        # BookingDataAll is stored with 01 suffix in the month folder
+        # Get last day of previous month
+        last_month_end = self.end_date.replace(day=1) - timedelta(days=1)
+        historical_info = get_file_date_info(last_month_end)
+        historical_key = f"{historical_info['folder_year']}/{historical_info['folder_month']}/" \
+                        f"{historical_info['file_prefix']}01-BookingDataAll-TBUK.csv"
+        logger.info(f"Historical key will be: {historical_key}")
+        keys.append(historical_key)
         
         return keys
     

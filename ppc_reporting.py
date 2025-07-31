@@ -433,8 +433,12 @@ class PPCReporter:
         
         # Add account information
         if not self.accounts_data.empty:
+            # Note: accounts_data has 'Id' column, not 'AccountId'
+            accounts_for_merge = self.accounts_data[['Id', 'Industry', 'SubIndustry', 'DateTimeCreated']].copy()
+            accounts_for_merge.rename(columns={'Id': 'AccountId'}, inplace=True)
+            
             matched = matched.merge(
-                self.accounts_data[['AccountId', 'Industry', 'SubIndustry', 'DateTimeCreated']],
+                accounts_for_merge,
                 on='AccountId',
                 how='left',
                 suffixes=('', '_account')

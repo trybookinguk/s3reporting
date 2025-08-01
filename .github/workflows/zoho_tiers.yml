@@ -80,5 +80,8 @@ jobs:
         if: always()
         with:
           name: industry-revenue-reports
-          path: industry_revenue_reports_*.zip
+          path: |
+            industry_summary_*.csv
+            *_current_*.csv
+            *_current_new_*.csv
           retention-days: 30

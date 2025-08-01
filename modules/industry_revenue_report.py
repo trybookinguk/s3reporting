@@ -1,7 +1,7 @@
 """
 Industry Revenue Report Generator.
 
-Generates revenue reports by industry and sub-industry, organized into a ZIP file structure.
+Generates revenue reports by industry and sub-industry, organized into a ZIP file structure or individual CSV files.
 """
 import pandas as pd
 import numpy as np
@@ -339,3 +339,173 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
     zip_buffer.seek(0)
     
     return zip_buffer
+
+
+def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, report_date):
+    """
+    Generate industry revenue reports as individual CSV files.
+    
+    This creates a simplified output with just the main industry reports (no sub-industries)
+    to avoid creating too many artifacts in GitHub Actions.
+    
+    Args:
+        booking_df: DataFrame with booking data including fees
+        account_df: DataFrame with account information including Industry, SubIndustry, DateTimeCreated
+        tier_updates: DataFrame with tier calculations including Current_Tier
+        report_date: The report date (pd.Timestamp) to determine current period
+        
+    Returns:
+        List of generated CSV filenames
+    """
+    logger.info("Starting industry revenue CSV generation")
+    
+    # Determine current period (last 365 days for tier calculations)
+    today = pd.Timestamp.now('UTC').tz_localize(None)
+    period_end = today
+    period_start = today - pd.Timedelta(days=365)
+    
+    # For booking data, we'll use the report month
+    booking_period_start = pd.Timestamp(report_date.replace(day=1)).tz_convert('UTC').tz_localize(None)
+    next_month = report_date.replace(day=1) + pd.DateOffset(months=1)
+    booking_period_end = pd.Timestamp(next_month - pd.DateOffset(days=1)).tz_convert('UTC').tz_localize(None).replace(hour=23, minute=59, second=59)
+    
+    logger.info(f"Current period (for new accounts): {period_start.strftime('%Y-%m-%d')} to {period_end.strftime('%Y-%m-%d')}")
+    logger.info(f"Booking period (for revenue): {booking_period_start.strftime('%Y-%m-%d')} to {booking_period_end.strftime('%Y-%m-%d')}")
+    
+    # Ensure we have necessary columns
+    if 'Industry' not in account_df.columns:
+        logger.error("Industry column not found in account data")
+        raise ValueError("Industry column not found in account data")
+    
+    # Convert AccountId to string for consistent merging
+    account_df['AccountId'] = account_df['Id'].astype(str) if 'Id' in account_df.columns else account_df.index.astype(str)
+    booking_df['AccountId'] = booking_df['AccountId'].astype(str)
+    
+    # Add gateway group from account data
+    gateway_columns = ['Gateway Group', 'GatewayGroup', 'Gateway_Group']
+    gateway_col = None
+    for col in gateway_columns:
+        if col in account_df.columns:
+            gateway_col = col
+            break
+    
+    if not gateway_col:
+        logger.warning("Gateway Group column not found, will use 'Unknown'")
+        account_df['GatewayGroup'] = 'Unknown'
+        gateway_col = 'GatewayGroup'
+    
+    # Prepare tier lookup
+    tier_lookup = {}
+    if tier_updates is not None and not tier_updates.empty and 'Account_Id' in tier_updates.columns:
+        tier_lookup = tier_updates.set_index('Account_Id')['Current_Tier'].to_dict()
+    else:
+        logger.warning("Tier updates not available, will use 'NIL' for all accounts")
+    
+    # Parse DateTimeCreated for new account identification
+    account_df['DateTimeCreated'] = pd.to_datetime(account_df['DateTimeCreated'], errors='coerce', utc=True).dt.tz_localize(None)
+    account_df['IsNewAccount'] = (
+        (account_df['DateTimeCreated'] >= period_start) & 
+        (account_df['DateTimeCreated'] <= period_end)
+    )
+    
+    # Filter booking data to booking period (report month)
+    booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], errors='coerce', utc=True).dt.tz_localize(None)
+    current_bookings = booking_df[
+        (booking_df['TransactionDate'] >= booking_period_start) & 
+        (booking_df['TransactionDate'] <= booking_period_end)
+    ].copy()
+    
+    logger.info(f"Found {len(current_bookings):,} bookings in report month")
+    logger.info(f"Found {account_df['IsNewAccount'].sum():,} new accounts (created in last 365 days)")
+    logger.info(f"Processing {account_df['Industry'].nunique()} industries")
+    
+    generated_files = []
+    
+    # Create summary report
+    summary_data = []
+    
+    # Group accounts by industry
+    for industry in account_df['Industry'].unique():
+        if pd.isna(industry):
+            industry = 'Unspecified'
+        
+        industry_folder = sanitize_filename(industry)
+        logger.info(f"Processing industry: {industry}")
+        
+        # Get accounts for this industry
+        industry_accounts = account_df[account_df['Industry'] == industry]
+        industry_account_ids = industry_accounts['AccountId'].unique()
+        
+        # Get bookings for these accounts
+        industry_bookings = current_bookings[current_bookings['AccountId'].isin(industry_account_ids)]
+        
+        # Calculate metrics for each account in this industry
+        industry_data = []
+        for account_id in industry_account_ids:
+            account_bookings = industry_bookings[industry_bookings['AccountId'] == account_id]
+            metrics = calculate_account_metrics(account_bookings, account_id)
+            
+            # Add tier and gateway group
+            metrics['Tier'] = tier_lookup.get(account_id, 'NIL')
+            
+            account_info = industry_accounts[industry_accounts['AccountId'] == account_id].iloc[0]
+            metrics['GatewayGroup'] = account_info[gateway_col] if gateway_col in account_info else 'Unknown'
+            metrics['IsNewAccount'] = account_info['IsNewAccount'] if 'IsNewAccount' in account_info else False
+            
+            # Only include accounts with activity or that are new
+            if metrics['TotalFees'] > 0 or metrics['IsNewAccount']:
+                industry_data.append(metrics)
+        
+        # Create DataFrame
+        if industry_data:
+            industry_df = pd.DataFrame(industry_data)
+            
+            # Create current report (all accounts)
+            current_report = industry_df[['AccountId', 'EventsWithTickets', 'PaidTicketsIssued', 
+                                         'Tier', 'TotalFees', 'GatewayGroup']].copy()
+            current_report = current_report.sort_values('TotalFees', ascending=False)
+            
+            # Create new accounts report
+            new_accounts_report = industry_df[industry_df['IsNewAccount']][
+                ['AccountId', 'EventsWithTickets', 'PaidTicketsIssued', 
+                 'Tier', 'TotalFees', 'GatewayGroup']
+            ].copy()
+            new_accounts_report = new_accounts_report.sort_values('TotalFees', ascending=False)
+        else:
+            # Create empty DataFrames with correct structure
+            empty_df = pd.DataFrame(columns=['AccountId', 'EventsWithTickets', 'PaidTicketsIssued', 
+                                            'Tier', 'TotalFees', 'GatewayGroup'])
+            current_report = empty_df.copy()
+            new_accounts_report = empty_df.copy()
+        
+        # Save industry-level reports as CSV files
+        current_filename = f"{industry_folder}_current_{report_date.strftime('%Y%m')}.csv"
+        new_filename = f"{industry_folder}_current_new_{report_date.strftime('%Y%m')}.csv"
+        
+        current_report.to_csv(current_filename, index=False)
+        new_accounts_report.to_csv(new_filename, index=False)
+        
+        generated_files.append(current_filename)
+        generated_files.append(new_filename)
+        
+        logger.info(f"  - Saved {current_filename} with {len(current_report)} accounts")
+        logger.info(f"  - Saved {new_filename} with {len(new_accounts_report)} accounts")
+        
+        # Add to summary
+        total_fees = industry_df['TotalFees'].sum() if industry_data else 0
+        summary_data.append({
+            'Industry': industry,
+            'TotalAccounts': len(current_report),
+            'NewAccounts': len(new_accounts_report),
+            'TotalFees': round(total_fees, 2)
+        })
+    
+    # Create and save summary report
+    summary_df = pd.DataFrame(summary_data).sort_values('TotalFees', ascending=False)
+    summary_filename = f"industry_summary_{report_date.strftime('%Y%m')}.csv"
+    summary_df.to_csv(summary_filename, index=False)
+    generated_files.insert(0, summary_filename)  # Add at beginning
+    
+    logger.info(f"Saved industry summary report: {summary_filename}")
+    
+    return generated_files

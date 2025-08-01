@@ -320,25 +320,23 @@ def main():
             logger.info("Generating industry revenue reports")
             print("Generating industry revenue reports...")
             
-            # Generate the ZIP file
-            zip_buffer = generate_industry_revenue_reports(
+            # Generate the reports and save as CSVs
+            from modules.industry_revenue_report import generate_industry_revenue_csv_files
+            csv_files = generate_industry_revenue_csv_files(
                 booking_data_df, 
                 account_df, 
                 updates,
                 report_date
             )
             
-            # Save the ZIP file
-            zip_filename = f"industry_revenue_reports_{report_date.strftime('%Y%m')}.zip"
-            with open(zip_filename, 'wb') as f:
-                f.write(zip_buffer.getvalue())
+            logger.info(f"Generated {len(csv_files)} industry revenue CSV files")
+            print(f"✓ Generated {len(csv_files)} industry revenue CSV files")
             
-            logger.info(f"Saved industry revenue reports to: {zip_filename}")
-            print(f"✓ Industry revenue reports saved to: {zip_filename}")
-            
-            # Log file size
-            file_size_mb = os.path.getsize(zip_filename) / (1024 * 1024)
-            print(f"  File size: {file_size_mb:.1f} MB")
+            # List the generated files
+            for csv_file in csv_files[:5]:  # Show first 5
+                print(f"  - {csv_file}")
+            if len(csv_files) > 5:
+                print(f"  ... and {len(csv_files) - 5} more")
         else:
             logger.warning("Booking data not available for industry revenue reports")
             print("WARNING: Booking data not available for industry revenue reports")

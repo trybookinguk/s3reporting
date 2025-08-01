@@ -638,6 +638,10 @@ class PPCReporter:
         # Step 4: Apply eligibility rules
         eligible_data = self.apply_eligibility_rules(matched_data)
         
+        # Filter out ineligible records
+        eligible_data = eligible_data[eligible_data['is_eligible'] == True].copy()
+        logger.info(f"Filtered to {len(eligible_data)} eligible conversions")
+        
         # Step 5: Generate final report
         report = self.generate_report(eligible_data)
         

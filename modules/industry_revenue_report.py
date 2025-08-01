@@ -159,7 +159,8 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
         (booking_df['TransactionDate'] <= booking_period_end)
     ].copy()
     
-    logger.info(f"Found {len(current_bookings):,} bookings in current period")
+    logger.info(f"Found {len(current_bookings):,} bookings in report month")
+    logger.info(f"Found {account_df['IsNewAccount'].sum():,} new accounts (created in last 365 days)")
     logger.info(f"Processing {account_df['Industry'].nunique()} industries")
     
     # Create ZIP file in memory

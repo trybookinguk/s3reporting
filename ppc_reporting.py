@@ -404,9 +404,8 @@ class PPCReporter:
             # If AccountId is missing, we can't proceed with the matching
             return pd.DataFrame()
         
-        # Calculate total revenue per event (all fees)
+        # Calculate total revenue per event (fees only, not ticket price)
         event_bookings['TotalRevenue'] = (
-            event_bookings['PaymentReceived'].fillna(0) +
             event_bookings['BookingFee'].fillna(0) +
             event_bookings['CardFee'].fillna(0) +
             event_bookings['ProcessingFee'].fillna(0) +
@@ -451,6 +450,12 @@ class PPCReporter:
         
         # Mark matched status
         matched['matched_status'] = matched['AccountId'].notna()
+        
+        # Set default values for unmatched events (no tickets sold)
+        unmatched_mask = ~matched['matched_status']
+        matched.loc[unmatched_mask, 'TotalRevenue'] = 0
+        matched.loc[unmatched_mask, 'TicketQuantity'] = 0
+        matched.loc[unmatched_mask, 'events_with_tickets'] = 0
         
         logger.info(f"Matched {matched['matched_status'].sum()} out of {len(matched)} conversions")
         
@@ -521,7 +526,6 @@ class PPCReporter:
                     ]
                     
                     capped_revenue = (
-                        recent_bookings['PaymentReceived'].fillna(0).sum() +
                         recent_bookings['BookingFee'].fillna(0).sum() +
                         recent_bookings['CardFee'].fillna(0).sum() +
                         recent_bookings['ProcessingFee'].fillna(0).sum() +
@@ -533,6 +537,7 @@ class PPCReporter:
         # For unmatched conversions
         unmatched_mask = df['matched_status'] == False
         df.loc[unmatched_mask, 'eligibility_reason'] = 'Event not found in booking data'
+        df.loc[unmatched_mask, 'revenue_12m'] = 0  # No revenue if no bookings found
         
         eligible_count = df['is_eligible'].sum()
         logger.info(f"{eligible_count} out of {len(df)} conversions are eligible")

@@ -400,11 +400,11 @@ def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, re
         (account_df['DateTimeCreated'] <= period_end)
     )
     
-    # Filter booking data to booking period (report month)
+    # Filter booking data to current period (last 365 days)
     booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], errors='coerce', utc=True).dt.tz_localize(None)
     current_bookings = booking_df[
-        (booking_df['TransactionDate'] >= booking_period_start) & 
-        (booking_df['TransactionDate'] <= booking_period_end)
+        (booking_df['TransactionDate'] >= period_start) & 
+        (booking_df['TransactionDate'] <= period_end)
     ].copy()
     
     logger.info(f"Found {len(current_bookings):,} bookings in current period (last 365 days)")

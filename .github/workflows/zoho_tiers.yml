@@ -59,6 +59,15 @@ jobs:
           TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
         run: python zoho_tiers.py
       
+      - name: List generated files
+        if: always()
+        run: |
+          echo "=== All CSV files in current directory ==="
+          ls -la *.csv || echo "No CSV files found"
+          echo ""
+          echo "=== Industry revenue report files ==="
+          ls -la industry_summary_*.csv *_current_*.csv *_current_new_*.csv 2>/dev/null || echo "No industry revenue files found"
+      
       - name: Upload Tier Report CSV
         uses: actions/upload-artifact@v4
         if: always()
@@ -84,4 +93,5 @@ jobs:
             industry_summary_*.csv
             *_current_*.csv
             *_current_new_*.csv
+          if-no-files-found: warn
           retention-days: 30

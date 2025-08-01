@@ -102,7 +102,9 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
     # Determine current period (the report month)
     # Convert to UTC and remove timezone info for comparison
     period_start = pd.Timestamp(report_date.replace(day=1)).tz_convert('UTC').tz_localize(None)
-    period_end = pd.Timestamp((report_date.replace(day=1) + pd.DateOffset(months=1)) - pd.DateOffset(days=1)).tz_convert('UTC').tz_localize(None)
+    # Get last day of the month
+    next_month = report_date.replace(day=1) + pd.DateOffset(months=1)
+    period_end = pd.Timestamp(next_month - pd.DateOffset(days=1)).tz_convert('UTC').tz_localize(None).replace(hour=23, minute=59, second=59)
     
     logger.info(f"Current period: {period_start.strftime('%Y-%m-%d')} to {period_end.strftime('%Y-%m-%d')}")
     
@@ -192,19 +194,26 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
                     industry_data.append(metrics)
             
             # Create DataFrame
-            industry_df = pd.DataFrame(industry_data)
-            
-            # Create current report (all accounts)
-            current_report = industry_df[['AccountId', 'EventsWithTickets', 'PaidTicketsIssued', 
-                                         'Tier', 'TotalFees', 'GatewayGroup']].copy()
-            current_report = current_report.sort_values('TotalFees', ascending=False)
-            
-            # Create new accounts report
-            new_accounts_report = industry_df[industry_df['IsNewAccount']][
-                ['AccountId', 'EventsWithTickets', 'PaidTicketsIssued', 
-                 'Tier', 'TotalFees', 'GatewayGroup']
-            ].copy()
-            new_accounts_report = new_accounts_report.sort_values('TotalFees', ascending=False)
+            if industry_data:
+                industry_df = pd.DataFrame(industry_data)
+                
+                # Create current report (all accounts)
+                current_report = industry_df[['AccountId', 'EventsWithTickets', 'PaidTicketsIssued', 
+                                             'Tier', 'TotalFees', 'GatewayGroup']].copy()
+                current_report = current_report.sort_values('TotalFees', ascending=False)
+                
+                # Create new accounts report
+                new_accounts_report = industry_df[industry_df['IsNewAccount']][
+                    ['AccountId', 'EventsWithTickets', 'PaidTicketsIssued', 
+                     'Tier', 'TotalFees', 'GatewayGroup']
+                ].copy()
+                new_accounts_report = new_accounts_report.sort_values('TotalFees', ascending=False)
+            else:
+                # Create empty DataFrames with correct structure
+                empty_df = pd.DataFrame(columns=['AccountId', 'EventsWithTickets', 'PaidTicketsIssued', 
+                                                'Tier', 'TotalFees', 'GatewayGroup'])
+                current_report = empty_df.copy()
+                new_accounts_report = empty_df.copy()
             
             # Save industry-level reports
             current_csv = current_report.to_csv(index=False)
@@ -260,11 +269,17 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
                         sub_current = sub_current.sort_values('TotalFees', ascending=False)
                         
                         # Create new accounts report
-                        sub_new = sub_df[sub_df['IsNewAccount']][
-                            ['AccountId', 'EventsWithTickets', 'PaidTicketsIssued', 
-                             'Tier', 'TotalFees', 'GatewayGroup']
-                        ].copy()
-                        sub_new = sub_new.sort_values('TotalFees', ascending=False)
+                        new_accounts = sub_df[sub_df['IsNewAccount']]
+                        if not new_accounts.empty:
+                            sub_new = new_accounts[
+                                ['AccountId', 'EventsWithTickets', 'PaidTicketsIssued', 
+                                 'Tier', 'TotalFees', 'GatewayGroup']
+                            ].copy()
+                            sub_new = sub_new.sort_values('TotalFees', ascending=False)
+                        else:
+                            # Create empty DataFrame with correct structure
+                            sub_new = pd.DataFrame(columns=['AccountId', 'EventsWithTickets', 'PaidTicketsIssued', 
+                                                           'Tier', 'TotalFees', 'GatewayGroup'])
                         
                         # Save sub-industry reports
                         sub_current_csv = sub_current.to_csv(index=False)

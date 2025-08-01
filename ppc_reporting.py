@@ -377,9 +377,10 @@ class PPCReporter:
     def match_conversions(self) -> pd.DataFrame:
         """
         Match GA4 conversions with booking data and calculate revenue.
+        Aggregates by account to show one line per account.
         
         Returns:
-            DataFrame with matched conversions and revenue data
+            DataFrame with matched conversions and revenue data aggregated by account
         """
         logger.info("Matching GA4 conversions with booking data")
         
@@ -403,7 +404,6 @@ class PPCReporter:
         # Check if we have AccountId column
         if 'AccountId' not in event_bookings.columns:
             logger.error(f"AccountId column not found. Available columns: {list(event_bookings.columns)[:10]}...")
-            # If AccountId is missing, we can't proceed with the matching
             return pd.DataFrame()
         
         # Calculate total revenue per event (fees only, not ticket price)
@@ -414,7 +414,7 @@ class PPCReporter:
             event_bookings['TicketFee'].fillna(0)
         )
         
-        # Aggregate by event
+        # First, aggregate by event to get event-level data
         event_revenue = event_bookings.groupby('EventId').agg({
             'AccountId': 'first',
             'AccountName': 'first',
@@ -426,42 +426,56 @@ class PPCReporter:
         # Convert EventId to string for merging
         event_revenue['EventId'] = event_revenue['EventId'].astype(str)
         
-        # Merge with GA4 data
-        matched = self.ga_data.merge(
+        # Merge with GA4 data to get conversion dates and campaign info
+        event_data = self.ga_data.merge(
             event_revenue,
             left_on='event_id',
             right_on='EventId',
-            how='left'
+            how='inner'  # Only keep matched events
         )
+        
+        # Now aggregate by account
+        # For each account, we want the earliest conversion and total revenue
+        account_agg = event_data.groupby('AccountId').agg({
+            'AccountName': 'first',
+            'event_id': 'first',  # First event ID (will be from earliest conversion)
+            'EventName': 'first',  # Name of first event
+            'campaign': 'first',  # Campaign from first conversion
+            'source': 'first',
+            'medium': 'first',
+            'conversion_date': 'min',  # Earliest conversion date
+            'TotalRevenue': 'sum',  # Sum of all event revenues for this account
+            'TicketQuantity': 'sum',  # Total tickets across all events
+            'sessions': 'sum',  # Total sessions
+            'users': 'sum'  # Total users
+        }).reset_index()
+        
+        # Count events per account
+        events_per_account = event_data.groupby('AccountId')['event_id'].nunique().reset_index()
+        events_per_account.columns = ['AccountId', 'events_with_tickets']
+        account_agg = account_agg.merge(events_per_account, on='AccountId', how='left')
         
         # Add account information
         if not self.accounts_data.empty:
-            # Note: accounts_data has 'Id' column, not 'AccountId'
             accounts_for_merge = self.accounts_data[['Id', 'Industry', 'SubIndustry', 'DateTimeCreated']].copy()
             accounts_for_merge.rename(columns={'Id': 'AccountId'}, inplace=True)
             
-            matched = matched.merge(
+            account_agg = account_agg.merge(
                 accounts_for_merge,
                 on='AccountId',
                 how='left',
                 suffixes=('', '_account')
             )
-            matched.rename(columns={'DateTimeCreated': 'AccountCreatedDate'}, inplace=True)
+            account_agg.rename(columns={'DateTimeCreated': 'AccountCreatedDate'}, inplace=True)
             # Ensure AccountCreatedDate is in UTC
-            matched['AccountCreatedDate'] = pd.to_datetime(matched['AccountCreatedDate'], utc=True)
+            account_agg['AccountCreatedDate'] = pd.to_datetime(account_agg['AccountCreatedDate'], utc=True)
         
-        # Mark matched status
-        matched['matched_status'] = matched['AccountId'].notna()
+        # Mark matched status (all should be matched since we used inner join)
+        account_agg['matched_status'] = True
         
-        # Set default values for unmatched events (no tickets sold)
-        unmatched_mask = ~matched['matched_status']
-        matched.loc[unmatched_mask, 'TotalRevenue'] = 0
-        matched.loc[unmatched_mask, 'TicketQuantity'] = 0
-        matched.loc[unmatched_mask, 'events_with_tickets'] = 0
+        logger.info(f"Aggregated to {len(account_agg)} unique accounts from {len(event_data)} event conversions")
         
-        logger.info(f"Matched {matched['matched_status'].sum()} out of {len(matched)} conversions")
-        
-        return matched
+        return account_agg
     
     @timer_decorator
     def apply_eligibility_rules(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -524,7 +538,8 @@ class PPCReporter:
                     cutoff_date = row['conversion_date'] - timedelta(days=365)
                     recent_bookings = self.booking_data[
                         (self.booking_data['AccountId'] == account_id) &
-                        (self.booking_data['TransactionDate'] >= cutoff_date)
+                        (self.booking_data['TransactionDate'] >= cutoff_date) &
+                        (self.booking_data['TransactionDate'] <= row['conversion_date'])
                     ]
                     
                     capped_revenue = (
@@ -660,18 +675,22 @@ class PPCReporter:
     def _print_summary(self, report: pd.DataFrame):
         """Print summary statistics."""
         print("\n" + "="*60)
-        print("PPC REPORTING SUMMARY")
+        print("PPC REPORTING SUMMARY (BY ACCOUNT)")
         print("="*60)
         print(f"Report Period: {self.start_date.date()} to {self.end_date.date()}")
-        print(f"Total Conversions: {len(report)}")
+        print(f"Total Accounts with Conversions: {len(report)}")
         
         if not report.empty:
             matched_count = report['matched_status'].sum() if 'matched_status' in report.columns else 0
-            print(f"Matched Conversions: {matched_count} ({matched_count/len(report)*100:.1f}%)")
+            print(f"Matched Accounts: {matched_count} ({matched_count/len(report)*100:.1f}%)")
             
             if 'is_eligible' in report.columns:
                 eligible_count = report['is_eligible'].sum()
-                print(f"Eligible Conversions: {eligible_count} ({eligible_count/len(report)*100:.1f}%)")
+                print(f"Eligible Accounts: {eligible_count} ({eligible_count/len(report)*100:.1f}%)")
+            
+            if 'events_with_tickets' in report.columns:
+                total_events = report['events_with_tickets'].sum()
+                print(f"Total Events with Conversions: {total_events}")
             
             if 'total_revenue' in report.columns:
                 total_revenue = report['total_revenue'].sum()
@@ -683,15 +702,16 @@ class PPCReporter:
             if 'campaign' in report.columns:
                 print("\nTop Campaigns:")
                 campaign_stats = report.groupby('campaign').agg({
-                    'event_id': 'count',
-                    'total_revenue': 'sum' if 'total_revenue' in report.columns else 'count'
-                }).sort_values('event_id', ascending=False).head(10)
+                    'account_id': 'count',
+                    'total_revenue': 'sum' if 'total_revenue' in report.columns else 'count',
+                    'events_with_tickets': 'sum' if 'events_with_tickets' in report.columns else 'count'
+                }).sort_values('account_id', ascending=False).head(10)
                 
                 for campaign, stats in campaign_stats.iterrows():
-                    if 'total_revenue' in stats:
-                        print(f"  {campaign}: {stats['event_id']} conversions, £{stats['total_revenue']:,.2f}")
+                    if 'total_revenue' in stats and 'events_with_tickets' in stats:
+                        print(f"  {campaign}: {stats['account_id']} accounts, {stats['events_with_tickets']} events, £{stats['total_revenue']:,.2f}")
                     else:
-                        print(f"  {campaign}: {stats['event_id']} conversions")
+                        print(f"  {campaign}: {stats['account_id']} accounts")
         
         print("="*60 + "\n")
 

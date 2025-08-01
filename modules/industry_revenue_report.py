@@ -99,14 +99,19 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
     """
     logger.info("Starting industry revenue report generation")
     
-    # Determine current period (the report month)
-    # Convert to UTC and remove timezone info for comparison
-    period_start = pd.Timestamp(report_date.replace(day=1)).tz_convert('UTC').tz_localize(None)
-    # Get last day of the month
-    next_month = report_date.replace(day=1) + pd.DateOffset(months=1)
-    period_end = pd.Timestamp(next_month - pd.DateOffset(days=1)).tz_convert('UTC').tz_localize(None).replace(hour=23, minute=59, second=59)
+    # Determine current period (last 365 days for tier calculations)
+    # This aligns with CUTOFF_365 used in tier calculations
+    today = pd.Timestamp.now('UTC').tz_localize(None)
+    period_end = today
+    period_start = today - pd.Timedelta(days=365)
     
-    logger.info(f"Current period: {period_start.strftime('%Y-%m-%d')} to {period_end.strftime('%Y-%m-%d')}")
+    # For booking data, we'll use the report month
+    booking_period_start = pd.Timestamp(report_date.replace(day=1)).tz_convert('UTC').tz_localize(None)
+    next_month = report_date.replace(day=1) + pd.DateOffset(months=1)
+    booking_period_end = pd.Timestamp(next_month - pd.DateOffset(days=1)).tz_convert('UTC').tz_localize(None).replace(hour=23, minute=59, second=59)
+    
+    logger.info(f"Current period (for new accounts): {period_start.strftime('%Y-%m-%d')} to {period_end.strftime('%Y-%m-%d')}")
+    logger.info(f"Booking period (for revenue): {booking_period_start.strftime('%Y-%m-%d')} to {booking_period_end.strftime('%Y-%m-%d')}")
     
     # Ensure we have necessary columns
     if 'Industry' not in account_df.columns:
@@ -146,12 +151,12 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
         (account_df['DateTimeCreated'] <= period_end)
     )
     
-    # Filter booking data to current period
+    # Filter booking data to booking period (report month)
     # Ensure TransactionDate is timezone-naive for comparison
     booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], errors='coerce', utc=True).dt.tz_localize(None)
     current_bookings = booking_df[
-        (booking_df['TransactionDate'] >= period_start) & 
-        (booking_df['TransactionDate'] <= period_end)
+        (booking_df['TransactionDate'] >= booking_period_start) & 
+        (booking_df['TransactionDate'] <= booking_period_end)
     ].copy()
     
     logger.info(f"Found {len(current_bookings):,} bookings in current period")

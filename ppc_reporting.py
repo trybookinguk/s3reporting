@@ -256,6 +256,14 @@ class PPCReporter:
         
         df = pd.DataFrame(data)
         
+        # Debug: Check if event 85605 is in raw GA4 data
+        if '85605' in [str(d['event_id']) for d in data]:
+            logger.info("DEBUG: Event 85605 found in raw GA4 data")
+            event_85605_data = [d for d in data if str(d['event_id']) == '85605']
+            logger.info(f"DEBUG: Event 85605 data: {event_85605_data}")
+        else:
+            logger.info("DEBUG: Event 85605 NOT found in raw GA4 data")
+        
         # Convert date column
         if not df.empty:
             df['date'] = pd.to_datetime(df['date'], format='%Y%m%d', utc=True)
@@ -271,7 +279,18 @@ class PPCReporter:
                 ), 
                 axis=1
             )
+            # Debug: Check event 85605 before filtering
+            if '85605' in df['event_id'].astype(str).values:
+                event_85605_row = df[df['event_id'].astype(str) == '85605'].iloc[0]
+                logger.info(f"DEBUG: Event 85605 before campaign filter - Campaign: {event_85605_row['campaign']}, Source: {event_85605_row['source']}, Medium: {event_85605_row['medium']}, Is tracked: {event_85605_row['is_tracked_campaign']}")
+            
             df = df[df['is_tracked_campaign']].drop(columns=['is_tracked_campaign'])
+            
+            # Debug: Check if event 85605 survived campaign filter
+            if '85605' in df['event_id'].astype(str).values:
+                logger.info("DEBUG: Event 85605 PASSED campaign filter")
+            else:
+                logger.info("DEBUG: Event 85605 FAILED campaign filter")
             
             if initial_count != len(df):
                 logger.info(f"Filtered to {len(df)} conversions from tracked campaigns (from {initial_count} total)")
@@ -339,6 +358,15 @@ class PPCReporter:
                 )
             
             logger.info(f"Loaded {len(self.booking_data)} total booking records")
+            
+            # Debug: Check if event 85605 has any bookings
+            event_85605_bookings = self.booking_data[self.booking_data['EventId'].astype(str) == '85605']
+            if not event_85605_bookings.empty:
+                logger.info(f"DEBUG: Event 85605 has {len(event_85605_bookings)} bookings in the data")
+                first_booking = event_85605_bookings.iloc[0]
+                logger.info(f"DEBUG: Event 85605 - AccountId: {first_booking['AccountId']}, AccountName: {first_booking['AccountName']}")
+            else:
+                logger.info("DEBUG: Event 85605 has NO bookings in the loaded data")
         else:
             logger.warning("No booking data loaded")
             self.booking_data = pd.DataFrame()
@@ -459,6 +487,13 @@ class PPCReporter:
         
         logger.info(f"Matched {matched['matched_status'].sum()} out of {len(matched)} conversions")
         
+        # Debug: Check event 85605 in matched data
+        if '85605' in matched['event_id'].astype(str).values:
+            event_85605_matched = matched[matched['event_id'].astype(str) == '85605'].iloc[0]
+            logger.info(f"DEBUG: Event 85605 in matched data - Matched status: {event_85605_matched['matched_status']}, AccountId: {event_85605_matched.get('AccountId', 'N/A')}, Revenue: {event_85605_matched.get('TotalRevenue', 'N/A')}")
+        else:
+            logger.info("DEBUG: Event 85605 NOT in matched data")
+        
         return matched
     
     @timer_decorator
@@ -541,6 +576,13 @@ class PPCReporter:
         
         eligible_count = df['is_eligible'].sum()
         logger.info(f"{eligible_count} out of {len(df)} conversions are eligible")
+        
+        # Debug: Check event 85605 eligibility
+        if '85605' in df['event_id'].astype(str).values:
+            event_85605_eligible = df[df['event_id'].astype(str) == '85605'].iloc[0]
+            logger.info(f"DEBUG: Event 85605 eligibility - Is eligible: {event_85605_eligible['is_eligible']}, Reason: {event_85605_eligible['eligibility_reason']}, Account age: {event_85605_eligible.get('account_age_days', 'N/A')} days, Events with tickets: {event_85605_eligible.get('events_with_tickets', 'N/A')}")
+        else:
+            logger.info("DEBUG: Event 85605 NOT in eligibility data")
         
         return df
     

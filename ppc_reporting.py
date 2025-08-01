@@ -258,7 +258,7 @@ class PPCReporter:
         
         # Convert date column
         if not df.empty:
-            df['date'] = pd.to_datetime(df['date'], format='%Y%m%d')
+            df['date'] = pd.to_datetime(df['date'], format='%Y%m%d', utc=True)
             df['conversion_date'] = df['date']  # Alias for clarity
             
             # Filter for tracked campaigns (exact match only)
@@ -352,7 +352,9 @@ class PPCReporter:
         # BookingData contains current month data
         
         # Get current month booking data
-        current_info = get_file_date_info(self.end_date)
+        # Use the latest available date (yesterday) instead of end_date to ensure file exists
+        latest_date = get_latest_data_date()
+        current_info = get_file_date_info(latest_date)
         current_key = f"{current_info['folder_year']}/{current_info['folder_month']}/" \
                      f"{current_info['file_prefix']}-BookingData-TBUK.csv"
         keys.append(current_key)

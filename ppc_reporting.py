@@ -431,47 +431,90 @@ class PPCReporter:
             event_revenue,
             left_on='event_id',
             right_on='EventId',
-            how='inner'  # Only keep matched events
+            how='left'  # Keep all GA4 events, including unmatched
         )
         
-        # Now aggregate by account
-        # For each account, we want the earliest conversion and total revenue
-        account_agg = event_data.groupby('AccountId').agg({
-            'AccountName': 'first',
-            'event_id': 'first',  # First event ID (will be from earliest conversion)
-            'EventName': 'first',  # Name of first event
-            'campaign': 'first',  # Campaign from first conversion
-            'source': 'first',
-            'medium': 'first',
-            'conversion_date': 'min',  # Earliest conversion date
-            'TotalRevenue': 'sum',  # Sum of all event revenues for this account
-            'TicketQuantity': 'sum',  # Total tickets across all events
-            'sessions': 'sum',  # Total sessions
-            'users': 'sum'  # Total users
-        }).reset_index()
+        # Separate matched and unmatched events
+        matched_events = event_data[event_data['AccountId'].notna()].copy()
+        unmatched_events = event_data[event_data['AccountId'].isna()].copy()
         
-        # Count events per account
-        events_per_account = event_data.groupby('AccountId')['event_id'].nunique().reset_index()
-        events_per_account.columns = ['AccountId', 'events_with_tickets']
-        account_agg = account_agg.merge(events_per_account, on='AccountId', how='left')
+        # Process matched events - aggregate by account
+        if not matched_events.empty:
+            account_agg = matched_events.groupby('AccountId').agg({
+                'AccountName': 'first',
+                'event_id': 'first',  # First event ID (will be from earliest conversion)
+                'EventName': 'first',  # Name of first event
+                'campaign': 'first',  # Campaign from first conversion
+                'source': 'first',
+                'medium': 'first',
+                'conversion_date': 'min',  # Earliest conversion date
+                'TotalRevenue': 'sum',  # Sum of all event revenues for this account
+                'TicketQuantity': 'sum',  # Total tickets across all events
+                'sessions': 'sum',  # Total sessions
+                'users': 'sum'  # Total users
+            }).reset_index()
+            
+            # Count events per account
+            events_per_account = matched_events.groupby('AccountId')['event_id'].nunique().reset_index()
+            events_per_account.columns = ['AccountId', 'events_with_tickets']
+            account_agg = account_agg.merge(events_per_account, on='AccountId', how='left')
+        else:
+            account_agg = pd.DataFrame()
+        
+        # Process unmatched events - keep as individual events
+        if not unmatched_events.empty:
+            # For unmatched events, create dummy account records
+            unmatched_agg = unmatched_events[['event_id', 'campaign', 'source', 'medium', 
+                                              'conversion_date', 'sessions', 'users']].copy()
+            unmatched_agg['AccountId'] = 'MANUAL_MATCH_REQUIRED'
+            unmatched_agg['AccountName'] = 'Manual Match Required'
+            unmatched_agg['EventName'] = 'Event ' + unmatched_agg['event_id'].astype(str)
+            unmatched_agg['TotalRevenue'] = 0
+            unmatched_agg['TicketQuantity'] = 0
+            unmatched_agg['events_with_tickets'] = 0
+            
+            # Combine matched and unmatched
+            if not account_agg.empty:
+                account_agg = pd.concat([account_agg, unmatched_agg], ignore_index=True)
+            else:
+                account_agg = unmatched_agg
         
         # Add account information
-        if not self.accounts_data.empty:
+        if not self.accounts_data.empty and not account_agg.empty:
             accounts_for_merge = self.accounts_data[['Id', 'Industry', 'SubIndustry', 'DateTimeCreated']].copy()
             accounts_for_merge.rename(columns={'Id': 'AccountId'}, inplace=True)
             
-            account_agg = account_agg.merge(
-                accounts_for_merge,
-                on='AccountId',
-                how='left',
-                suffixes=('', '_account')
-            )
-            account_agg.rename(columns={'DateTimeCreated': 'AccountCreatedDate'}, inplace=True)
-            # Ensure AccountCreatedDate is in UTC
-            account_agg['AccountCreatedDate'] = pd.to_datetime(account_agg['AccountCreatedDate'], utc=True)
+            # Only merge for non-manual match accounts
+            non_manual_mask = account_agg['AccountId'] != 'MANUAL_MATCH_REQUIRED'
+            
+            if non_manual_mask.any():
+                # Merge account info for matched accounts
+                matched_with_info = account_agg[non_manual_mask].merge(
+                    accounts_for_merge,
+                    on='AccountId',
+                    how='left',
+                    suffixes=('', '_account')
+                )
+                matched_with_info.rename(columns={'DateTimeCreated': 'AccountCreatedDate'}, inplace=True)
+                # Ensure AccountCreatedDate is in UTC
+                matched_with_info['AccountCreatedDate'] = pd.to_datetime(matched_with_info['AccountCreatedDate'], utc=True)
+                
+                # Set manual match accounts with null values for account fields
+                manual_match = account_agg[~non_manual_mask].copy()
+                manual_match['Industry'] = None
+                manual_match['SubIndustry'] = None
+                manual_match['AccountCreatedDate'] = None
+                
+                # Combine back together
+                account_agg = pd.concat([matched_with_info, manual_match], ignore_index=True)
+            else:
+                # All are manual match
+                account_agg['Industry'] = None
+                account_agg['SubIndustry'] = None
+                account_agg['AccountCreatedDate'] = None
         
-        # Mark matched status (all should be matched since we used inner join)
-        account_agg['matched_status'] = True
+        # Mark matched status
+        account_agg['matched_status'] = account_agg['AccountId'] != 'MANUAL_MATCH_REQUIRED'
         
         logger.info(f"Aggregated to {len(account_agg)} unique accounts from {len(event_data)} event conversions")
         
@@ -551,10 +594,12 @@ class PPCReporter:
                     
                     df.at[idx, 'revenue_12m'] = capped_revenue
         
-        # For unmatched conversions
+        # For unmatched conversions (manual match required)
         unmatched_mask = df['matched_status'] == False
-        df.loc[unmatched_mask, 'eligibility_reason'] = 'Event not found in booking data'
+        df.loc[unmatched_mask, 'eligibility_reason'] = 'Manual match required - no booking data found'
         df.loc[unmatched_mask, 'revenue_12m'] = 0  # No revenue if no bookings found
+        df.loc[unmatched_mask, 'is_eligible'] = True  # Manual matches are eligible (benefit of doubt)
+        df.loc[unmatched_mask, 'events_with_tickets'] = 0
         
         eligible_count = df['is_eligible'].sum()
         logger.info(f"{eligible_count} out of {len(df)} conversions are eligible")
@@ -655,9 +700,8 @@ class PPCReporter:
         # Step 4: Apply eligibility rules
         eligible_data = self.apply_eligibility_rules(matched_data)
         
-        # Filter out ineligible records
-        eligible_data = eligible_data[eligible_data['is_eligible'] == True].copy()
-        logger.info(f"Filtered to {len(eligible_data)} eligible conversions")
+        # Note: We now include all records, including manual match required
+        logger.info(f"Report includes {len(eligible_data)} total accounts ({eligible_data['is_eligible'].sum()} eligible)")
         
         # Step 5: Generate final report
         report = self.generate_report(eligible_data)
@@ -682,7 +726,10 @@ class PPCReporter:
         
         if not report.empty:
             matched_count = report['matched_status'].sum() if 'matched_status' in report.columns else 0
+            manual_count = len(report) - matched_count
             print(f"Matched Accounts: {matched_count} ({matched_count/len(report)*100:.1f}%)")
+            if manual_count > 0:
+                print(f"Manual Match Required: {manual_count} ({manual_count/len(report)*100:.1f}%)")
             
             if 'is_eligible' in report.columns:
                 eligible_count = report['is_eligible'].sum()

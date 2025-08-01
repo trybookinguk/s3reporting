@@ -156,47 +156,6 @@ class PPCReporter:
         
         return False
     
-    def check_event_85605_in_ga4(self, property_id: str):
-        """Debug method to check if event 85605 exists in GA4 without filters."""
-        logger.info("DEBUG: Checking for event 85605 in GA4 without conversion filters")
-        
-        # Build a simple request just looking for pages with 85605
-        request = RunReportRequest(
-            property=f"properties/{property_id}",
-            dimensions=[
-                Dimension(name="pagePath"),
-                Dimension(name="firstUserCampaignName"),
-                Dimension(name="date")
-            ],
-            metrics=[Metric(name="sessions")],
-            date_ranges=[DateRange(
-                start_date='2024-06-01',
-                end_date='today'
-            )],
-            dimension_filter=FilterExpression(
-                filter=Filter(
-                    field_name="pagePath",
-                    string_filter=Filter.StringFilter(
-                        match_type=Filter.StringFilter.MatchType.CONTAINS,
-                        value="85605",
-                        case_sensitive=False
-                    )
-                )
-            ),
-            limit=100
-        )
-        
-        try:
-            response = self.ga_client.run_report(request)
-            if response.rows:
-                logger.info(f"DEBUG: Found {len(response.rows)} rows containing '85605' in GA4:")
-                for i, row in enumerate(response.rows[:5]):  # Show first 5
-                    logger.info(f"  Row {i+1}: Path={row.dimension_values[0].value}, Campaign={row.dimension_values[1].value}, Date={row.dimension_values[2].value}")
-            else:
-                logger.info("DEBUG: No pages containing '85605' found in GA4 at all")
-        except Exception as e:
-            logger.error(f"DEBUG: Failed to check event 85605: {e}")
-    
     @timer_decorator
     def fetch_ga4_data(self, property_id: str) -> pd.DataFrame:
         """
@@ -209,7 +168,6 @@ class PPCReporter:
             DataFrame with GA4 conversion data
         """
         logger.info(f"Fetching GA4 data for property {property_id}")
-        logger.info("DEBUG: GA4 query filters - Looking for pages containing '/uk/event/' AND '/success'")
         
         # Build dimension and metric requests
         dimensions = [
@@ -278,23 +236,11 @@ class PPCReporter:
         
         # Parse response into DataFrame
         data = []
-        debug_85605_paths = []  # Debug: track all paths containing 85605
-        
-        logger.info(f"DEBUG: GA4 API returned {len(response.rows)} rows")
+        logger.info(f"GA4 API returned {len(response.rows)} rows")
         
         for row in response.rows:
             # Extract event ID from page path
             page_path = row.dimension_values[0].value
-            
-            # Debug: Check if this path contains 85605
-            if '85605' in page_path:
-                debug_85605_paths.append({
-                    'path': page_path,
-                    'campaign': row.dimension_values[2].value or '(not set)',
-                    'source': row.dimension_values[3].value or '(not set)',
-                    'medium': row.dimension_values[4].value or '(not set)',
-                })
-            
             event_id = self._extract_event_id(page_path)
             
             if event_id:
@@ -312,26 +258,6 @@ class PPCReporter:
         
         df = pd.DataFrame(data)
         
-        # Debug: Report all paths containing 85605
-        if debug_85605_paths:
-            logger.info(f"DEBUG: Found {len(debug_85605_paths)} paths containing '85605':")
-            for path_info in debug_85605_paths:
-                logger.info(f"  - Path: {path_info['path']}")
-                logger.info(f"    Campaign: {path_info['campaign']}, Source: {path_info['source']}, Medium: {path_info['medium']}")
-                # Try to extract event ID from this path
-                extracted_id = self._extract_event_id(path_info['path'])
-                logger.info(f"    Extracted ID: {extracted_id if extracted_id else 'FAILED TO EXTRACT'}")
-        else:
-            logger.info("DEBUG: No paths containing '85605' found in GA4 response")
-        
-        # Debug: Check if event 85605 is in raw GA4 data
-        if '85605' in [str(d['event_id']) for d in data]:
-            logger.info("DEBUG: Event 85605 found in raw GA4 data")
-            event_85605_data = [d for d in data if str(d['event_id']) == '85605']
-            logger.info(f"DEBUG: Event 85605 data: {event_85605_data}")
-        else:
-            logger.info("DEBUG: Event 85605 NOT found in raw GA4 data")
-        
         # Convert date column
         if not df.empty:
             df['date'] = pd.to_datetime(df['date'], format='%Y%m%d', utc=True)
@@ -347,18 +273,7 @@ class PPCReporter:
                 ), 
                 axis=1
             )
-            # Debug: Check event 85605 before filtering
-            if '85605' in df['event_id'].astype(str).values:
-                event_85605_row = df[df['event_id'].astype(str) == '85605'].iloc[0]
-                logger.info(f"DEBUG: Event 85605 before campaign filter - Campaign: {event_85605_row['campaign']}, Source: {event_85605_row['source']}, Medium: {event_85605_row['medium']}, Is tracked: {event_85605_row['is_tracked_campaign']}")
-            
             df = df[df['is_tracked_campaign']].drop(columns=['is_tracked_campaign'])
-            
-            # Debug: Check if event 85605 survived campaign filter
-            if '85605' in df['event_id'].astype(str).values:
-                logger.info("DEBUG: Event 85605 PASSED campaign filter")
-            else:
-                logger.info("DEBUG: Event 85605 FAILED campaign filter")
             
             if initial_count != len(df):
                 logger.info(f"Filtered to {len(df)} conversions from tracked campaigns (from {initial_count} total)")
@@ -426,15 +341,6 @@ class PPCReporter:
                 )
             
             logger.info(f"Loaded {len(self.booking_data)} total booking records")
-            
-            # Debug: Check if event 85605 has any bookings
-            event_85605_bookings = self.booking_data[self.booking_data['EventId'].astype(str) == '85605']
-            if not event_85605_bookings.empty:
-                logger.info(f"DEBUG: Event 85605 has {len(event_85605_bookings)} bookings in the data")
-                first_booking = event_85605_bookings.iloc[0]
-                logger.info(f"DEBUG: Event 85605 - AccountId: {first_booking['AccountId']}, AccountName: {first_booking['AccountName']}")
-            else:
-                logger.info("DEBUG: Event 85605 has NO bookings in the loaded data")
         else:
             logger.warning("No booking data loaded")
             self.booking_data = pd.DataFrame()
@@ -555,13 +461,6 @@ class PPCReporter:
         
         logger.info(f"Matched {matched['matched_status'].sum()} out of {len(matched)} conversions")
         
-        # Debug: Check event 85605 in matched data
-        if '85605' in matched['event_id'].astype(str).values:
-            event_85605_matched = matched[matched['event_id'].astype(str) == '85605'].iloc[0]
-            logger.info(f"DEBUG: Event 85605 in matched data - Matched status: {event_85605_matched['matched_status']}, AccountId: {event_85605_matched.get('AccountId', 'N/A')}, Revenue: {event_85605_matched.get('TotalRevenue', 'N/A')}")
-        else:
-            logger.info("DEBUG: Event 85605 NOT in matched data")
-        
         return matched
     
     @timer_decorator
@@ -645,13 +544,6 @@ class PPCReporter:
         eligible_count = df['is_eligible'].sum()
         logger.info(f"{eligible_count} out of {len(df)} conversions are eligible")
         
-        # Debug: Check event 85605 eligibility
-        if '85605' in df['event_id'].astype(str).values:
-            event_85605_eligible = df[df['event_id'].astype(str) == '85605'].iloc[0]
-            logger.info(f"DEBUG: Event 85605 eligibility - Is eligible: {event_85605_eligible['is_eligible']}, Reason: {event_85605_eligible['eligibility_reason']}, Account age: {event_85605_eligible.get('account_age_days', 'N/A')} days, Events with tickets: {event_85605_eligible.get('events_with_tickets', 'N/A')}")
-        else:
-            logger.info("DEBUG: Event 85605 NOT in eligibility data")
-        
         return df
     
     @timer_decorator
@@ -731,9 +623,6 @@ class PPCReporter:
         
         if self.test_mode:
             logger.info("Running in TEST MODE")
-        
-        # Debug: Check for event 85605 without filters
-        self.check_event_85605_in_ga4(property_id)
         
         # Step 1: Fetch GA4 data
         self.ga_data = self.fetch_ga4_data(property_id)

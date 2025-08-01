@@ -6,6 +6,7 @@ Calculates account tiers, event frequencies, and activity ratings.
 import time
 import pandas as pd
 import logging
+import os
 from datetime import datetime
 
 # Configure logging
@@ -26,6 +27,7 @@ from modules.utils.zoho_api import get_access_token, upsert_to_zoho
 from modules.utils.report_generator import generate_upcoming_annual_events_report, email_upcoming_events_report, email_tier_updates_report
 from modules.utils.validation import validate_environment_variables
 from modules.utils.performance import timer_decorator
+from modules.industry_revenue_report import generate_industry_revenue_reports
 
 
 def main():
@@ -310,6 +312,41 @@ def main():
     except Exception as e:
         logger.warning(f"Failed to email tier updates report: {str(e)}")
         print(f"WARNING: Failed to email tier updates report: {str(e)}")
+    
+    # Generate industry revenue reports
+    print("\n=== Industry Revenue Reports ===")
+    try:
+        if booking_data_df is not None and not booking_data_df.empty:
+            logger.info("Generating industry revenue reports")
+            print("Generating industry revenue reports...")
+            
+            # Generate the ZIP file
+            zip_buffer = generate_industry_revenue_reports(
+                booking_data_df, 
+                account_df, 
+                updates,
+                report_date
+            )
+            
+            # Save the ZIP file
+            zip_filename = f"industry_revenue_reports_{report_date.strftime('%Y%m')}.zip"
+            with open(zip_filename, 'wb') as f:
+                f.write(zip_buffer.getvalue())
+            
+            logger.info(f"Saved industry revenue reports to: {zip_filename}")
+            print(f"✓ Industry revenue reports saved to: {zip_filename}")
+            
+            # Log file size
+            file_size_mb = os.path.getsize(zip_filename) / (1024 * 1024)
+            print(f"  File size: {file_size_mb:.1f} MB")
+        else:
+            logger.warning("Booking data not available for industry revenue reports")
+            print("WARNING: Booking data not available for industry revenue reports")
+    except Exception as e:
+        logger.error(f"Failed to generate industry revenue reports: {str(e)}")
+        print(f"ERROR: Failed to generate industry revenue reports: {str(e)}")
+        import traceback
+        traceback.print_exc()
     
     # Clean up hidden fields before Zoho upload, but keep retention priority score
     # First, create zoho_updates as a copy to avoid modifying the original

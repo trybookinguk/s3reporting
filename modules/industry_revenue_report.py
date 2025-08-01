@@ -100,8 +100,9 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
     logger.info("Starting industry revenue report generation")
     
     # Determine current period (the report month)
-    period_start = report_date.replace(day=1)
-    period_end = (period_start + pd.DateOffset(months=1)) - pd.DateOffset(days=1)
+    # Convert to UTC and remove timezone info for comparison
+    period_start = pd.Timestamp(report_date.replace(day=1)).tz_convert('UTC').tz_localize(None)
+    period_end = pd.Timestamp((report_date.replace(day=1) + pd.DateOffset(months=1)) - pd.DateOffset(days=1)).tz_convert('UTC').tz_localize(None)
     
     logger.info(f"Current period: {period_start.strftime('%Y-%m-%d')} to {period_end.strftime('%Y-%m-%d')}")
     
@@ -136,14 +137,16 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
         logger.warning("Tier updates not available, will use 'NIL' for all accounts")
     
     # Parse DateTimeCreated for new account identification
-    account_df['DateTimeCreated'] = pd.to_datetime(account_df['DateTimeCreated'], errors='coerce')
+    # Ensure DateTimeCreated is timezone-naive for comparison
+    account_df['DateTimeCreated'] = pd.to_datetime(account_df['DateTimeCreated'], errors='coerce', utc=True).dt.tz_localize(None)
     account_df['IsNewAccount'] = (
         (account_df['DateTimeCreated'] >= period_start) & 
         (account_df['DateTimeCreated'] <= period_end)
     )
     
     # Filter booking data to current period
-    booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], errors='coerce')
+    # Ensure TransactionDate is timezone-naive for comparison
+    booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], errors='coerce', utc=True).dt.tz_localize(None)
     current_bookings = booking_df[
         (booking_df['TransactionDate'] >= period_start) & 
         (booking_df['TransactionDate'] <= period_end)

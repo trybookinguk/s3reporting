@@ -105,13 +105,9 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
     period_end = today
     period_start = today - pd.Timedelta(days=365)
     
-    # For booking data, we'll use the report month
-    booking_period_start = pd.Timestamp(report_date.replace(day=1)).tz_convert('UTC').tz_localize(None)
-    next_month = report_date.replace(day=1) + pd.DateOffset(months=1)
-    booking_period_end = pd.Timestamp(next_month - pd.DateOffset(days=1)).tz_convert('UTC').tz_localize(None).replace(hour=23, minute=59, second=59)
+    # Use the same period for both accounts and bookings (last 365 days)
     
-    logger.info(f"Current period (for new accounts): {period_start.strftime('%Y-%m-%d')} to {period_end.strftime('%Y-%m-%d')}")
-    logger.info(f"Booking period (for revenue): {booking_period_start.strftime('%Y-%m-%d')} to {booking_period_end.strftime('%Y-%m-%d')}")
+    logger.info(f"Current period (365 days): {period_start.strftime('%Y-%m-%d')} to {period_end.strftime('%Y-%m-%d')}")
     
     # Ensure we have necessary columns
     if 'Industry' not in account_df.columns:
@@ -151,15 +147,15 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
         (account_df['DateTimeCreated'] <= period_end)
     )
     
-    # Filter booking data to booking period (report month)
+    # Filter booking data to current period (last 365 days)
     # Ensure TransactionDate is timezone-naive for comparison
     booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], errors='coerce', utc=True).dt.tz_localize(None)
     current_bookings = booking_df[
-        (booking_df['TransactionDate'] >= booking_period_start) & 
-        (booking_df['TransactionDate'] <= booking_period_end)
+        (booking_df['TransactionDate'] >= period_start) & 
+        (booking_df['TransactionDate'] <= period_end)
     ].copy()
     
-    logger.info(f"Found {len(current_bookings):,} bookings in report month")
+    logger.info(f"Found {len(current_bookings):,} bookings in current period (last 365 days)")
     logger.info(f"Found {account_df['IsNewAccount'].sum():,} new accounts (created in last 365 days)")
     logger.info(f"Processing {account_df['Industry'].nunique()} industries")
     
@@ -261,8 +257,8 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
                         metrics['GatewayGroup'] = account_info[gateway_col] if gateway_col in account_info else 'Unknown'
                         metrics['IsNewAccount'] = account_info['IsNewAccount'] if 'IsNewAccount' in account_info else False
                         
-                        # Only include accounts with activity or that are new
-                        if metrics['TotalFees'] > 0 or metrics['IsNewAccount']:
+                        # Include all accounts with any activity in the current period
+                        if metrics['TotalFees'] > 0:
                             sub_data.append(metrics)
                     
                     if sub_data:  # Only create sub-industry folder if there's data
@@ -364,13 +360,9 @@ def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, re
     period_end = today
     period_start = today - pd.Timedelta(days=365)
     
-    # For booking data, we'll use the report month
-    booking_period_start = pd.Timestamp(report_date.replace(day=1)).tz_convert('UTC').tz_localize(None)
-    next_month = report_date.replace(day=1) + pd.DateOffset(months=1)
-    booking_period_end = pd.Timestamp(next_month - pd.DateOffset(days=1)).tz_convert('UTC').tz_localize(None).replace(hour=23, minute=59, second=59)
+    # Use the same period for both accounts and bookings (last 365 days)
     
-    logger.info(f"Current period (for new accounts): {period_start.strftime('%Y-%m-%d')} to {period_end.strftime('%Y-%m-%d')}")
-    logger.info(f"Booking period (for revenue): {booking_period_start.strftime('%Y-%m-%d')} to {booking_period_end.strftime('%Y-%m-%d')}")
+    logger.info(f"Current period (365 days): {period_start.strftime('%Y-%m-%d')} to {period_end.strftime('%Y-%m-%d')}")
     
     # Ensure we have necessary columns
     if 'Industry' not in account_df.columns:
@@ -415,7 +407,7 @@ def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, re
         (booking_df['TransactionDate'] <= booking_period_end)
     ].copy()
     
-    logger.info(f"Found {len(current_bookings):,} bookings in report month")
+    logger.info(f"Found {len(current_bookings):,} bookings in current period (last 365 days)")
     logger.info(f"Found {account_df['IsNewAccount'].sum():,} new accounts (created in last 365 days)")
     logger.info(f"Processing {account_df['Industry'].nunique()} industries")
     
@@ -452,8 +444,8 @@ def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, re
             metrics['GatewayGroup'] = account_info[gateway_col] if gateway_col in account_info else 'Unknown'
             metrics['IsNewAccount'] = account_info['IsNewAccount'] if 'IsNewAccount' in account_info else False
             
-            # Only include accounts with activity or that are new
-            if metrics['TotalFees'] > 0 or metrics['IsNewAccount']:
+            # Include all accounts with any activity in the current period
+            if metrics['TotalFees'] > 0:
                 industry_data.append(metrics)
         
         # Create DataFrame

@@ -168,6 +168,7 @@ class PPCReporter:
             DataFrame with GA4 conversion data
         """
         logger.info(f"Fetching GA4 data for property {property_id}")
+        logger.info("DEBUG: GA4 query filters - Looking for pages containing '/uk/event/' AND '/success'")
         
         # Build dimension and metric requests
         dimensions = [
@@ -236,9 +237,21 @@ class PPCReporter:
         
         # Parse response into DataFrame
         data = []
+        debug_85605_paths = []  # Debug: track all paths containing 85605
+        
         for row in response.rows:
             # Extract event ID from page path
             page_path = row.dimension_values[0].value
+            
+            # Debug: Check if this path contains 85605
+            if '85605' in page_path:
+                debug_85605_paths.append({
+                    'path': page_path,
+                    'campaign': row.dimension_values[2].value or '(not set)',
+                    'source': row.dimension_values[3].value or '(not set)',
+                    'medium': row.dimension_values[4].value or '(not set)',
+                })
+            
             event_id = self._extract_event_id(page_path)
             
             if event_id:
@@ -255,6 +268,18 @@ class PPCReporter:
                 })
         
         df = pd.DataFrame(data)
+        
+        # Debug: Report all paths containing 85605
+        if debug_85605_paths:
+            logger.info(f"DEBUG: Found {len(debug_85605_paths)} paths containing '85605':")
+            for path_info in debug_85605_paths:
+                logger.info(f"  - Path: {path_info['path']}")
+                logger.info(f"    Campaign: {path_info['campaign']}, Source: {path_info['source']}, Medium: {path_info['medium']}")
+                # Try to extract event ID from this path
+                extracted_id = self._extract_event_id(path_info['path'])
+                logger.info(f"    Extracted ID: {extracted_id if extracted_id else 'FAILED TO EXTRACT'}")
+        else:
+            logger.info("DEBUG: No paths containing '85605' found in GA4 response")
         
         # Debug: Check if event 85605 is in raw GA4 data
         if '85605' in [str(d['event_id']) for d in data]:

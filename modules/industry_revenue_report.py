@@ -64,7 +64,7 @@ def calculate_account_metrics(booking_df, account_id):
         }
     
     # Number of unique events with tickets
-    events_with_tickets = booking_df['EventId'].nunique()
+    events_with_tickets = booking_df['EventId'].nunique() if 'EventId' in booking_df.columns else 0
     
     # Total paid tickets (sum of TicketQuantity)
     paid_tickets = booking_df['TicketQuantity'].sum() if 'TicketQuantity' in booking_df.columns else 0

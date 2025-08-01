@@ -150,7 +150,7 @@ def main():
             
             # Only keep necessary columns for revenue analysis to save memory
             revenue_cols = ['AccountId', 'TransactionDate', 'PaymentReceived', 'BookingFee', 
-                          'CardFee', 'ProcessingFee', 'TicketFee']
+                          'CardFee', 'ProcessingFee', 'TicketFee', 'EventId', 'TicketQuantity']
             # Keep only columns that exist in the dataframe
             available_cols = [col for col in revenue_cols if col in booking_data_df.columns]
             booking_data_df = booking_data_df[available_cols].copy()

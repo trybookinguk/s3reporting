@@ -156,6 +156,47 @@ class PPCReporter:
         
         return False
     
+    def check_event_85605_in_ga4(self, property_id: str):
+        """Debug method to check if event 85605 exists in GA4 without filters."""
+        logger.info("DEBUG: Checking for event 85605 in GA4 without conversion filters")
+        
+        # Build a simple request just looking for pages with 85605
+        request = RunReportRequest(
+            property=f"properties/{property_id}",
+            dimensions=[
+                Dimension(name="pagePath"),
+                Dimension(name="firstUserCampaignName"),
+                Dimension(name="date")
+            ],
+            metrics=[Metric(name="sessions")],
+            date_ranges=[DateRange(
+                start_date='2024-06-01',
+                end_date='today'
+            )],
+            dimension_filter=FilterExpression(
+                filter=Filter(
+                    field_name="pagePath",
+                    string_filter=Filter.StringFilter(
+                        match_type=Filter.StringFilter.MatchType.CONTAINS,
+                        value="85605",
+                        case_sensitive=False
+                    )
+                )
+            ),
+            limit=100
+        )
+        
+        try:
+            response = self.ga_client.run_report(request)
+            if response.rows:
+                logger.info(f"DEBUG: Found {len(response.rows)} rows containing '85605' in GA4:")
+                for i, row in enumerate(response.rows[:5]):  # Show first 5
+                    logger.info(f"  Row {i+1}: Path={row.dimension_values[0].value}, Campaign={row.dimension_values[1].value}, Date={row.dimension_values[2].value}")
+            else:
+                logger.info("DEBUG: No pages containing '85605' found in GA4 at all")
+        except Exception as e:
+            logger.error(f"DEBUG: Failed to check event 85605: {e}")
+    
     @timer_decorator
     def fetch_ga4_data(self, property_id: str) -> pd.DataFrame:
         """
@@ -225,7 +266,7 @@ class PPCReporter:
                 end_date='today'
             )],
             dimension_filter=dimension_filter,
-            limit=10000  # GA4 API limit
+            limit=50000  # Increased limit to get more data
         )
         
         # Execute the request
@@ -238,6 +279,8 @@ class PPCReporter:
         # Parse response into DataFrame
         data = []
         debug_85605_paths = []  # Debug: track all paths containing 85605
+        
+        logger.info(f"DEBUG: GA4 API returned {len(response.rows)} rows")
         
         for row in response.rows:
             # Extract event ID from page path
@@ -688,6 +731,9 @@ class PPCReporter:
         
         if self.test_mode:
             logger.info("Running in TEST MODE")
+        
+        # Debug: Check for event 85605 without filters
+        self.check_event_85605_in_ga4(property_id)
         
         # Step 1: Fetch GA4 data
         self.ga_data = self.fetch_ga4_data(property_id)

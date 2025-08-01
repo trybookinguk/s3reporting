@@ -444,6 +444,8 @@ class PPCReporter:
                 suffixes=('', '_account')
             )
             matched.rename(columns={'DateTimeCreated': 'AccountCreatedDate'}, inplace=True)
+            # Ensure AccountCreatedDate is in UTC
+            matched['AccountCreatedDate'] = pd.to_datetime(matched['AccountCreatedDate'], utc=True)
         
         # Mark matched status
         matched['matched_status'] = matched['AccountId'].notna()

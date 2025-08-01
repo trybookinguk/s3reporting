@@ -31,16 +31,14 @@ def load_accounts_data(s3_client, target_date=None):
     df = download_s3_file_cached(s3_client, s3_key)
     
     # Standardize datetime columns
-    df['DateTimeCreated'] = pd.to_datetime(df['DateTimeCreated'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
+    df['DateTimeCreated'] = pd.to_datetime(df['DateTimeCreated'], errors='coerce', utc=True)
     
     # Handle FirstEventCreation carefully (can be null)
     df['FirstEventCreation'] = pd.to_datetime(df['FirstEventCreation'], errors='coerce', utc=True)
-    df.loc[df['FirstEventCreation'].notna(), 'FirstEventCreation'] = df.loc[df['FirstEventCreation'].notna(), 'FirstEventCreation'].dt.tz_convert('Europe/London')
     
     # Handle LastEventCreation if present
     if 'LastEventCreation' in df.columns:
         df['LastEventCreation'] = pd.to_datetime(df['LastEventCreation'], errors='coerce', utc=True)
-        df.loc[df['LastEventCreation'].notna(), 'LastEventCreation'] = df.loc[df['LastEventCreation'].notna(), 'LastEventCreation'].dt.tz_convert('Europe/London')
     
     # Optimize data types for memory efficiency
     df = optimize_dtypes(df)
@@ -79,7 +77,7 @@ def load_booking_data(s3_client, target_date=None, data_type='BookingData'):
     df = download_s3_file_cached(s3_client, s3_key)
     
     # Convert TransactionDate
-    df['TransactionDate'] = pd.to_datetime(df['TransactionDate'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
+    df['TransactionDate'] = pd.to_datetime(df['TransactionDate'], errors='coerce', utc=True)
     
     # Convert all fee columns to numeric
     fee_columns = ['PaymentReceived', 'TicketQuantity', 'BookingFee', 'CardFee', 
@@ -97,7 +95,6 @@ def load_booking_data(s3_client, target_date=None, data_type='BookingData'):
     # Add EventDate as datetime if present
     if 'EventDate' in df.columns:
         df['EventDate'] = pd.to_datetime(df['EventDate'], errors='coerce', utc=True)
-        df.loc[df['EventDate'].notna(), 'EventDate'] = df.loc[df['EventDate'].notna(), 'EventDate'].dt.tz_convert('Europe/London')
     
     # Optimize data types for memory efficiency
     df = optimize_dtypes(df)

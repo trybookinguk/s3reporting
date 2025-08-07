@@ -322,10 +322,26 @@ class PPCReporter:
         booking_all = load_booking_data(self.s3_client, latest_date, data_type='BookingDataAll')
         logger.info(f"  Loaded {len(booking_all)} historical records")
         
+        # Debug: Check event 90060 in BookingDataAll
+        if 'EventId' in booking_all.columns:
+            event_90060_all = booking_all[booking_all['EventId'] == 90060]
+            if not event_90060_all.empty:
+                logger.info(f"DEBUG: Event 90060 in BookingDataAll: {len(event_90060_all)} rows, TotalFees: £{event_90060_all['TotalFees'].sum():.2f}")
+                if 'BookingTransactionId' in event_90060_all.columns:
+                    logger.info(f"  Transaction IDs: {sorted(event_90060_all['BookingTransactionId'].unique())[:5]}...")
+        
         # Load current month BookingData
         logger.info("Loading current month BookingData...")
         booking_current = load_booking_data(self.s3_client, latest_date, data_type='BookingData')
         logger.info(f"  Loaded {len(booking_current)} current month records")
+        
+        # Debug: Check event 90060 in current BookingData
+        if 'EventId' in booking_current.columns:
+            event_90060_current = booking_current[booking_current['EventId'] == 90060]
+            if not event_90060_current.empty:
+                logger.info(f"DEBUG: Event 90060 in BookingData: {len(event_90060_current)} rows, TotalFees: £{event_90060_current['TotalFees'].sum():.2f}")
+                if 'BookingTransactionId' in event_90060_current.columns:
+                    logger.info(f"  Transaction IDs: {sorted(event_90060_current['BookingTransactionId'].unique())[:5]}...")
         
         all_bookings = [booking_all, booking_current]
         
@@ -337,10 +353,29 @@ class PPCReporter:
             # Remove duplicates if any
             if 'BookingTransactionId' in self.booking_data.columns:
                 initial_count = len(self.booking_data)
+                
+                # Debug: Check event 90060 before deduplication
+                event_90060_before = self.booking_data[self.booking_data['EventId'] == 90060]
+                if not event_90060_before.empty:
+                    logger.info(f"DEBUG: Event 90060 BEFORE dedup: {len(event_90060_before)} rows")
+                    
+                    # Check for duplicate transaction IDs
+                    transaction_counts = event_90060_before['BookingTransactionId'].value_counts()
+                    duplicates = transaction_counts[transaction_counts > 1]
+                    if not duplicates.empty:
+                        logger.info(f"  Found duplicate transactions for event 90060: {dict(duplicates)}")
+                
                 self.booking_data = self.booking_data.drop_duplicates(subset=['BookingTransactionId'])
                 duplicates_removed = initial_count - len(self.booking_data)
                 if duplicates_removed > 0:
                     logger.info(f"  Removed {duplicates_removed} duplicate transactions")
+                    
+                # Debug: Check event 90060 after deduplication
+                event_90060_after = self.booking_data[self.booking_data['EventId'] == 90060]
+                if not event_90060_after.empty:
+                    logger.info(f"DEBUG: Event 90060 AFTER dedup: {len(event_90060_after)} rows")
+                    if len(event_90060_before) != len(event_90060_after):
+                        logger.info(f"  WARNING: Lost {len(event_90060_before) - len(event_90060_after)} rows for event 90060 during dedup!")
             
             logger.info(f"Loaded {len(self.booking_data)} total booking records")
             
@@ -399,6 +434,10 @@ class PPCReporter:
             logger.info("DEBUG: Event 90060 NOT in GA4 conversions")
         
         # Filter booking data for these events
+        # Debug: Check data types
+        logger.info(f"DEBUG: EventId dtype in booking_data: {self.booking_data['EventId'].dtype}")
+        logger.info(f"DEBUG: event_ids sample (first 5): {list(event_ids)[:5]}")
+        
         event_bookings = self.booking_data[
             self.booking_data['EventId'].astype(str).isin(event_ids)
         ].copy()

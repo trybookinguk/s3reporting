@@ -19,11 +19,11 @@ from modules.utils.vero_api import VeroClient
 from modules.utils.config import TEST_MODE
 
 # Environment variables
-VERO_AUTH_TOKEN = os.environ.get('VERO_AUTH_TOKEN')
+VERO_API_KEY = os.environ.get('VERO_API_KEY')
 TEST_DATE = os.environ.get('TEST_DATE')
 
-if not VERO_AUTH_TOKEN and not TEST_MODE:
-    print("Error: VERO_AUTH_TOKEN environment variable not set")
+if not VERO_API_KEY and not TEST_MODE:
+    print("Error: VERO_API_KEY environment variable not set")
     sys.exit(1)
 
 
@@ -383,7 +383,7 @@ def main():
     # Send to Vero
     if not TEST_MODE:
         print("\n  Sending events to Vero...")
-        vero_client = VeroClient(VERO_AUTH_TOKEN)
+        vero_client = VeroClient(VERO_API_KEY)
         
         # Process in batches
         batch_size = 100

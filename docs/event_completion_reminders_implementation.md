@@ -63,7 +63,7 @@ Run via GitHub Actions with:
 ## Environment Variables Required
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
-- `VERO_AUTH_TOKEN`
+- `VERO_API_KEY`
 - `TEST_MODE` (optional)
 - `TEST_DATE` (optional)
 

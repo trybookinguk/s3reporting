@@ -167,9 +167,8 @@ def main():
                 # Fallback to PaymentReceived if fee columns not available
                 booking_data_df['Revenue'] = booking_data_df['PaymentReceived']
             
-            # Ensure TransactionDate is datetime
-            if 'TransactionDate' in booking_data_df.columns:
-                booking_data_df['TransactionDate'] = pd.to_datetime(booking_data_df['TransactionDate'])
+            # TransactionDate is already in UTC datetime format from load_booking_data
+            # No need to convert again
             
             # Merge industry information from Accounts data
             print("Merging industry information...")

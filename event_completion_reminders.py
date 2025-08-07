@@ -1,0 +1,423 @@
+#!/usr/bin/env python3
+"""
+Event Completion Reminders Script
+Sends behavioural email reminders via GetVero to event organisers after their events complete.
+"""
+import os
+import sys
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from modules.utils.s3_data_loader import get_s3_client
+from modules.utils.data_loaders import (
+    load_accounts_data, load_booking_data, 
+    load_account_balance_data, load_account_movement_daily_data,
+    load_users_data
+)
+from modules.utils.date_utils import get_target_date, UK_TZ
+from modules.utils.vero_api import VeroClient
+from modules.utils.config import TEST_MODE
+
+# Environment variables
+VERO_AUTH_TOKEN = os.environ.get('VERO_AUTH_TOKEN')
+if not VERO_AUTH_TOKEN and not TEST_MODE:
+    print("Error: VERO_AUTH_TOKEN environment variable not set")
+    sys.exit(1)
+
+
+def main():
+    """Main function to process event completion reminders."""
+    print("=" * 50)
+    print("Event Completion Reminders Script")
+    print("=" * 50)
+    
+    # Get target date (defaults to yesterday)
+    target_date = get_target_date()
+    print(f"Processing date: {target_date.strftime('%Y-%m-%d')}")
+    print(f"Test mode: {'ON' if TEST_MODE else 'OFF'}")
+    print("")
+    
+    # Initialize S3 client
+    s3_client = get_s3_client()
+    
+    # Phase 1: Data Loading
+    print("Phase 1: Loading data...")
+    print("-" * 30)
+    
+    try:
+        # Load comprehensive booking data
+        booking_all_df = load_booking_data(s3_client, target_date, 'BookingDataAll')
+        booking_current_df = load_booking_data(s3_client, target_date, 'BookingData')
+        
+        # Combine for complete picture
+        booking_df = pd.concat([booking_all_df, booking_current_df], ignore_index=True)
+        booking_df = booking_df.drop_duplicates(subset=['BookingId'])
+        print(f"  Total bookings loaded: {len(booking_df):,}")
+        
+        # Load other reports
+        accounts_df = load_accounts_data(s3_client, target_date)
+        print(f"  Accounts loaded: {len(accounts_df):,}")
+        
+        balance_df = load_account_balance_data(s3_client, target_date)
+        print(f"  Account balances loaded: {len(balance_df):,}")
+        
+        movement_df = load_account_movement_daily_data(s3_client, target_date)
+        print(f"  Account movements loaded: {len(movement_df):,}")
+        
+        users_df = load_users_data(s3_client, target_date)
+        print(f"  Users loaded: {len(users_df):,}")
+        
+        # Clean users data
+        users_df = users_df[users_df['UserId'].notna()]
+        print(f"  Valid users after cleaning: {len(users_df):,}")
+        
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        sys.exit(1)
+    
+    # Phase 2: Event Processing
+    print("\nPhase 2: Processing events...")
+    print("-" * 30)
+    
+    # Identify ALL last sessions
+    all_last_sessions = booking_df.groupby('EventId')['EventDate'].agg(['min', 'max'])
+    all_last_sessions.columns = ['first_session', 'last_session']
+    
+    # Find events where yesterday was the last session
+    yesterday = target_date - timedelta(days=1)
+    yesterday_date = yesterday.date()
+    completed_event_ids = all_last_sessions[
+        all_last_sessions['last_session'].dt.date == yesterday_date
+    ].index
+    
+    print(f"  Events with completed sessions yesterday: {len(completed_event_ids):,}")
+    
+    if len(completed_event_ids) == 0:
+        print("  No events completed yesterday. Exiting.")
+        sys.exit(0)
+    
+    # Get detailed metrics for completed events
+    completed_events = booking_df[booking_df['EventId'].isin(completed_event_ids)]
+    event_metrics = completed_events.groupby('EventId').agg({
+        'PaymentReceived': 'sum',
+        'BookingFee': 'sum',
+        'CardFee': 'sum',
+        'ProcessingFee': 'sum',
+        'TicketFee': 'sum',
+        'TicketQuantity': 'sum',
+        'AccountId': 'first',
+        'EventName': 'first'
+    }).reset_index()
+    
+    # Calculate total fees
+    fee_columns = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+    event_metrics['TotalFees'] = event_metrics[fee_columns].sum(axis=1)
+    event_metrics['net_amount'] = event_metrics['PaymentReceived'] - event_metrics['TotalFees']
+    
+    # Determine event type
+    event_metrics['event_type'] = np.where(
+        event_metrics['PaymentReceived'] == 0, 'free', 'paid'
+    )
+    
+    # Find first events per account (chronologically by EventDate)
+    # First, get the earliest event date per account
+    first_event_dates = booking_df.groupby('AccountId')['EventDate'].min().reset_index()
+    first_event_dates.columns = ['AccountId', 'FirstEventDate']
+    
+    # Then find the EventId for each account's first event
+    # (handling ties by taking the min EventId if multiple events on same date)
+    first_events = booking_df.merge(first_event_dates, on=['AccountId'])
+    first_events = first_events[first_events['EventDate'] == first_events['FirstEventDate']]
+    first_events_per_account = first_events.groupby('AccountId')['EventId'].min().to_dict()
+    
+    # Mark first events in our metrics
+    event_metrics['is_first_event'] = event_metrics.apply(
+        lambda x: x['EventId'] == first_events_per_account.get(x['AccountId'], None), 
+        axis=1
+    )
+    
+    # Merge with account data
+    event_metrics = event_metrics.merge(
+        accounts_df[['AccountId', 'GatewayGroup', 'IsVerified']], 
+        on='AccountId', 
+        how='left'
+    )
+    
+    print(f"  Free events: {(event_metrics['event_type'] == 'free').sum()}")
+    print(f"  Paid events: {(event_metrics['event_type'] == 'paid').sum()}")
+    print(f"  First events: {event_metrics['is_first_event'].sum()}")
+    
+    # Phase 3: Event Classification
+    print("\nPhase 3: Classifying events...")
+    print("-" * 30)
+    
+    # Initialize
+    event_metrics['vero_event'] = None
+    
+    # Free events
+    free_events_mask = (
+        (event_metrics['event_type'] == 'free') & 
+        (event_metrics['is_first_event'] == True) & 
+        (event_metrics['TicketQuantity'] > 10)
+    )
+    event_metrics.loc[free_events_mask, 'vero_event'] = 'event_completed_free'
+    print(f"  Free events (>10 tickets): {free_events_mask.sum()}")
+    
+    # Stripe events
+    stripe_mask = (
+        (event_metrics['event_type'] == 'paid') & 
+        (event_metrics['GatewayGroup'] == 'Stripe Connect') &
+        (event_metrics['is_first_event'] == True) & 
+        (event_metrics['TicketQuantity'] > 10)
+    )
+    event_metrics.loc[stripe_mask, 'vero_event'] = 'event_completed_paid_stripe'
+    print(f"  Stripe events (>10 tickets): {stripe_mask.sum()}")
+    
+    # Not verified
+    not_verified_mask = (
+        (event_metrics['event_type'] == 'paid') & 
+        (event_metrics['GatewayGroup'] == 'Default (All)') &
+        (event_metrics['IsVerified'] != 1)
+    )
+    event_metrics.loc[not_verified_mask, 'vero_event'] = 'event_completed_paid_notverified'
+    print(f"  Not verified events: {not_verified_mask.sum()}")
+    
+    # Verified accounts
+    verified_mask = (
+        (event_metrics['event_type'] == 'paid') & 
+        (event_metrics['GatewayGroup'] == 'Default (All)') &
+        (event_metrics['IsVerified'] == 1) &
+        (event_metrics['vero_event'].isna())
+    )
+    
+    if verified_mask.any():
+        print(f"  Processing {verified_mask.sum()} verified events...")
+        verified_events = event_metrics[verified_mask].copy()
+        
+        # Add account balance
+        verified_events = verified_events.merge(
+            balance_df[['AccountId', 'AccountBalance']], 
+            on='AccountId', 
+            how='left'
+        )
+        verified_events['AccountBalance'] = pd.to_numeric(
+            verified_events['AccountBalance'], errors='coerce'
+        ).fillna(0)
+        
+        # Calculate future revenue
+        future_bookings = booking_df[booking_df['EventDate'].dt.date > yesterday_date]
+        future_revenue = future_bookings.groupby('AccountId').agg({
+            'PaymentReceived': 'sum',
+            'BookingFee': 'sum',
+            'CardFee': 'sum', 
+            'ProcessingFee': 'sum',
+            'TicketFee': 'sum'
+        })
+        future_revenue['net_future'] = (
+            future_revenue['PaymentReceived'] - 
+            future_revenue[['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']].sum(axis=1)
+        )
+        
+        verified_events = verified_events.merge(
+            future_revenue[['net_future']], 
+            left_on='AccountId',
+            right_index=True,
+            how='left'
+        )
+        verified_events['net_future'] = verified_events['net_future'].fillna(0)
+        
+        # Check exposure
+        verified_events['is_exposed'] = (
+            verified_events['AccountBalance'] < (verified_events['net_future'] / 2)
+        )
+        
+        print(f"    Exposed accounts (skipped): {verified_events['is_exposed'].sum()}")
+        
+        # Process only non-exposed accounts
+        non_exposed_mask = ~verified_events['is_exposed']
+        if non_exposed_mask.any():
+            non_exposed = verified_events[non_exposed_mask].copy()
+            
+            # Get pending amount from AccountMovementDaily
+            movement_clean = movement_df.copy()
+            if 'Pending' in movement_clean.columns:
+                movement_clean['Pending'] = pd.to_numeric(
+                    movement_clean['Pending'], errors='coerce'
+                ).fillna(0)
+                
+                # Get the latest pending amount per account (snapshot value)
+                latest_pending = movement_clean.groupby('AccountId')['Pending'].last()
+                
+                non_exposed = non_exposed.merge(
+                    latest_pending,
+                    on='AccountId',
+                    how='left'
+                )
+                non_exposed['Pending'] = non_exposed['Pending'].fillna(0)
+                
+                # Check if pending amount >= net amount from event
+                non_exposed['vero_event'] = np.where(
+                    non_exposed['Pending'] >= non_exposed['net_amount'],
+                    'event_completed_paid_requested',
+                    'event_completed_paid_notrequested'
+                )
+                
+                event_metrics.loc[non_exposed.index, 'vero_event'] = non_exposed['vero_event']
+                
+                print(f"    Funds requested: {(non_exposed['vero_event'] == 'event_completed_paid_requested').sum()}")
+                print(f"    Funds not requested: {(non_exposed['vero_event'] == 'event_completed_paid_notrequested').sum()}")
+    
+    # Phase 4: Account-Level Deduplication
+    print("\nPhase 4: Deduplicating events...")
+    print("-" * 30)
+    
+    # Filter to events that need sending
+    events_to_send = event_metrics[event_metrics['vero_event'].notna()].copy()
+    
+    # DEDUPLICATION: For accounts with multiple events completing on same day
+    # Keep only the highest priority event per account
+    priority_map = {
+        'event_completed_paid_notrequested': 1,  # Highest priority - needs action
+        'event_completed_paid_notverified': 2,   
+        'event_completed_paid_requested': 3,     
+        'event_completed_paid_stripe': 4,        
+        'event_completed_free': 5                # Lowest priority
+    }
+    
+    events_to_send['priority'] = events_to_send['vero_event'].map(priority_map)
+    
+    # Sort by AccountId and priority, keep first (highest priority) per account
+    events_to_send = events_to_send.sort_values(['AccountId', 'priority'])
+    events_to_send = events_to_send.groupby('AccountId').first().reset_index()
+    
+    # Log deduplication
+    original_count = len(event_metrics[event_metrics['vero_event'].notna()])
+    deduped_count = len(events_to_send)
+    if original_count > deduped_count:
+        print(f"  Deduplication: Reduced {original_count} events to {deduped_count}")
+    else:
+        print(f"  No deduplication needed: {deduped_count} events")
+    
+    # Phase 5: User Resolution and Event Emission
+    print("\nPhase 5: Resolving users and sending events...")
+    print("-" * 30)
+    
+    # Prepare users
+    users_df['UserId'] = users_df['UserId'].astype(str)
+    users_df['vero_id'] = 'uk_' + users_df['UserId']
+    users_df['AccountId'] = pd.to_numeric(users_df['AccountId'], errors='coerce')
+    
+    # Remove invalid users
+    valid_users = users_df[
+        users_df['AccountId'].notna() & 
+        users_df['RoleName'].notna() &
+        (users_df['IsDeleted'] != '1')
+    ]
+    
+    # Build events list
+    vero_events = []
+    
+    for _, event in events_to_send.iterrows():
+        # Determine required roles
+        if event['vero_event'] in ['event_completed_free', 'event_completed_paid_stripe']:
+            required_roles = ['AccountOwner']
+        else:
+            required_roles = ['AccountOwner', 'Finance']
+        
+        # Find relevant users
+        relevant_users = valid_users[
+            (valid_users['AccountId'] == event['AccountId']) & 
+            (valid_users['RoleName'].isin(required_roles))
+        ]
+        
+        # Create event for each user
+        for _, user in relevant_users.iterrows():
+            vero_events.append({
+                'event_id': int(event['EventId']),
+                'event_name': str(event['EventName']),
+                'account_id': int(event['AccountId']),
+                'event_type': event['event_type'],
+                'vero_event': event['vero_event'],
+                'vero_user_id': user['vero_id'],
+                'user_email': user['Username'],
+                'payment_received': float(event['PaymentReceived']),
+                'net_amount': float(event['net_amount']),
+                'ticket_quantity': int(event['TicketQuantity'])
+            })
+    
+    print(f"  Total Vero events to send: {len(vero_events)}")
+    
+    if len(vero_events) == 0:
+        print("  No events to send. Exiting.")
+        sys.exit(0)
+    
+    # Convert to DataFrame
+    vero_df = pd.DataFrame(vero_events)
+    
+    # Initialize results tracking
+    vero_df['status'] = 'Pending'
+    vero_df['error_message'] = None
+    vero_df['timestamp'] = datetime.now(UK_TZ).replace(tzinfo=None)  # Store as naive datetime for CSV
+    
+    # Send to Vero
+    if not TEST_MODE:
+        print("\n  Sending events to Vero...")
+        vero_client = VeroClient(VERO_AUTH_TOKEN)
+        
+        # Process in batches
+        batch_size = 100
+        for i in range(0, len(vero_df), batch_size):
+            batch = vero_df.iloc[i:i+batch_size]
+            print(f"    Processing batch {i//batch_size + 1} ({len(batch)} events)...")
+            
+            try:
+                results = vero_client.batch_track_events(batch)
+                
+                # Update status based on results
+                for j, result in enumerate(results):
+                    idx = batch.index[j]
+                    if result.get('status') == 'success':
+                        vero_df.loc[idx, 'status'] = 'Success'
+                    else:
+                        vero_df.loc[idx, 'status'] = 'Failed'
+                        vero_df.loc[idx, 'error_message'] = result.get('error', 'Unknown error')
+                        
+            except Exception as e:
+                # Mark entire batch as failed
+                vero_df.loc[batch.index, 'status'] = 'Failed'
+                vero_df.loc[batch.index, 'error_message'] = str(e)
+                print(f"    Error processing batch: {e}")
+    else:
+        print("\n  TEST MODE - Not sending to Vero")
+        vero_df['status'] = 'Test Mode - Not Sent'
+    
+    # Save output
+    output_filename = f"event_completion_reminders_{target_date.strftime('%Y%m%d')}.csv"
+    vero_df.to_csv(output_filename, index=False)
+    print(f"\n  Output saved to: {output_filename}")
+    
+    # Print summary
+    print(f"\nEvent Completion Reminders Summary - {target_date.strftime('%Y-%m-%d')}")
+    print("=" * 50)
+    print(f"Events with completed sessions: {len(event_metrics)}")
+    print(f"Events requiring notification: {original_count}")
+    print(f"After deduplication: {deduped_count}")
+    print(f"Vero events created: {len(vero_df)}")
+    
+    if not TEST_MODE:
+        print(f"\nProcessing results:")
+        print(f"  Success: {(vero_df['status'] == 'Success').sum()}")
+        print(f"  Failed: {(vero_df['status'] == 'Failed').sum()}")
+        
+        # Show any errors
+        failed_events = vero_df[vero_df['status'] == 'Failed']
+        if len(failed_events) > 0:
+            print("\nFailed events:")
+            for _, failed in failed_events.iterrows():
+                print(f"  - User {failed['vero_user_id']}: {failed['error_message']}")
+    
+    print("\nScript completed successfully!")
+
+
+if __name__ == "__main__":
+    main()

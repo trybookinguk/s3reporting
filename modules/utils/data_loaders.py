@@ -155,3 +155,128 @@ def filter_successful_transactions(df):
     if 'Status' in df.columns:
         return df[df['Status'] == 'Successful'].copy()
     return df
+
+
+@timer_decorator
+def load_account_balance_data(s3_client, target_date=None):
+    """
+    Load and preprocess account balance data from S3.
+    
+    Args:
+        s3_client: Boto3 S3 client
+        target_date: Date to load data for (defaults to yesterday)
+    
+    Returns:
+        DataFrame with preprocessed account balance data
+    """
+    if target_date is None:
+        # Default to yesterday (latest available data)
+        target_date = get_latest_data_date()
+    
+    date_info = get_file_date_info(target_date)
+    filename = f"{date_info['file_prefix']}-accountbalance-TBUK.csv"
+    s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
+    
+    print(f"Loading account balance data from S3: {s3_key}")
+    df = download_s3_file_cached(s3_client, s3_key)
+    
+    # Ensure AccountId is numeric
+    if 'AccountId' in df.columns:
+        df['AccountId'] = pd.to_numeric(df['AccountId'], errors='coerce')
+    
+    # AccountBalance should be numeric
+    if 'AccountBalance' in df.columns:
+        df['AccountBalance'] = pd.to_numeric(df['AccountBalance'], errors='coerce').fillna(0)
+    
+    # Optimize data types for memory efficiency
+    df = optimize_dtypes(df)
+    
+    return df
+
+
+@timer_decorator
+def load_account_movement_daily_data(s3_client, target_date=None):
+    """
+    Load and preprocess account movement daily data from S3.
+    
+    Args:
+        s3_client: Boto3 S3 client
+        target_date: Date to load data for (defaults to yesterday)
+    
+    Returns:
+        DataFrame with preprocessed account movement data
+    """
+    if target_date is None:
+        # Default to yesterday (latest available data)
+        target_date = get_latest_data_date()
+    
+    date_info = get_file_date_info(target_date)
+    filename = f"{date_info['file_prefix']}-AccountMovementDaily-TBUK.csv"
+    s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
+    
+    print(f"Loading account movement daily data from S3: {s3_key}")
+    df = download_s3_file_cached(s3_client, s3_key)
+    
+    # Check if first row is diagnostic (contains summary/header info)
+    # If so, skip it
+    if len(df) > 0:
+        first_row = df.iloc[0]
+        # Check if first row has many NaN values or looks like a header
+        if first_row.isna().sum() > len(df.columns) * 0.5:
+            print("  Skipping diagnostic first row in AccountMovementDaily")
+            df = df.iloc[1:].copy()
+            df.reset_index(drop=True, inplace=True)
+    
+    # Ensure AccountId is numeric
+    if 'AccountId' in df.columns:
+        df['AccountId'] = pd.to_numeric(df['AccountId'], errors='coerce')
+    
+    # Convert Pending to numeric
+    if 'Pending' in df.columns:
+        df['Pending'] = pd.to_numeric(df['Pending'], errors='coerce').fillna(0)
+    
+    # Optimize data types for memory efficiency
+    df = optimize_dtypes(df)
+    
+    return df
+
+
+@timer_decorator
+def load_users_data(s3_client, target_date=None):
+    """
+    Load and preprocess users data from S3.
+    
+    Args:
+        s3_client: Boto3 S3 client
+        target_date: Date to load data for (defaults to yesterday)
+    
+    Returns:
+        DataFrame with preprocessed users data
+    """
+    if target_date is None:
+        # Default to yesterday (latest available data)
+        target_date = get_latest_data_date()
+    
+    date_info = get_file_date_info(target_date)
+    filename = f"{date_info['file_prefix']}-Users-TBUK.csv"
+    s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
+    
+    print(f"Loading users data from S3: {s3_key}")
+    df = download_s3_file_cached(s3_client, s3_key)
+    
+    # Ensure AccountId is numeric
+    if 'AccountId' in df.columns:
+        df['AccountId'] = pd.to_numeric(df['AccountId'], errors='coerce')
+    
+    # UserId should be kept as string (will be prefixed with uk_)
+    if 'UserId' in df.columns:
+        df['UserId'] = df['UserId'].astype(str)
+    
+    # Clean up IsDeleted column
+    if 'IsDeleted' in df.columns:
+        df['IsDeleted'] = df['IsDeleted'].astype(str)
+    
+    # Optimize data types for memory efficiency
+    df = optimize_dtypes(df)
+    
+    return df

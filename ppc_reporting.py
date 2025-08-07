@@ -322,6 +322,13 @@ class PPCReporter:
         booking_all = load_booking_data(self.s3_client, latest_date, data_type='BookingDataAll')
         logger.info(f"  Loaded {len(booking_all)} historical records")
         
+        # Check date range of BookingDataAll
+        if 'TransactionDate' in booking_all.columns and not booking_all.empty:
+            min_date_all = booking_all['TransactionDate'].min()
+            max_date_all = booking_all['TransactionDate'].max()
+            logger.info(f"  BookingDataAll date range: {min_date_all} to {max_date_all}")
+            logger.info(f"  Latest transaction in BookingDataAll: {max_date_all}")
+        
         # Debug: Check event 90060 in BookingDataAll
         if 'EventId' in booking_all.columns:
             event_90060_all = booking_all[booking_all['EventId'] == 90060]
@@ -334,6 +341,23 @@ class PPCReporter:
         logger.info("Loading current month BookingData...")
         booking_current = load_booking_data(self.s3_client, latest_date, data_type='BookingData')
         logger.info(f"  Loaded {len(booking_current)} current month records")
+        
+        # Check date range of BookingData
+        if 'TransactionDate' in booking_current.columns and not booking_current.empty:
+            min_date_current = booking_current['TransactionDate'].min()
+            max_date_current = booking_current['TransactionDate'].max()
+            logger.info(f"  BookingData date range: {min_date_current} to {max_date_current}")
+            logger.info(f"  Latest transaction in BookingData: {max_date_current}")
+            
+            # Check for date gap between BookingDataAll and BookingData
+            if 'TransactionDate' in booking_all.columns and not booking_all.empty:
+                gap_days = (min_date_current - max_date_all).days
+                if gap_days > 1:
+                    logger.warning(f"  WARNING: {gap_days} day gap between BookingDataAll and BookingData!")
+                elif gap_days < 0:
+                    logger.warning(f"  WARNING: {abs(gap_days)} days of overlap between BookingDataAll and BookingData!")
+                else:
+                    logger.info(f"  Date coverage is continuous (gap: {gap_days} days)")
         
         # Debug: Check event 90060 in current BookingData
         if 'EventId' in booking_current.columns:
@@ -388,13 +412,53 @@ class PPCReporter:
                 # Debug: Check event 90060
                 event_90060 = self.booking_data[self.booking_data['EventId'] == 90060]
                 if not event_90060.empty:
-                    logger.info(f"DEBUG: Event 90060 found in booking data:")
+                    logger.info(f"DEBUG: Event 90060 found in combined booking data:")
                     logger.info(f"  - Total rows: {len(event_90060)}")
                     logger.info(f"  - Date range: {event_90060['TransactionDate'].min()} to {event_90060['TransactionDate'].max()}")
                     logger.info(f"  - Total fees: £{event_90060['TotalFees'].sum():.2f}")
                     logger.info(f"  - Unique account IDs: {event_90060['AccountId'].nunique()}")
+                    
+                    # Show transaction dates
+                    transaction_dates = event_90060['TransactionDate'].dt.date.value_counts().sort_index()
+                    logger.info(f"  - Transactions by date:")
+                    for date, count in transaction_dates.items():
+                        logger.info(f"    {date}: {count} transactions")
+                    
+                    # Check for specific booking IDs we expect
+                    expected_bookings = {
+                        'cadf28e3-cbb4-4941-bbf1-c69c0b0f1531': {'date': '2025-07-25', 'processing': 3.0, 'ticket': 0.3},
+                        'e9ec37aa-f595-448c-b999-3aa6a615babb': {'date': '2025-07-26', 'processing': 3.0, 'ticket': 0.3},
+                        'a71d5717-d780-4756-92eb-fa2f47d0c27f': {'date': '2025-07-27', 'processing': 9.0, 'ticket': 0.9},
+                        '02993b66-b4c1-42e4-9e3e-6c40866d7113': {'date': '2025-07-28', 'processing': 3.0, 'ticket': 0.3},
+                        '696a8460-1d5c-4148-a88e-2a138398ecc7': {'date': '2025-07-30', 'processing': 3.0, 'ticket': 0.3},
+                        'c206f484-41ec-4d1a-82da-c7cbf2136a8a': {'date': '2025-07-30', 'processing': 3.0, 'ticket': 0.3},
+                        'ceaa73c5-c762-42e4-a284-745cdc6125f1': {'date': '2025-07-30', 'processing': 3.0, 'ticket': 0.3},
+                        'b454c0cf-0ee1-4b4c-a8f4-ae274ef9df1e': {'date': '2025-07-30', 'processing': 1.5, 'ticket': 0.15},
+                        '9cd08ad0-07cb-4dfe-8572-e4b2ce6d33ca': {'date': '2025-08-01', 'processing': 1.5, 'ticket': 0.15},
+                        '8af53582-54f4-4d39-9e5e-4cf74f4b3127': {'date': '2025-08-06', 'processing': 3.0, 'ticket': 0.3}
+                    }
+                    
+                    logger.info(f"  - Checking for {len(expected_bookings)} expected bookings:")
+                    found_count = 0
+                    total_expected_fees = sum(b['processing'] + b['ticket'] for b in expected_bookings.values())
+                    
+                    if 'BookingUrlId' in event_90060.columns:
+                        for booking_id, expected in expected_bookings.items():
+                            booking_row = event_90060[event_90060['BookingUrlId'] == booking_id]
+                            if not booking_row.empty:
+                                found_count += 1
+                                actual_fees = booking_row['TotalFees'].iloc[0]
+                                expected_fees = expected['processing'] + expected['ticket']
+                                logger.info(f"    ✓ {booking_id[:8]}... on {expected['date']}: Found (fees: £{actual_fees:.2f})")
+                            else:
+                                logger.warning(f"    ✗ {booking_id[:8]}... on {expected['date']}: MISSING (expected fees: £{expected['processing'] + expected['ticket']:.2f})")
+                    else:
+                        logger.warning("    BookingUrlId column not found - cannot check specific bookings")
+                    
+                    logger.info(f"  - Found {found_count}/{len(expected_bookings)} expected bookings")
+                    logger.info(f"  - Expected total fees: £{total_expected_fees:.2f}")
                 else:
-                    logger.info("DEBUG: Event 90060 NOT found in booking data")
+                    logger.info("DEBUG: Event 90060 NOT found in combined booking data")
         else:
             logger.warning("No booking data loaded")
             self.booking_data = pd.DataFrame()

@@ -259,7 +259,7 @@ def load_users_data(s3_client, target_date=None):
         target_date = get_latest_data_date()
     
     date_info = get_file_date_info(target_date)
-    filename = f"{date_info['file_prefix']}-Users-TBUK.csv"
+    filename = f"{date_info['file_prefix']}-users-TBUK.csv"
     s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
     
     print(f"Loading users data from S3: {s3_key}")

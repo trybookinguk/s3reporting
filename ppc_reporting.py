@@ -379,6 +379,11 @@ class PPCReporter:
         Match GA4 conversions with booking data and calculate revenue.
         Aggregates by account to show one line per account.
         
+        IMPORTANT: Uses separate aggregation approach to prevent revenue double counting
+        when multiple GA4 sessions exist for the same event. Revenue is aggregated by
+        unique events first, then summed by account, whilst GA4 metrics (sessions/users) 
+        are summed across all sessions to maintain accurate tracking metrics.
+        
         Returns:
             DataFrame with matched conversions and revenue data aggregated by account
         """
@@ -440,22 +445,53 @@ class PPCReporter:
         
         # Process matched events - aggregate by account
         if not matched_events.empty:
-            account_agg = matched_events.groupby('AccountId').agg({
+            # CRITICAL FIX: Prevent revenue double counting when multiple GA4 sessions exist for same event
+            # 
+            # The issue occurs because when we aggregate directly by AccountId, events with multiple
+            # GA4 sessions get their revenue counted multiple times (once per session).
+            # 
+            # Solution: Separate aggregation approach
+            # 1. First aggregate unique events to get correct revenue totals (no double counting)
+            # 2. Separately aggregate GA4 metrics (sessions/users) which should be summed across all sessions
+            # 3. Merge these together for accurate account-level data
+            
+            # Step 1: Aggregate by unique events to prevent revenue double counting
+            # This ensures each event's revenue is counted exactly once per account
+            unique_events = matched_events.groupby(['AccountId', 'event_id']).agg({
                 'AccountName': 'first',
-                'event_id': 'first',  # First event ID (will be from earliest conversion)
-                'EventName': 'first',  # Name of first event
-                'campaign': 'first',  # Campaign from first conversion
+                'EventName': 'first',
+                'campaign': 'first',
                 'source': 'first',
                 'medium': 'first',
-                'conversion_date': 'min',  # Earliest conversion date
-                'TotalRevenue': 'sum',  # Sum of all event revenues for this account
-                'TicketQuantity': 'sum',  # Total tickets across all events
-                'sessions': 'sum',  # Total sessions
-                'users': 'sum'  # Total users
+                'conversion_date': 'min',  # Use earliest conversion date for this event
+                'TotalRevenue': 'first',  # Each event has a single revenue total (from event_revenue)
+                'TicketQuantity': 'first'  # Each event has a single ticket quantity
             }).reset_index()
             
-            # Count events per account
-            events_per_account = matched_events.groupby('AccountId')['event_id'].nunique().reset_index()
+            # Step 2: Aggregate GA4 metrics by account (these should be summed across all sessions)
+            ga_metrics = matched_events.groupby('AccountId').agg({
+                'sessions': 'sum',  # Sum all sessions across all events and sessions
+                'users': 'sum'      # Sum all users across all events and sessions
+            }).reset_index()
+            
+            # Step 3: Now aggregate the unique events by account for revenue totals
+            account_revenue = unique_events.groupby('AccountId').agg({
+                'AccountName': 'first',
+                'event_id': 'first',     # First event ID (from earliest conversion)
+                'EventName': 'first',    # Name of first event
+                'campaign': 'first',     # Campaign from first conversion  
+                'source': 'first',
+                'medium': 'first',
+                'conversion_date': 'min', # Earliest conversion date across all events
+                'TotalRevenue': 'sum',    # Now safely sum - each event counted once
+                'TicketQuantity': 'sum'   # Sum tickets across unique events
+            }).reset_index()
+            
+            # Step 4: Merge GA4 metrics with revenue data
+            account_agg = account_revenue.merge(ga_metrics, on='AccountId', how='left')
+            
+            # Count unique events per account
+            events_per_account = unique_events.groupby('AccountId')['event_id'].nunique().reset_index()
             events_per_account.columns = ['AccountId', 'events_with_tickets']
             account_agg = account_agg.merge(events_per_account, on='AccountId', how='left')
         else:

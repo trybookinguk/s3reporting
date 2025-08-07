@@ -74,7 +74,55 @@ def load_booking_data(s3_client, target_date=None, data_type='BookingData'):
     s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
     
     print(f"Loading {data_type} from S3: {s3_key}")
-    df = download_s3_file_cached(s3_client, s3_key)
+    
+    # Try to download the file, with fallback for BookingDataAll
+    try:
+        df = download_s3_file_cached(s3_client, s3_key)
+    except Exception as e:
+        # If BookingDataAll fails, try to find alternative files in the same month
+        if data_type == 'BookingDataAll' and 'NoSuchKey' in str(e):
+            print(f"  Primary BookingDataAll file not found, searching for alternatives...")
+            
+            # Try other days in the same month (e.g., if 01 doesn't exist, try 05)
+            from .s3_data_loader import S3_BUCKET
+            import boto3
+            
+            try:
+                # List all objects in the month folder
+                prefix = f"{date_info['folder_year']}/{date_info['folder_month']}/"
+                response = s3_client.list_objects_v2(
+                    Bucket=S3_BUCKET,
+                    Prefix=prefix
+                )
+                
+                # Find all BookingDataAll files in the month
+                booking_data_all_files = []
+                if 'Contents' in response:
+                    for obj in response['Contents']:
+                        key = obj['Key']
+                        if 'BookingDataAll-TBUK.csv' in key:
+                            booking_data_all_files.append(key)
+                
+                if booking_data_all_files:
+                    # Sort to get the earliest available file
+                    booking_data_all_files.sort()
+                    alternative_key = booking_data_all_files[0]
+                    print(f"  Found alternative BookingDataAll: {alternative_key}")
+                    # Extract the day from filename like "20250805-BookingDataAll-TBUK.csv"
+                    filename_part = alternative_key.split('/')[-1]
+                    if len(filename_part) >= 8:
+                        day_part = filename_part[6:8]
+                        print(f"  Note: Expected file on day 01 but using file from day {day_part}")
+                    df = download_s3_file_cached(s3_client, alternative_key)
+                else:
+                    print(f"  No BookingDataAll files found in {prefix}")
+                    print(f"  This might indicate the monthly BookingDataAll report hasn't been generated yet.")
+                    raise e
+            except Exception as list_error:
+                print(f"  Error searching for alternatives: {list_error}")
+                raise e
+        else:
+            raise
     
     # Convert TransactionDate
     df['TransactionDate'] = pd.to_datetime(df['TransactionDate'], errors='coerce', utc=True)

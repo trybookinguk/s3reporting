@@ -387,19 +387,12 @@ def main():
         else:
             report_date = today
         
-        # Load accounts data
-        prefix = report_date.strftime("%Y%m")
-        year = report_date.strftime("%Y")
-        month = report_date.strftime("%m")
-        key_account = f"{year}/{month}/{prefix}-Accounts-TBUK.csv"
+        # Load accounts data using the standardized loader
+        from modules.utils.data_loaders import load_accounts_data
         
-        print(f"\nLoading accounts data from: {key_account}")
-        accounts_df = download_s3_file_cached(s3_client, key_account)
+        print("\nLoading accounts data...")
+        accounts_df = load_accounts_data(s3_client, report_date)
         print(f"  Loaded {len(accounts_df):,} accounts")
-        
-        
-        # Ensure DateTimeCreated is datetime
-        accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'])
         
         # Load all booking data
         booking_df = load_all_booking_data(s3_client, report_date)

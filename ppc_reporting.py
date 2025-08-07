@@ -349,6 +349,17 @@ class PPCReporter:
                 min_date = self.booking_data['TransactionDate'].min()
                 max_date = self.booking_data['TransactionDate'].max()
                 logger.info(f"Booking data date range: {min_date} to {max_date}")
+                
+                # Debug: Check event 90060
+                event_90060 = self.booking_data[self.booking_data['EventId'] == 90060]
+                if not event_90060.empty:
+                    logger.info(f"DEBUG: Event 90060 found in booking data:")
+                    logger.info(f"  - Total rows: {len(event_90060)}")
+                    logger.info(f"  - Date range: {event_90060['TransactionDate'].min()} to {event_90060['TransactionDate'].max()}")
+                    logger.info(f"  - Total fees: £{event_90060['TotalFees'].sum():.2f}")
+                    logger.info(f"  - Unique account IDs: {event_90060['AccountId'].nunique()}")
+                else:
+                    logger.info("DEBUG: Event 90060 NOT found in booking data")
         else:
             logger.warning("No booking data loaded")
             self.booking_data = pd.DataFrame()
@@ -378,6 +389,15 @@ class PPCReporter:
         event_ids = self.ga_data['event_id'].unique()
         logger.info(f"Found {len(event_ids)} unique events with conversions")
         
+        # Debug: Check if event 90060 is in GA4 conversions
+        if '90060' in event_ids:
+            logger.info("DEBUG: Event 90060 found in GA4 conversions")
+            ga_90060 = self.ga_data[self.ga_data['event_id'] == '90060']
+            logger.info(f"  - GA4 sessions for 90060: {len(ga_90060)}")
+            logger.info(f"  - Campaigns: {ga_90060['campaign'].unique()}")
+        else:
+            logger.info("DEBUG: Event 90060 NOT in GA4 conversions")
+        
         # Filter booking data for these events
         event_bookings = self.booking_data[
             self.booking_data['EventId'].astype(str).isin(event_ids)
@@ -387,18 +407,38 @@ class PPCReporter:
             logger.warning("No booking data found for converted events")
             return pd.DataFrame()
         
+        # Debug: Check if event 90060 made it to event_bookings
+        event_90060_bookings = event_bookings[event_bookings['EventId'] == 90060]
+        if not event_90060_bookings.empty:
+            logger.info(f"DEBUG: Event 90060 in event_bookings: {len(event_90060_bookings)} rows")
+            logger.info(f"  - BookingFee sum: £{event_90060_bookings['BookingFee'].fillna(0).sum():.2f}")
+            logger.info(f"  - CardFee sum: £{event_90060_bookings['CardFee'].fillna(0).sum():.2f}")
+            logger.info(f"  - ProcessingFee sum: £{event_90060_bookings['ProcessingFee'].fillna(0).sum():.2f}")
+            logger.info(f"  - TicketFee sum: £{event_90060_bookings['TicketFee'].fillna(0).sum():.2f}")
+            if 'TotalFees' in event_90060_bookings.columns:
+                logger.info(f"  - TotalFees sum: £{event_90060_bookings['TotalFees'].sum():.2f}")
+        else:
+            logger.info("DEBUG: Event 90060 NOT in event_bookings after filtering")
+        
         # Check if we have AccountId column
         if 'AccountId' not in event_bookings.columns:
             logger.error(f"AccountId column not found. Available columns: {list(event_bookings.columns)[:10]}...")
             return pd.DataFrame()
         
-        # Calculate total revenue per event (fees only, not ticket price)
-        event_bookings['TotalRevenue'] = (
-            event_bookings['BookingFee'].fillna(0) +
-            event_bookings['CardFee'].fillna(0) +
-            event_bookings['ProcessingFee'].fillna(0) +
-            event_bookings['TicketFee'].fillna(0)
-        )
+        # Use the pre-calculated TotalFees column from data loader
+        # This ensures consistency across all reports
+        if 'TotalFees' in event_bookings.columns:
+            event_bookings['TotalRevenue'] = event_bookings['TotalFees']
+            logger.info("Using pre-calculated TotalFees column for revenue")
+        else:
+            # Fallback: Calculate total revenue per event (fees only, not ticket price)
+            logger.warning("TotalFees column not found, calculating manually")
+            event_bookings['TotalRevenue'] = (
+                event_bookings['BookingFee'].fillna(0) +
+                event_bookings['CardFee'].fillna(0) +
+                event_bookings['ProcessingFee'].fillna(0) +
+                event_bookings['TicketFee'].fillna(0)
+            )
         
         # First, aggregate by event to get event-level data
         event_revenue = event_bookings.groupby('EventId').agg({
@@ -411,6 +451,13 @@ class PPCReporter:
         
         # Convert EventId to string for merging
         event_revenue['EventId'] = event_revenue['EventId'].astype(str)
+        
+        # Debug: Check event 90060 after aggregation
+        event_90060_rev = event_revenue[event_revenue['EventId'] == '90060']
+        if not event_90060_rev.empty:
+            logger.info(f"DEBUG: Event 90060 after aggregation:")
+            logger.info(f"  - TotalRevenue: £{event_90060_rev['TotalRevenue'].iloc[0]:.2f}")
+            logger.info(f"  - TicketQuantity: {event_90060_rev['TicketQuantity'].iloc[0]}")
         
         # Merge with GA4 data to get conversion dates and campaign info
         event_data = self.ga_data.merge(

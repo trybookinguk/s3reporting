@@ -131,12 +131,14 @@ def main():
         booking_data_df = None
         try:
             # Load both BookingDataAll and current month BookingData
-            print(f"Loading BookingDataAll from: {key_all}")
-            logger.info(f"Loading BookingDataAll for revenue analysis")
-            booking_all_df = download_s3_file_cached(s3_client, key_all)
+            from modules.utils.data_loaders import load_booking_data
             
-            print(f"Loading BookingData from: {key_month}")
-            booking_month_df = download_s3_file_cached(s3_client, key_month)
+            print("Loading BookingDataAll...")
+            logger.info("Loading BookingDataAll for revenue analysis")
+            booking_all_df = load_booking_data(s3_client, report_date, data_type='BookingDataAll')
+            
+            print("Loading current month BookingData...")
+            booking_month_df = load_booking_data(s3_client, report_date, data_type='BookingData')
             
             # Combine and remove duplicates based on BookingTransactionId
             print("Combining booking data and removing duplicates...")

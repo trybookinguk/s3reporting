@@ -487,7 +487,7 @@ def main():
         if TEST_MODE:
             recipients = 'alex@trybooking.co.uk'
         else:
-            recipients = ['alex@trybooking.co.uk', 'joan@trybooking.co.uk']
+            recipients = 'alex@trybooking.co.uk'
         
         send_html_email_with_attachments(
             to=recipients,

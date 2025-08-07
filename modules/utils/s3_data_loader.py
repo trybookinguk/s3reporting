@@ -488,5 +488,56 @@ def load_multiple_booking_files(s3_client, keys, use_cache=True, chunk_size=1000
     for key in keys:
         if key:  # Skip None/empty keys
             logger.info(f"Loading chunks from {key}")
-            for chunk in load_booking_data_chunks(s3_client, key, use_cache, chunk_size):
-                yield chunk
+            try:
+                for chunk in load_booking_data_chunks(s3_client, key, use_cache, chunk_size):
+                    yield chunk
+            except Exception as e:
+                # If BookingDataAll fails, try to find alternative files
+                if 'BookingDataAll' in key and 'NoSuchKey' in str(e):
+                    logger.info(f"Primary BookingDataAll file not found, searching for alternatives...")
+                    
+                    # Extract year/month from the key
+                    parts = key.split('/')
+                    if len(parts) >= 3:
+                        year, month = parts[0], parts[1]
+                        prefix = f"{year}/{month}/"
+                        
+                        try:
+                            # List all objects in the month folder
+                            response = s3_client.list_objects_v2(
+                                Bucket=S3_BUCKET,
+                                Prefix=prefix
+                            )
+                            
+                            # Find all BookingDataAll files in the month
+                            booking_data_all_files = []
+                            if 'Contents' in response:
+                                for obj in response['Contents']:
+                                    obj_key = obj['Key']
+                                    if 'BookingDataAll-TBUK.csv' in obj_key:
+                                        booking_data_all_files.append(obj_key)
+                            
+                            if booking_data_all_files:
+                                # Sort to get the earliest available file
+                                booking_data_all_files.sort()
+                                alternative_key = booking_data_all_files[0]
+                                logger.info(f"Found alternative BookingDataAll: {alternative_key}")
+                                
+                                # Extract the day from filename
+                                filename_part = alternative_key.split('/')[-1]
+                                if len(filename_part) >= 8:
+                                    day_part = filename_part[6:8]
+                                    logger.info(f"Note: Expected file on day 01 but using file from day {day_part}")
+                                
+                                # Try loading the alternative file
+                                for chunk in load_booking_data_chunks(s3_client, alternative_key, use_cache, chunk_size):
+                                    yield chunk
+                            else:
+                                logger.warning(f"No BookingDataAll files found in {prefix}")
+                                logger.warning("Skipping BookingDataAll - will only process current month data")
+                        except Exception as list_error:
+                            logger.error(f"Error searching for alternatives: {list_error}")
+                            logger.warning("Skipping BookingDataAll - will only process current month data")
+                else:
+                    # For other errors or non-BookingDataAll files, re-raise
+                    raise

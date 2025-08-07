@@ -184,8 +184,11 @@ def load_account_balance_data(s3_client, target_date=None):
     print(f"Loading account balance data from S3: {s3_key}")
     df = download_s3_file_cached(s3_client, s3_key)
     
-    # Ensure AccountId is numeric
-    if 'AccountId' in df.columns:
+    # Handle different column names for account ID
+    # AccountBalance uses 'AccountID' (uppercase ID)
+    if 'AccountID' in df.columns and 'AccountId' not in df.columns:
+        df['AccountId'] = pd.to_numeric(df['AccountID'], errors='coerce')
+    elif 'AccountId' in df.columns:
         df['AccountId'] = pd.to_numeric(df['AccountId'], errors='coerce')
     
     # AccountBalance should be numeric

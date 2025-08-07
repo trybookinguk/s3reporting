@@ -322,50 +322,10 @@ class PPCReporter:
         booking_all = load_booking_data(self.s3_client, latest_date, data_type='BookingDataAll')
         logger.info(f"  Loaded {len(booking_all)} historical records")
         
-        # Check date range of BookingDataAll
-        if 'TransactionDate' in booking_all.columns and not booking_all.empty:
-            min_date_all = booking_all['TransactionDate'].min()
-            max_date_all = booking_all['TransactionDate'].max()
-            logger.info(f"  BookingDataAll date range: {min_date_all} to {max_date_all}")
-            logger.info(f"  Latest transaction in BookingDataAll: {max_date_all}")
-        
-        # Debug: Check event 90060 in BookingDataAll
-        if 'EventId' in booking_all.columns:
-            event_90060_all = booking_all[booking_all['EventId'] == 90060]
-            if not event_90060_all.empty:
-                logger.info(f"DEBUG: Event 90060 in BookingDataAll: {len(event_90060_all)} rows, TotalFees: £{event_90060_all['TotalFees'].sum():.2f}")
-                if 'BookingTransactionId' in event_90060_all.columns:
-                    logger.info(f"  Transaction IDs: {sorted(event_90060_all['BookingTransactionId'].unique())[:5]}...")
-        
         # Load current month BookingData
         logger.info("Loading current month BookingData...")
         booking_current = load_booking_data(self.s3_client, latest_date, data_type='BookingData')
         logger.info(f"  Loaded {len(booking_current)} current month records")
-        
-        # Check date range of BookingData
-        if 'TransactionDate' in booking_current.columns and not booking_current.empty:
-            min_date_current = booking_current['TransactionDate'].min()
-            max_date_current = booking_current['TransactionDate'].max()
-            logger.info(f"  BookingData date range: {min_date_current} to {max_date_current}")
-            logger.info(f"  Latest transaction in BookingData: {max_date_current}")
-            
-            # Check for date gap between BookingDataAll and BookingData
-            if 'TransactionDate' in booking_all.columns and not booking_all.empty:
-                gap_days = (min_date_current - max_date_all).days
-                if gap_days > 1:
-                    logger.warning(f"  WARNING: {gap_days} day gap between BookingDataAll and BookingData!")
-                elif gap_days < 0:
-                    logger.warning(f"  WARNING: {abs(gap_days)} days of overlap between BookingDataAll and BookingData!")
-                else:
-                    logger.info(f"  Date coverage is continuous (gap: {gap_days} days)")
-        
-        # Debug: Check event 90060 in current BookingData
-        if 'EventId' in booking_current.columns:
-            event_90060_current = booking_current[booking_current['EventId'] == 90060]
-            if not event_90060_current.empty:
-                logger.info(f"DEBUG: Event 90060 in BookingData: {len(event_90060_current)} rows, TotalFees: £{event_90060_current['TotalFees'].sum():.2f}")
-                if 'BookingTransactionId' in event_90060_current.columns:
-                    logger.info(f"  Transaction IDs: {sorted(event_90060_current['BookingTransactionId'].unique())[:5]}...")
         
         all_bookings = [booking_all, booking_current]
         
@@ -377,29 +337,10 @@ class PPCReporter:
             # Remove duplicates if any
             if 'BookingTransactionId' in self.booking_data.columns:
                 initial_count = len(self.booking_data)
-                
-                # Debug: Check event 90060 before deduplication
-                event_90060_before = self.booking_data[self.booking_data['EventId'] == 90060]
-                if not event_90060_before.empty:
-                    logger.info(f"DEBUG: Event 90060 BEFORE dedup: {len(event_90060_before)} rows")
-                    
-                    # Check for duplicate transaction IDs
-                    transaction_counts = event_90060_before['BookingTransactionId'].value_counts()
-                    duplicates = transaction_counts[transaction_counts > 1]
-                    if not duplicates.empty:
-                        logger.info(f"  Found duplicate transactions for event 90060: {dict(duplicates)}")
-                
                 self.booking_data = self.booking_data.drop_duplicates(subset=['BookingTransactionId'])
                 duplicates_removed = initial_count - len(self.booking_data)
                 if duplicates_removed > 0:
                     logger.info(f"  Removed {duplicates_removed} duplicate transactions")
-                    
-                # Debug: Check event 90060 after deduplication
-                event_90060_after = self.booking_data[self.booking_data['EventId'] == 90060]
-                if not event_90060_after.empty:
-                    logger.info(f"DEBUG: Event 90060 AFTER dedup: {len(event_90060_after)} rows")
-                    if len(event_90060_before) != len(event_90060_after):
-                        logger.info(f"  WARNING: Lost {len(event_90060_before) - len(event_90060_after)} rows for event 90060 during dedup!")
             
             logger.info(f"Loaded {len(self.booking_data)} total booking records")
             
@@ -408,57 +349,6 @@ class PPCReporter:
                 min_date = self.booking_data['TransactionDate'].min()
                 max_date = self.booking_data['TransactionDate'].max()
                 logger.info(f"Booking data date range: {min_date} to {max_date}")
-                
-                # Debug: Check event 90060
-                event_90060 = self.booking_data[self.booking_data['EventId'] == 90060]
-                if not event_90060.empty:
-                    logger.info(f"DEBUG: Event 90060 found in combined booking data:")
-                    logger.info(f"  - Total rows: {len(event_90060)}")
-                    logger.info(f"  - Date range: {event_90060['TransactionDate'].min()} to {event_90060['TransactionDate'].max()}")
-                    logger.info(f"  - Total fees: £{event_90060['TotalFees'].sum():.2f}")
-                    logger.info(f"  - Unique account IDs: {event_90060['AccountId'].nunique()}")
-                    
-                    # Show transaction dates
-                    transaction_dates = event_90060['TransactionDate'].dt.date.value_counts().sort_index()
-                    logger.info(f"  - Transactions by date:")
-                    for date, count in transaction_dates.items():
-                        logger.info(f"    {date}: {count} transactions")
-                    
-                    # Check for specific booking IDs we expect
-                    expected_bookings = {
-                        'cadf28e3-cbb4-4941-bbf1-c69c0b0f1531': {'date': '2025-07-25', 'processing': 3.0, 'ticket': 0.3},
-                        'e9ec37aa-f595-448c-b999-3aa6a615babb': {'date': '2025-07-26', 'processing': 3.0, 'ticket': 0.3},
-                        'a71d5717-d780-4756-92eb-fa2f47d0c27f': {'date': '2025-07-27', 'processing': 9.0, 'ticket': 0.9},
-                        '02993b66-b4c1-42e4-9e3e-6c40866d7113': {'date': '2025-07-28', 'processing': 3.0, 'ticket': 0.3},
-                        '696a8460-1d5c-4148-a88e-2a138398ecc7': {'date': '2025-07-30', 'processing': 3.0, 'ticket': 0.3},
-                        'c206f484-41ec-4d1a-82da-c7cbf2136a8a': {'date': '2025-07-30', 'processing': 3.0, 'ticket': 0.3},
-                        'ceaa73c5-c762-42e4-a284-745cdc6125f1': {'date': '2025-07-30', 'processing': 3.0, 'ticket': 0.3},
-                        'b454c0cf-0ee1-4b4c-a8f4-ae274ef9df1e': {'date': '2025-07-30', 'processing': 1.5, 'ticket': 0.15},
-                        '9cd08ad0-07cb-4dfe-8572-e4b2ce6d33ca': {'date': '2025-08-01', 'processing': 1.5, 'ticket': 0.15},
-                        '8af53582-54f4-4d39-9e5e-4cf74f4b3127': {'date': '2025-08-06', 'processing': 3.0, 'ticket': 0.3}
-                    }
-                    
-                    logger.info(f"  - Checking for {len(expected_bookings)} expected bookings:")
-                    found_count = 0
-                    total_expected_fees = sum(b['processing'] + b['ticket'] for b in expected_bookings.values())
-                    
-                    if 'BookingUrlId' in event_90060.columns:
-                        for booking_id, expected in expected_bookings.items():
-                            booking_row = event_90060[event_90060['BookingUrlId'] == booking_id]
-                            if not booking_row.empty:
-                                found_count += 1
-                                actual_fees = booking_row['TotalFees'].iloc[0]
-                                expected_fees = expected['processing'] + expected['ticket']
-                                logger.info(f"    ✓ {booking_id[:8]}... on {expected['date']}: Found (fees: £{actual_fees:.2f})")
-                            else:
-                                logger.warning(f"    ✗ {booking_id[:8]}... on {expected['date']}: MISSING (expected fees: £{expected['processing'] + expected['ticket']:.2f})")
-                    else:
-                        logger.warning("    BookingUrlId column not found - cannot check specific bookings")
-                    
-                    logger.info(f"  - Found {found_count}/{len(expected_bookings)} expected bookings")
-                    logger.info(f"  - Expected total fees: £{total_expected_fees:.2f}")
-                else:
-                    logger.info("DEBUG: Event 90060 NOT found in combined booking data")
         else:
             logger.warning("No booking data loaded")
             self.booking_data = pd.DataFrame()
@@ -488,20 +378,7 @@ class PPCReporter:
         event_ids = self.ga_data['event_id'].unique()
         logger.info(f"Found {len(event_ids)} unique events with conversions")
         
-        # Debug: Check if event 90060 is in GA4 conversions
-        if '90060' in event_ids:
-            logger.info("DEBUG: Event 90060 found in GA4 conversions")
-            ga_90060 = self.ga_data[self.ga_data['event_id'] == '90060']
-            logger.info(f"  - GA4 sessions for 90060: {len(ga_90060)}")
-            logger.info(f"  - Campaigns: {ga_90060['campaign'].unique()}")
-        else:
-            logger.info("DEBUG: Event 90060 NOT in GA4 conversions")
-        
         # Filter booking data for these events
-        # Debug: Check data types
-        logger.info(f"DEBUG: EventId dtype in booking_data: {self.booking_data['EventId'].dtype}")
-        logger.info(f"DEBUG: event_ids sample (first 5): {list(event_ids)[:5]}")
-        
         event_bookings = self.booking_data[
             self.booking_data['EventId'].astype(str).isin(event_ids)
         ].copy()
@@ -509,19 +386,6 @@ class PPCReporter:
         if event_bookings.empty:
             logger.warning("No booking data found for converted events")
             return pd.DataFrame()
-        
-        # Debug: Check if event 90060 made it to event_bookings
-        event_90060_bookings = event_bookings[event_bookings['EventId'] == 90060]
-        if not event_90060_bookings.empty:
-            logger.info(f"DEBUG: Event 90060 in event_bookings: {len(event_90060_bookings)} rows")
-            logger.info(f"  - BookingFee sum: £{event_90060_bookings['BookingFee'].fillna(0).sum():.2f}")
-            logger.info(f"  - CardFee sum: £{event_90060_bookings['CardFee'].fillna(0).sum():.2f}")
-            logger.info(f"  - ProcessingFee sum: £{event_90060_bookings['ProcessingFee'].fillna(0).sum():.2f}")
-            logger.info(f"  - TicketFee sum: £{event_90060_bookings['TicketFee'].fillna(0).sum():.2f}")
-            if 'TotalFees' in event_90060_bookings.columns:
-                logger.info(f"  - TotalFees sum: £{event_90060_bookings['TotalFees'].sum():.2f}")
-        else:
-            logger.info("DEBUG: Event 90060 NOT in event_bookings after filtering")
         
         # Check if we have AccountId column
         if 'AccountId' not in event_bookings.columns:
@@ -554,13 +418,6 @@ class PPCReporter:
         
         # Convert EventId to string for merging
         event_revenue['EventId'] = event_revenue['EventId'].astype(str)
-        
-        # Debug: Check event 90060 after aggregation
-        event_90060_rev = event_revenue[event_revenue['EventId'] == '90060']
-        if not event_90060_rev.empty:
-            logger.info(f"DEBUG: Event 90060 after aggregation:")
-            logger.info(f"  - TotalRevenue: £{event_90060_rev['TotalRevenue'].iloc[0]:.2f}")
-            logger.info(f"  - TicketQuantity: {event_90060_rev['TicketQuantity'].iloc[0]}")
         
         # Merge with GA4 data to get conversion dates and campaign info
         event_data = self.ga_data.merge(

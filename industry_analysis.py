@@ -426,11 +426,11 @@ def main():
         
         # Calculate period metrics
         # Define period boundaries (using same as tier calculations)
-        # Convert date objects to pandas Timestamps for comparison
-        current_end = pd.Timestamp.now(UK_TZ).normalize()
-        current_start = pd.Timestamp(CUTOFF_365)
-        previous_start = pd.Timestamp(CUTOFF_730)
-        previous_end = pd.Timestamp(CUTOFF_365)
+        # Convert date objects to pandas Timestamps with UTC timezone for comparison
+        current_end = pd.Timestamp.now('UTC').normalize()
+        current_start = pd.Timestamp(CUTOFF_365, tz='UTC')
+        previous_start = pd.Timestamp(CUTOFF_730, tz='UTC')
+        previous_end = pd.Timestamp(CUTOFF_365, tz='UTC')
         
         current_metrics = calculate_period_metrics(
             booking_with_industry, accounts_df, 

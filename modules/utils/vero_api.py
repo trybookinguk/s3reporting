@@ -79,7 +79,7 @@ class VeroClient:
         self.base_url = "https://api.getvero.com"
         self.session = get_session()
     
-    def track_event(self, user_id: str, email: str, event_name: str, data: Dict) -> Dict:
+    def track_event(self, user_id: str, email: str, event_name: str, data: Dict, extras: Optional[Dict] = None) -> Dict:
         """
         Track a single event in Vero.
         
@@ -88,14 +88,18 @@ class VeroClient:
             email: User email address
             event_name: Name of the event to track
             data: Event properties/data
+            extras: Optional dict containing 'source' and/or 'created_at'
             
         Returns:
             API response
         """
         @retry_with_backoff
         def _make_request():
+            # Auth token goes in query parameter
+            url = f"{self.base_url}/api/v2/events/track?auth_token={self.auth_token}"
+            
+            # Request body contains identity, event_name, and data
             payload = {
-                "auth_token": self.auth_token,
                 "identity": {
                     "id": user_id,
                     "email": email
@@ -104,10 +108,17 @@ class VeroClient:
                 "data": data
             }
             
+            # Add extras if provided
+            if extras:
+                payload["extras"] = extras
+            
             response = self.session.post(
-                f"{self.base_url}/api/v2/events/track",
+                url,
                 json=payload,
-                headers={"Content-Type": "application/json"}
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                }
             )
             response.raise_for_status()
             return response.json()
@@ -148,6 +159,13 @@ class VeroClient:
                     if field in event and pd.notna(event[field]):
                         event_data[field] = event[field]
                 
+                # Add extras to identify source and provide context
+                extras = {
+                    'source': 'TryBooking Event Completion Script',
+                    'event_name_tb': event.get('event_name', ''),  # The TryBooking event name
+                    'isMultiple': event.get('has_multiple_events', False)  # True if account has multiple events completing
+                }
+                
                 # Track the event
                 if TEST_MODE:
                     # In test mode, just log what would be sent
@@ -155,11 +173,12 @@ class VeroClient:
                         'status': 'test_mode',
                         'user_id': user_id,
                         'event_name': event_name,
-                        'data': event_data
+                        'data': event_data,
+                        'extras': extras
                     }
                     print(f"TEST MODE: Would track event '{event_name}' for user {user_id}")
                 else:
-                    result = self.track_event(user_id, email, event_name, event_data)
+                    result = self.track_event(user_id, email, event_name, event_data, extras)
                     result['status'] = 'success'
                 
                 results.append(result)

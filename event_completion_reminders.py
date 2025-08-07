@@ -299,13 +299,22 @@ def main():
     
     # Sort by AccountId and priority, keep first (highest priority) per account
     events_to_send = events_to_send.sort_values(['AccountId', 'priority'])
+    
+    # Before deduplication, count events per account to identify multiple events
+    events_per_account = events_to_send.groupby('AccountId').size()
+    accounts_with_multiple = set(events_per_account[events_per_account > 1].index)
+    
     events_to_send = events_to_send.groupby('AccountId').first().reset_index()
+    
+    # Mark accounts that had multiple events
+    events_to_send['has_multiple_events'] = events_to_send['AccountId'].isin(accounts_with_multiple)
     
     # Log deduplication
     original_count = len(event_metrics[event_metrics['vero_event'].notna()])
     deduped_count = len(events_to_send)
     if original_count > deduped_count:
         print(f"  Deduplication: Reduced {original_count} events to {deduped_count}")
+        print(f"  Accounts with multiple events: {len(accounts_with_multiple)}")
     else:
         print(f"  No deduplication needed: {deduped_count} events")
     
@@ -353,7 +362,8 @@ def main():
                 'user_email': user['Username'],
                 'payment_received': float(event['PaymentReceived']),
                 'net_amount': float(event['net_amount']),
-                'ticket_quantity': int(event['TicketQuantity'])
+                'ticket_quantity': int(event['TicketQuantity']),
+                'has_multiple_events': bool(event.get('has_multiple_events', False))
             })
     
     print(f"  Total Vero events to send: {len(vero_events)}")

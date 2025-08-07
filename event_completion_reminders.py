@@ -249,11 +249,15 @@ def main():
         
         # Process only non-exposed accounts
         non_exposed_mask = ~verified_events['is_exposed']
+        print(f"    Non-exposed verified events: {non_exposed_mask.sum()}")
+        
         if non_exposed_mask.any():
             non_exposed = verified_events[non_exposed_mask].copy()
             
             # Get pending amount from AccountMovementDaily
             movement_clean = movement_df.copy()
+            print(f"    Movement data columns: {list(movement_clean.columns)[:10]}...")  # Show first 10 columns
+            
             if 'Pending' in movement_clean.columns:
                 movement_clean['Pending'] = pd.to_numeric(
                     movement_clean['Pending'], errors='coerce'
@@ -281,7 +285,12 @@ def main():
                 print(f"    Funds requested: {(non_exposed['vero_event'] == 'event_completed_paid_requested').sum()}")
                 print(f"    Funds not requested: {(non_exposed['vero_event'] == 'event_completed_paid_notrequested').sum()}")
             else:
-                print(f"    No non-exposed events to process")
+                print(f"    WARNING: 'Pending' column not found in AccountMovementDaily")
+                print(f"    Defaulting all non-exposed verified events to 'not requested'")
+                # Default to not requested if Pending column is missing
+                non_exposed['vero_event'] = 'event_completed_paid_notrequested'
+                event_metrics.loc[non_exposed.index, 'vero_event'] = non_exposed['vero_event']
+                print(f"    Events defaulted to not requested: {len(non_exposed)}")
     
     # Create audit trail CSV with all events processed
     print("\nCreating audit trail CSV...")
@@ -311,12 +320,21 @@ def main():
     )
     
     # Add exposure and pending info for verified events
-    if 'is_exposed' in verified_events.columns:
+    if len(verified_events) > 0 and 'is_exposed' in verified_events.columns:
+        # First merge the basic verified event info
         audit_df = audit_df.merge(
-            verified_events[['EventId', 'AccountBalance', 'net_future', 'is_exposed']].rename(columns={'EventId': 'EventId'}),
+            verified_events[['EventId', 'AccountBalance', 'net_future', 'is_exposed']],
             on='EventId',
             how='left'
         )
+        
+        # If we processed non-exposed events, add Pending info
+        if 'non_exposed' in locals() and 'Pending' in non_exposed.columns:
+            audit_df = audit_df.merge(
+                non_exposed[['EventId', 'Pending']],
+                on='EventId',
+                how='left'
+            )
     
     # Save audit trail
     audit_filename = f"event_completion_audit_{target_date.strftime('%Y%m%d')}.csv"

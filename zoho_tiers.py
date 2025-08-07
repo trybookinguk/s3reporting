@@ -199,7 +199,7 @@ def main():
                 booking_data_df['Month'] = booking_data_df['TransactionDate'].dt.month
                 
                 # Filter to last 2 years of data for performance
-                two_years_ago = pd.Timestamp.now() - pd.DateOffset(years=2)
+                two_years_ago = pd.Timestamp.now('UTC') - pd.DateOffset(years=2)
                 original_count = len(booking_data_df)
                 booking_data_df = booking_data_df[booking_data_df['TransactionDate'] >= two_years_ago]
                 removed_count = original_count - len(booking_data_df)

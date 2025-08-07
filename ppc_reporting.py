@@ -38,8 +38,8 @@ from google.oauth2 import service_account
 
 # Import shared modules
 from modules.utils.config import UK_TZ, TEST_MODE
-from modules.utils.s3_data_loader import get_s3_client, download_s3_file_cached
-from modules.utils.date_utils import get_file_date_info, get_latest_data_date
+from modules.utils.s3_data_loader import get_s3_client
+from modules.utils.date_utils import get_latest_data_date
 from modules.utils.data_loaders import load_accounts_data, load_booking_data
 from modules.utils.performance import timer_decorator
 from modules.utils.validation import validate_environment_variables
@@ -314,64 +314,45 @@ class PPCReporter:
         
         logger.info(f"Loaded {len(self.accounts_data)} accounts")
         
-        # Load booking data for the reporting period
-        booking_keys = self._get_booking_keys()
-        logger.info(f"Booking keys to load: {booking_keys}")
-        all_bookings = []
+        # Import the shared load_booking_data function with fallback logic
+        from modules.utils.data_loaders import load_booking_data
         
-        for key in booking_keys:
-            logger.info(f"Loading booking data from {key}")
-            try:
-                df = download_s3_file_cached(self.s3_client, key)
-                if not df.empty:
-                    logger.info(f"  Loaded {len(df)} rows with columns: {list(df.columns)[:10]}...")
-                    all_bookings.append(df)
-            except Exception as e:
-                logger.warning(f"Failed to load {key}: {e}")
+        # Load BookingDataAll (historical data)
+        logger.info("Loading BookingDataAll...")
+        booking_all = load_booking_data(self.s3_client, latest_date, data_type='BookingDataAll')
+        logger.info(f"  Loaded {len(booking_all)} historical records")
+        
+        # Load current month BookingData
+        logger.info("Loading current month BookingData...")
+        booking_current = load_booking_data(self.s3_client, latest_date, data_type='BookingData')
+        logger.info(f"  Loaded {len(booking_current)} current month records")
+        
+        all_bookings = [booking_all, booking_current]
         
         if all_bookings:
             self.booking_data = pd.concat(all_bookings, ignore_index=True)
             
-            # Parse TransactionDate - all dates are in UTC
-            if 'TransactionDate' in self.booking_data.columns:
-                self.booking_data['TransactionDate'] = pd.to_datetime(
-                    self.booking_data['TransactionDate'], 
-                    errors='coerce',
-                    utc=True
-                )
+            # TransactionDate is already parsed as UTC by load_booking_data
+            
+            # Remove duplicates if any
+            if 'BookingTransactionId' in self.booking_data.columns:
+                initial_count = len(self.booking_data)
+                self.booking_data = self.booking_data.drop_duplicates(subset=['BookingTransactionId'])
+                duplicates_removed = initial_count - len(self.booking_data)
+                if duplicates_removed > 0:
+                    logger.info(f"  Removed {duplicates_removed} duplicate transactions")
             
             logger.info(f"Loaded {len(self.booking_data)} total booking records")
+            
+            # Log date range of loaded data for verification
+            if 'TransactionDate' in self.booking_data.columns:
+                min_date = self.booking_data['TransactionDate'].min()
+                max_date = self.booking_data['TransactionDate'].max()
+                logger.info(f"Booking data date range: {min_date} to {max_date}")
         else:
             logger.warning("No booking data loaded")
             self.booking_data = pd.DataFrame()
     
-    def _get_booking_keys(self) -> List[str]:
-        """Generate S3 keys for booking data files."""
-        keys = []
-        
-        # For June 2024 to now, we need historical data and current month
-        # BookingDataAll contains all data up to the start of the current month
-        # BookingData contains current month data
-        
-        # Get current month booking data
-        # Use the latest available date (yesterday) instead of end_date to ensure file exists
-        latest_date = get_latest_data_date()
-        current_info = get_file_date_info(latest_date)
-        current_key = f"{current_info['folder_year']}/{current_info['folder_month']}/" \
-                     f"{current_info['file_prefix']}-BookingData-TBUK.csv"
-        keys.append(current_key)
-        
-        # Since we're always going back to June 2024, we need BookingDataAll
-        # BookingDataAll is stored with 01 suffix in the month folder
-        # Get last day of previous month
-        last_month_end = self.end_date.replace(day=1) - timedelta(days=1)
-        historical_info = get_file_date_info(last_month_end)
-        historical_key = f"{historical_info['folder_year']}/{historical_info['folder_month']}/" \
-                        f"{historical_info['file_prefix']}01-BookingDataAll-TBUK.csv"
-        logger.info(f"Historical key will be: {historical_key}")
-        keys.append(historical_key)
-        
-        return keys
     
     @timer_decorator
     def match_conversions(self) -> pd.DataFrame:

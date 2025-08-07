@@ -14,12 +14,14 @@ from modules.utils.data_loaders import (
     load_account_balance_data, load_account_movement_daily_data,
     load_users_data
 )
-from modules.utils.date_utils import get_target_date, UK_TZ
+from modules.utils.date_utils import get_latest_data_date, UK_TZ
 from modules.utils.vero_api import VeroClient
 from modules.utils.config import TEST_MODE
 
 # Environment variables
 VERO_AUTH_TOKEN = os.environ.get('VERO_AUTH_TOKEN')
+TEST_DATE = os.environ.get('TEST_DATE')
+
 if not VERO_AUTH_TOKEN and not TEST_MODE:
     print("Error: VERO_AUTH_TOKEN environment variable not set")
     sys.exit(1)
@@ -32,7 +34,16 @@ def main():
     print("=" * 50)
     
     # Get target date (defaults to yesterday)
-    target_date = get_target_date()
+    if TEST_DATE:
+        try:
+            target_date = pd.Timestamp(TEST_DATE, tz=UK_TZ)
+            print(f"Using test date: {TEST_DATE}")
+        except Exception as e:
+            print(f"Error parsing TEST_DATE '{TEST_DATE}': {e}")
+            sys.exit(1)
+    else:
+        target_date = get_latest_data_date()
+    
     print(f"Processing date: {target_date.strftime('%Y-%m-%d')}")
     print(f"Test mode: {'ON' if TEST_MODE else 'OFF'}")
     print("")

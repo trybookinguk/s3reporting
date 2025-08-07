@@ -58,10 +58,12 @@ jobs:
           echo "Test date: $TEST_DATE"
           python event_completion_reminders.py
       
-      - name: Upload output file
+      - name: Upload output files
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: event-reminders-output
-          path: event_completion_reminders_*.csv
+          path: |
+            event_completion_reminders_*.csv
+            event_completion_audit_*.csv
           retention-days: 30

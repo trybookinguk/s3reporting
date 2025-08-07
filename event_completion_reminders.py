@@ -193,6 +193,9 @@ def main():
     event_metrics.loc[not_verified_mask, 'vero_event'] = 'event_completed_paid_notverified'
     print(f"  Not verified events: {not_verified_mask.sum()}")
     
+    # Initialize verified_events as empty DataFrame for audit trail
+    verified_events = pd.DataFrame()
+    
     # Verified accounts
     verified_mask = (
         (event_metrics['event_type'] == 'paid') & 
@@ -277,6 +280,48 @@ def main():
                 
                 print(f"    Funds requested: {(non_exposed['vero_event'] == 'event_completed_paid_requested').sum()}")
                 print(f"    Funds not requested: {(non_exposed['vero_event'] == 'event_completed_paid_notrequested').sum()}")
+            else:
+                print(f"    No non-exposed events to process")
+    
+    # Create audit trail CSV with all events processed
+    print("\nCreating audit trail CSV...")
+    audit_df = event_metrics.copy()
+    
+    # Add additional columns for audit
+    audit_df['checked_free_first_event'] = (
+        (audit_df['event_type'] == 'free') & 
+        (audit_df['is_first_event'] == True) & 
+        (audit_df['TicketQuantity'] > 10)
+    )
+    audit_df['checked_stripe_first_event'] = (
+        (audit_df['event_type'] == 'paid') & 
+        (audit_df['GatewayGroup'] == 'Stripe Connect') &
+        (audit_df['is_first_event'] == True) & 
+        (audit_df['TicketQuantity'] > 10)
+    )
+    audit_df['checked_not_verified'] = (
+        (audit_df['event_type'] == 'paid') & 
+        (audit_df['GatewayGroup'] == 'Default (All)') &
+        (audit_df['IsVerified'] != 1)
+    )
+    audit_df['checked_verified'] = (
+        (audit_df['event_type'] == 'paid') & 
+        (audit_df['GatewayGroup'] == 'Default (All)') &
+        (audit_df['IsVerified'] == 1)
+    )
+    
+    # Add exposure and pending info for verified events
+    if 'is_exposed' in verified_events.columns:
+        audit_df = audit_df.merge(
+            verified_events[['EventId', 'AccountBalance', 'net_future', 'is_exposed']].rename(columns={'EventId': 'EventId'}),
+            on='EventId',
+            how='left'
+        )
+    
+    # Save audit trail
+    audit_filename = f"event_completion_audit_{target_date.strftime('%Y%m%d')}.csv"
+    audit_df.to_csv(audit_filename, index=False)
+    print(f"  Audit trail saved to: {audit_filename}")
     
     # Phase 4: Account-Level Deduplication
     print("\nPhase 4: Deduplicating events...")
@@ -369,7 +414,16 @@ def main():
     print(f"  Total Vero events to send: {len(vero_events)}")
     
     if len(vero_events) == 0:
-        print("  No events to send. Exiting.")
+        print("  No events to send.")
+        # Still create an empty CSV for audit purposes
+        vero_df = pd.DataFrame(columns=[
+            'event_id', 'event_name', 'account_id', 'event_type', 'vero_event',
+            'vero_user_id', 'user_email', 'payment_received', 'net_amount',
+            'ticket_quantity', 'has_multiple_events', 'status', 'error_message', 'timestamp'
+        ])
+        output_filename = f"event_completion_reminders_{target_date.strftime('%Y%m%d')}.csv"
+        vero_df.to_csv(output_filename, index=False)
+        print(f"  Empty CSV saved to: {output_filename}")
         sys.exit(0)
     
     # Convert to DataFrame

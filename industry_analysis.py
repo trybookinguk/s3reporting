@@ -24,20 +24,15 @@ from modules.utils.performance import timer_decorator
 @timer_decorator
 def load_all_booking_data(s3_client, report_date):
     """Load and combine BookingDataAll and BookingData."""
-    # Determine keys based on report date
-    prefix = report_date.strftime("%Y%m")
-    year = report_date.strftime("%Y")
-    month = report_date.strftime("%m")
+    # Use the shared load_booking_data function which has fallback logic
+    from modules.utils.data_loaders import load_booking_data
     
-    key_all = f"{year}/{month}/{prefix}01-BookingDataAll-TBUK.csv"
-    key_month = f"{year}/{month}/{prefix}-BookingData-TBUK.csv"
-    
-    print(f"Loading BookingDataAll from: {key_all}")
-    booking_all_df = download_s3_file_cached(s3_client, key_all)
+    print("Loading BookingDataAll...")
+    booking_all_df = load_booking_data(s3_client, report_date, data_type='BookingDataAll')
     print(f"  Loaded {len(booking_all_df):,} historical booking records")
     
-    print(f"Loading BookingData from: {key_month}")
-    booking_month_df = download_s3_file_cached(s3_client, key_month)
+    print("Loading current month BookingData...")
+    booking_month_df = load_booking_data(s3_client, report_date, data_type='BookingData')
     print(f"  Loaded {len(booking_month_df):,} current month booking records")
     
     # Combine and deduplicate
@@ -55,13 +50,7 @@ def load_all_booking_data(s3_client, report_date):
         combined_df = combined_df[combined_df['Status'] == 'Successful']
         print(f"  Filtered to {len(combined_df):,} successful transactions")
     
-    # Ensure TransactionDate is datetime
-    combined_df['TransactionDate'] = pd.to_datetime(combined_df['TransactionDate'])
-    
-    # Calculate TotalFees if needed
-    fee_columns = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
-    if all(col in combined_df.columns for col in fee_columns):
-        combined_df['TotalFees'] = combined_df[fee_columns].sum(axis=1)
+    # TransactionDate and TotalFees are already handled by load_booking_data
     
     return combined_df
 

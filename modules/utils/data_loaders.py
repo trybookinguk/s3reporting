@@ -30,6 +30,10 @@ def load_accounts_data(s3_client, target_date=None):
     print(f"Loading accounts data from S3: {s3_key}")
     df = download_s3_file_cached(s3_client, s3_key)
     
+    # Handle different column names for account ID
+    if 'Id' in df.columns and 'AccountId' not in df.columns:
+        df['AccountId'] = pd.to_numeric(df['Id'], errors='coerce')
+    
     # Standardize datetime columns
     df['DateTimeCreated'] = pd.to_datetime(df['DateTimeCreated'], errors='coerce', utc=True)
     

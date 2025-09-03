@@ -378,9 +378,19 @@ class PPCReporter:
         event_ids = self.ga_data['event_id'].unique()
         logger.info(f"Found {len(event_ids)} unique events with conversions")
         
+        # Convert event IDs to integers for matching (they come as strings from GA4)
+        # Also handle the float conversion issue where EventId might be float32
+        try:
+            event_ids_int = [int(float(eid)) for eid in event_ids if eid and eid.isdigit()]
+            logger.info(f"Converted {len(event_ids_int)} event IDs to integers for matching")
+        except (ValueError, AttributeError) as e:
+            logger.warning(f"Error converting event IDs: {e}")
+            event_ids_int = []
+        
         # Filter booking data for these events
+        # Convert EventId to int for matching (it's stored as float32 due to NA handling)
         event_bookings = self.booking_data[
-            self.booking_data['EventId'].astype(str).isin(event_ids)
+            self.booking_data['EventId'].fillna(-1).astype('int64').isin(event_ids_int)
         ].copy()
         
         if event_bookings.empty:

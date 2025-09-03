@@ -37,10 +37,6 @@ from .config import (
 )
 from .date_utils import get_file_date_info, get_latest_data_date
 from .performance import optimize_dtypes, timer_decorator
-from .booking_data_fallback import (
-    try_load_with_fallback, yield_chunks_with_fallback,
-    find_booking_files_in_month, get_fallback_keys
-)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +46,190 @@ try:
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
+
+
+# ========== Fallback Helper Functions ==========
+
+def calculate_previous_month(year: int, month: int) -> Tuple[int, int]:
+    """Calculate the previous month from given year and month."""
+    if month == 1:
+        return year - 1, 12
+    else:
+        return year, month - 1
+
+
+def find_booking_files_in_month(s3_client, bucket: str, year: int, month: int) -> Tuple[List[str], List[str]]:
+    """Find BookingDataAll and BookingData files in a specific month."""
+    prefix = f"{year:04d}/{month:02d}/"
+    
+    try:
+        response = s3_client.list_objects_v2(
+            Bucket=bucket,
+            Prefix=prefix
+        )
+        
+        booking_data_all_files = []
+        booking_data_files = []
+        
+        if 'Contents' in response:
+            for obj in response['Contents']:
+                key = obj['Key']
+                if 'BookingDataAll-TBUK.csv' in key:
+                    booking_data_all_files.append(key)
+                elif 'BookingData-TBUK.csv' in key and 'BookingDataAll' not in key:
+                    booking_data_files.append(key)
+        
+        booking_data_all_files.sort()
+        booking_data_files.sort()
+        
+        return booking_data_all_files, booking_data_files
+        
+    except Exception as e:
+        logger.error(f"Error listing files in {prefix}: {e}")
+        return [], []
+
+
+def get_fallback_keys(s3_client, bucket: str, current_year: int, current_month: int) -> Tuple[Optional[str], Optional[str]]:
+    """Get S3 keys for fallback data when current month's BookingDataAll is missing."""
+    prev_year, prev_month = calculate_previous_month(current_year, current_month)
+    
+    logger.info(f"Attempting fallback to {prev_year:04d}-{prev_month:02d} data")
+    
+    booking_all_files, booking_data_files = find_booking_files_in_month(
+        s3_client, bucket, prev_year, prev_month
+    )
+    
+    prev_booking_all_key = booking_all_files[0] if booking_all_files else None
+    prev_booking_data_key = booking_data_files[-1] if booking_data_files else None  # Last day of month
+    
+    if prev_booking_all_key:
+        logger.info(f"Found previous month's BookingDataAll: {prev_booking_all_key}")
+    if prev_booking_data_key:
+        logger.info(f"Found previous month's BookingData: {prev_booking_data_key}")
+    
+    if not prev_booking_all_key and not prev_booking_data_key:
+        logger.warning("No fallback data found in previous month")
+    
+    return prev_booking_all_key, prev_booking_data_key
+
+
+def try_load_with_fallback(s3_client, bucket: str, primary_key: str, 
+                          load_func, current_year: int, current_month: int) -> pd.DataFrame:
+    """Try to load BookingDataAll with automatic fallback to previous month if needed."""
+    # First try to load the primary key
+    df = None
+    try:
+        df = load_func(s3_client, primary_key)
+        if df is not None and not df.empty:
+            return df
+    except Exception as e:
+        if 'NoSuchKey' not in str(e):
+            raise
+    
+    # If we get here, primary file is missing or empty
+    logger.warning(f"BookingDataAll is missing or empty for {current_year:04d}-{current_month:02d}")
+    logger.info("Attempting to use previous month's data as fallback...")
+    
+    # Get fallback keys
+    prev_all_key, prev_data_key = get_fallback_keys(
+        s3_client, bucket, current_year, current_month
+    )
+    
+    # Load fallback data
+    dfs_to_combine = []
+    
+    if prev_all_key:
+        try:
+            prev_all_df = load_func(s3_client, prev_all_key)
+            if prev_all_df is not None and not prev_all_df.empty:
+                dfs_to_combine.append(prev_all_df)
+                logger.info(f"Loaded {len(prev_all_df):,} records from previous BookingDataAll")
+        except Exception as e:
+            logger.error(f"Failed to load previous BookingDataAll: {e}")
+    
+    if prev_data_key:
+        try:
+            prev_data_df = load_func(s3_client, prev_data_key)
+            if prev_data_df is not None and not prev_data_df.empty:
+                dfs_to_combine.append(prev_data_df)
+                logger.info(f"Loaded {len(prev_data_df):,} records from previous BookingData")
+        except Exception as e:
+            logger.error(f"Failed to load previous BookingData: {e}")
+    
+    # Combine and deduplicate
+    if dfs_to_combine:
+        logger.info(f"Combining {len(dfs_to_combine)} fallback data sources...")
+        combined_df = pd.concat(dfs_to_combine, ignore_index=True)
+        
+        # Remove duplicates if BookingUrlId exists
+        if 'BookingUrlId' in combined_df.columns:
+            initial_count = len(combined_df)
+            combined_df = combined_df.drop_duplicates(subset=['BookingUrlId'], keep='last')
+            duplicates_removed = initial_count - len(combined_df)
+            if duplicates_removed > 0:
+                logger.info(f"Removed {duplicates_removed:,} duplicate transactions")
+        
+        prev_year, prev_month = calculate_previous_month(current_year, current_month)
+        logger.warning(f"⚠️  Using {prev_year:04d}-{prev_month:02d} complete data as fallback")
+        logger.info(f"Successfully created fallback dataset ({len(combined_df):,} total records)")
+        
+        return combined_df
+    else:
+        raise ValueError(f"Unable to load BookingDataAll for current month or fallback from previous month")
+
+
+def yield_chunks_with_fallback(s3_client, bucket: str, primary_key: str,
+                              load_chunks_func, current_year: int, current_month: int,
+                              chunk_size: int = 100000) -> Iterator[pd.DataFrame]:
+    """Yield chunks of BookingDataAll with automatic fallback to previous month if needed."""
+    # First try to load chunks from the primary key
+    found_primary = False
+    try:
+        for chunk in load_chunks_func(s3_client, primary_key, chunk_size):
+            found_primary = True
+            yield chunk
+        if found_primary:
+            return  # Successfully loaded primary file
+    except Exception as e:
+        if 'NoSuchKey' not in str(e):
+            raise
+    
+    # If we get here, primary file is missing
+    logger.warning(f"BookingDataAll is missing for {current_year:04d}-{current_month:02d}")
+    logger.info("Attempting to use previous month's data as fallback...")
+    
+    # Get fallback keys
+    prev_all_key, prev_data_key = get_fallback_keys(
+        s3_client, bucket, current_year, current_month
+    )
+    
+    found_fallback = False
+    
+    # Yield chunks from previous BookingDataAll
+    if prev_all_key:
+        try:
+            logger.info(f"Loading chunks from previous BookingDataAll: {prev_all_key}")
+            for chunk in load_chunks_func(s3_client, prev_all_key, chunk_size):
+                found_fallback = True
+                yield chunk
+        except Exception as e:
+            logger.error(f"Failed to load previous BookingDataAll: {e}")
+    
+    # Yield chunks from previous BookingData
+    if prev_data_key:
+        try:
+            logger.info(f"Loading chunks from previous BookingData: {prev_data_key}")
+            for chunk in load_chunks_func(s3_client, prev_data_key, chunk_size):
+                found_fallback = True
+                yield chunk
+        except Exception as e:
+            logger.error(f"Failed to load previous BookingData: {e}")
+    
+    if found_fallback:
+        prev_year, prev_month = calculate_previous_month(current_year, current_month)
+        logger.warning(f"⚠️  Using {prev_year:04d}-{prev_month:02d} complete data as fallback")
+    else:
+        logger.warning("No fallback data available - proceeding without BookingDataAll")
 
 
 class UnifiedDataLoader:

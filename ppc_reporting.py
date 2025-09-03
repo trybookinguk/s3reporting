@@ -726,12 +726,21 @@ class PPCReporter:
             logger.warning("No matched data found - creating report with GA4 data only")
             # Create a minimal report with just GA4 data
             eligible_data = self.ga_data.copy()
+            # Add required columns that would normally come from booking/account data
+            eligible_data['AccountId'] = 'MANUAL_MATCH_' + eligible_data['event_id'].astype(str)
+            eligible_data['AccountName'] = 'Manual Match Required - Event ' + eligible_data['event_id'].astype(str)
+            eligible_data['Industry'] = 'Unknown'
+            eligible_data['SubIndustry'] = 'Unknown'
+            eligible_data['AccountCreatedDate'] = pd.NaT
+            eligible_data['EventName'] = 'Event ' + eligible_data['event_id'].astype(str)
+            eligible_data['TicketQuantity'] = 0
             eligible_data['is_eligible'] = False
-            eligible_data['eligibility_reason'] = 'No booking data found'
+            eligible_data['eligibility_reason'] = 'No booking data found - manual verification required'
             eligible_data['matched_status'] = False
             eligible_data['revenue_12m'] = 0
             eligible_data['TotalRevenue'] = 0
             eligible_data['events_with_tickets'] = 0
+            eligible_data['account_age_days'] = 0
         else:
             # Step 4: Apply eligibility rules
             eligible_data = self.apply_eligibility_rules(matched_data)

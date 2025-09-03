@@ -236,12 +236,14 @@ class UnifiedDataLoader:
     """Unified data loader for all TryBooking data operations."""
     
     # Optimized data types for memory efficiency
+    # Using float types for numeric columns that may contain NA values
+    # (pandas can't convert NA to int directly, but can to float)
     OPTIMIZED_DTYPES = {
-        'AccountId': 'int32',
+        'AccountId': 'float32',  # Changed from int32 to handle NAs
         'EventId': 'float32',  
-        'BookingTransactionId': 'int64',
-        'BookingId': 'int64',
-        'TicketQuantity': 'int32',
+        'BookingTransactionId': 'float64',  # Changed from int64 to handle NAs
+        'BookingId': 'float64',  # Changed from int64 to handle NAs
+        'TicketQuantity': 'float32',  # Changed from int32 to handle NAs
         'PaymentReceived': 'float32',
         'BookingFee': 'float32',
         'CardFee': 'float32',
@@ -249,7 +251,7 @@ class UnifiedDataLoader:
         'TicketFee': 'float32',
         'Surcharge': 'float32',
         'ProcessingFeeSurcharge': 'float32',
-        'Year': 'int16',
+        'Year': 'float32',  # Changed from int16 to handle NAs
         'DonationCampaignId': 'float32',
         'CustomerId': 'float32',
         'GatewayId': 'object',
@@ -395,29 +397,41 @@ class UnifiedDataLoader:
         
         obj = self.s3_client.get_object(Bucket=S3_BUCKET, Key=key)
         
-        for i, chunk in enumerate(pd.read_csv(
-            obj['Body'],
-            chunksize=chunk_size,
-            dtype=self.OPTIMIZED_DTYPES,
-            low_memory=False
-        )):
-            # Apply categorical dtypes
-            for col in self.CATEGORICAL_COLUMNS:
-                if col in chunk.columns:
-                    chunk[col] = chunk[col].astype('category')
+        try:
+            for i, chunk in enumerate(pd.read_csv(
+                obj['Body'],
+                chunksize=chunk_size,
+                dtype=self.OPTIMIZED_DTYPES,
+                low_memory=False,
+                on_bad_lines='warn'  # Handle malformed CSV lines
+            )):
+                # Apply categorical dtypes
+                for col in self.CATEGORICAL_COLUMNS:
+                    if col in chunk.columns:
+                        try:
+                            chunk[col] = chunk[col].astype('category')
+                        except Exception:
+                            # Skip categorical conversion if it fails
+                            pass
+                
+                chunks.append(chunk)
+                
+                if (i + 1) % 10 == 0:
+                    logger.info(f"  Processed {(i + 1) * chunk_size:,} rows...")
             
-            chunks.append(chunk)
-            
-            if (i + 1) % 10 == 0:
-                logger.info(f"  Processed {(i + 1) * chunk_size:,} rows...")
-        
-        # Combine chunks
-        logger.info("  Combining chunks...")
-        non_empty_chunks = [chunk for chunk in chunks if not chunk.empty]
-        if non_empty_chunks:
-            df = pd.concat(non_empty_chunks, ignore_index=True)
-        else:
-            df = pd.DataFrame()
+            # Combine chunks
+            logger.info("  Combining chunks...")
+            non_empty_chunks = [chunk for chunk in chunks if not chunk.empty]
+            if non_empty_chunks:
+                df = pd.concat(non_empty_chunks, ignore_index=True)
+            else:
+                df = pd.DataFrame()
+        except Exception as e:
+            logger.error(f"Failed to read CSV file {key}: {e}")
+            # Try reading without dtype optimization as fallback
+            logger.info("Retrying without dtype optimization...")
+            obj = self.s3_client.get_object(Bucket=S3_BUCKET, Key=key)
+            df = pd.read_csv(obj['Body'], low_memory=False, on_bad_lines='warn')
         
         logger.info(f"  Total rows loaded: {len(df):,}")
         

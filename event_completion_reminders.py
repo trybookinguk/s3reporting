@@ -254,8 +254,8 @@ def main():
         if non_exposed_mask.any():
             non_exposed = verified_events[non_exposed_mask].copy()
             
-            # Get pending amount from AccountMovementDaily
-            movement_clean = movement_df.copy()
+            # Get pending amount from AccountMovementDaily (skip diagnostic row)
+            movement_clean = movement_df.iloc[1:].copy()
             print(f"    Movement data columns: {list(movement_clean.columns)[:10]}...")  # Show first 10 columns
             
             if 'Pending' in movement_clean.columns:

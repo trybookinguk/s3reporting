@@ -120,6 +120,12 @@ class VeroClient:
                     "Accept": "application/json"
                 }
             )
+            
+            # Log request details on error
+            if response.status_code >= 400:
+                print(f"    API Error {response.status_code}: {response.text}")
+                print(f"    Request payload: {json.dumps(payload, indent=2)}")
+            
             response.raise_for_status()
             return response.json()
         

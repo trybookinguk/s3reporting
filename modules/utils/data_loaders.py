@@ -2,7 +2,7 @@
 Standardized data loading functions for TryBooking reports.
 """
 import pandas as pd
-from .s3_data_loader import download_s3_file_cached
+from .s3_data_loader import download_s3_file_cached, S3_BUCKET
 from .date_utils import get_file_date_info, get_latest_data_date
 from .performance import optimize_dtypes, timer_decorator
 
@@ -79,6 +79,7 @@ def load_booking_data(s3_client, target_date=None, data_type='BookingData'):
     
     print(f"Loading {data_type} from S3: {s3_key}")
     
+    df = None
     # Try to download the file, with fallback for BookingDataAll
     try:
         df = download_s3_file_cached(s3_client, s3_key)
@@ -88,9 +89,6 @@ def load_booking_data(s3_client, target_date=None, data_type='BookingData'):
             print(f"  Primary BookingDataAll file not found, searching for alternatives...")
             
             # Try other days in the same month (e.g., if 01 doesn't exist, try 05)
-            from .s3_data_loader import S3_BUCKET
-            import boto3
-            
             try:
                 # List all objects in the month folder
                 prefix = f"{date_info['folder_year']}/{date_info['folder_month']}/"
@@ -121,12 +119,130 @@ def load_booking_data(s3_client, target_date=None, data_type='BookingData'):
                 else:
                     print(f"  No BookingDataAll files found in {prefix}")
                     print(f"  This might indicate the monthly BookingDataAll report hasn't been generated yet.")
-                    raise e
+                    # Don't raise yet, we'll try previous month fallback
+                    df = None
             except Exception as list_error:
                 print(f"  Error searching for alternatives: {list_error}")
-                raise e
+                df = None
         else:
             raise
+    
+    # Check if DataFrame is empty or None, and try fallback to previous month for BookingDataAll
+    if data_type == 'BookingDataAll' and (df is None or df.empty):
+        print(f"  Warning: {data_type} is empty or missing for {target_date.strftime('%Y-%m')}")
+        print(f"  Attempting to use previous month's data as fallback...")
+        
+        # Calculate previous month date
+        from datetime import timedelta
+        import calendar
+        
+        # Get first day of current month
+        first_day_current = target_date.replace(day=1)
+        # Go back one day to get into previous month
+        last_day_previous = first_day_current - timedelta(days=1)
+        
+        # Get date info for previous month
+        prev_date_info = get_file_date_info(last_day_previous)
+        
+        # Try to load previous month's BookingDataAll
+        prev_booking_all_df = None
+        prev_filename = f"{prev_date_info['file_prefix']}01-{data_type}-TBUK.csv"
+        prev_s3_key = f"{prev_date_info['folder_year']}/{prev_date_info['folder_month']}/{prev_filename}"
+        
+        print(f"  Trying previous month's BookingDataAll: {prev_s3_key}")
+        
+        try:
+            prev_booking_all_df = download_s3_file_cached(s3_client, prev_s3_key)
+            if prev_booking_all_df is not None and not prev_booking_all_df.empty:
+                print(f"  Loaded previous month's BookingDataAll ({len(prev_booking_all_df):,} records)")
+        except Exception as prev_e:
+            print(f"  Failed to load previous month's BookingDataAll: {prev_e}")
+            # Try to find any BookingDataAll in previous month
+            try:
+                prev_prefix = f"{prev_date_info['folder_year']}/{prev_date_info['folder_month']}/"
+                response = s3_client.list_objects_v2(
+                    Bucket=S3_BUCKET,
+                    Prefix=prev_prefix
+                )
+                
+                prev_booking_files = []
+                if 'Contents' in response:
+                    for obj in response['Contents']:
+                        key = obj['Key']
+                        if 'BookingDataAll-TBUK.csv' in key:
+                            prev_booking_files.append(key)
+                
+                if prev_booking_files:
+                    prev_booking_files.sort()
+                    prev_alternative_key = prev_booking_files[0]
+                    print(f"  Found alternative BookingDataAll in previous month: {prev_alternative_key}")
+                    prev_booking_all_df = download_s3_file_cached(s3_client, prev_alternative_key)
+                    if prev_booking_all_df is not None and not prev_booking_all_df.empty:
+                        print(f"  Loaded alternative BookingDataAll ({len(prev_booking_all_df):,} records)")
+            except Exception:
+                pass
+        
+        # Now try to load previous month's BookingData to get the complete month
+        prev_booking_data_df = None
+        print(f"  Also loading previous month's BookingData for complete coverage...")
+        
+        # For BookingData, we need to find the last day's file
+        try:
+            # List all BookingData files in previous month
+            prev_prefix = f"{prev_date_info['folder_year']}/{prev_date_info['folder_month']}/"
+            response = s3_client.list_objects_v2(
+                Bucket=S3_BUCKET,
+                Prefix=prev_prefix
+            )
+            
+            booking_data_files = []
+            if 'Contents' in response:
+                for obj in response['Contents']:
+                    key = obj['Key']
+                    # Look for BookingData files (not BookingDataAll)
+                    if 'BookingData-TBUK.csv' in key and 'BookingDataAll' not in key:
+                        booking_data_files.append(key)
+            
+            if booking_data_files:
+                # Sort and get the last one (end of month)
+                booking_data_files.sort()
+                last_booking_data = booking_data_files[-1]
+                print(f"  Loading previous month's BookingData: {last_booking_data}")
+                prev_booking_data_df = download_s3_file_cached(s3_client, last_booking_data)
+                if prev_booking_data_df is not None and not prev_booking_data_df.empty:
+                    print(f"  Loaded previous month's BookingData ({len(prev_booking_data_df):,} records)")
+        except Exception as bd_e:
+            print(f"  Could not load previous month's BookingData: {bd_e}")
+        
+        # Combine the DataFrames from previous month only
+        dfs_to_combine = []
+        if prev_booking_all_df is not None and not prev_booking_all_df.empty:
+            dfs_to_combine.append(prev_booking_all_df)
+        if prev_booking_data_df is not None and not prev_booking_data_df.empty:
+            dfs_to_combine.append(prev_booking_data_df)
+        
+        if dfs_to_combine:
+            print(f"  Combining {len(dfs_to_combine)} data sources from previous month...")
+            df = pd.concat(dfs_to_combine, ignore_index=True)
+            
+            # Remove duplicates based on key transaction fields
+            if 'BookingUrlId' in df.columns:
+                initial_count = len(df)
+                df = df.drop_duplicates(subset=['BookingUrlId'], keep='last')
+                duplicates_removed = initial_count - len(df)
+                if duplicates_removed > 0:
+                    print(f"  Removed {duplicates_removed:,} duplicate transactions")
+            
+            print(f"  Successfully created fallback dataset ({len(df):,} total records)")
+            print(f"  ⚠️  Note: Using {last_day_previous.strftime('%B %Y')} complete data (BookingDataAll + BookingData)")
+            print(f"     as {target_date.strftime('%B %Y')} BookingDataAll is unavailable")
+            print(f"     Scripts will separately load current month BookingData as normal")
+        else:
+            raise ValueError(f"Unable to load any booking data from current or previous month")
+    
+    # Final check - ensure we have valid data
+    if df is None or df.empty:
+        raise ValueError(f"Failed to load valid {data_type} data")
     
     # Convert TransactionDate
     df['TransactionDate'] = pd.to_datetime(df['TransactionDate'], errors='coerce', utc=True)

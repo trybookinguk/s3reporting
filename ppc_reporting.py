@@ -721,11 +721,23 @@ class PPCReporter:
         # Step 3: Match conversions with bookings
         matched_data = self.match_conversions()
         
-        # Step 4: Apply eligibility rules
-        eligible_data = self.apply_eligibility_rules(matched_data)
+        # Check if we have any data to process
+        if matched_data.empty:
+            logger.warning("No matched data found - creating report with GA4 data only")
+            # Create a minimal report with just GA4 data
+            eligible_data = self.ga_data.copy()
+            eligible_data['is_eligible'] = False
+            eligible_data['eligibility_reason'] = 'No booking data found'
+            eligible_data['matched_status'] = False
+            eligible_data['revenue_12m'] = 0
+            eligible_data['TotalRevenue'] = 0
+            eligible_data['events_with_tickets'] = 0
+        else:
+            # Step 4: Apply eligibility rules
+            eligible_data = self.apply_eligibility_rules(matched_data)
         
         # Note: We now include all records, including manual match required
-        logger.info(f"Report includes {len(eligible_data)} total accounts ({eligible_data['is_eligible'].sum()} eligible)")
+        logger.info(f"Report includes {len(eligible_data)} total accounts ({eligible_data.get('is_eligible', pd.Series()).sum() if 'is_eligible' in eligible_data.columns else 0} eligible)")
         
         # Step 5: Generate final report
         report = self.generate_report(eligible_data)

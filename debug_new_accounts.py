@@ -5,9 +5,9 @@ Debug script to analyze why new accounts count is 397 instead of 400.
 import pandas as pd
 from datetime import datetime
 import pytz
-from modules.utils.s3_data_loader import get_s3_client, download_s3_file_cached
+from modules.utils.data_loader import get_s3_client, download_s3_file_cached
 from modules.utils.date_utils import get_last_month_dates, get_file_date_info
-from modules.utils.data_loaders import load_accounts_data
+from modules.utils.data_loader import load_accounts_data
 
 def main():
     print("=== Debugging New Accounts Count ===\n")

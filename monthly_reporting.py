@@ -12,9 +12,9 @@ from datetime import datetime
 
 # Import shared modules
 from modules.utils.config import TEST_MODE, UK_TZ
-from modules.utils.s3_data_loader import get_s3_client, download_s3_file_cached
+from modules.utils.data_loader import get_s3_client, download_s3_file_cached
 from modules.utils.date_utils import get_last_month_dates, get_ytd_dates
-from modules.utils.data_loaders import load_accounts_data, load_booking_data, filter_successful_transactions
+from modules.utils.data_loader import load_accounts_data, load_booking_data, filter_successful_transactions
 from modules.utils.email_utils import send_html_email
 from modules.utils.metrics_calculator import (
     calculate_yoy_change, calculate_percentage, calculate_transaction_metrics,

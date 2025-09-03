@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Import from our modules
 from modules.utils.config import UK_TZ
-from modules.utils.s3_data_loader import get_s3_client, load_multiple_booking_files, download_s3_file_cached
+from modules.utils.data_loader import get_s3_client, load_multiple_booking_files, download_s3_file_cached
 from modules.booking_aggregator import BookingAggregator
 from modules.utils.config import CUTOFF_365, CUTOFF_730, EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS
 from modules.account_processor import process_accounts
@@ -131,7 +131,7 @@ def main():
         booking_data_df = None
         try:
             # Load both BookingDataAll and current month BookingData
-            from modules.utils.data_loaders import load_booking_data
+            from modules.utils.data_loader import load_booking_data
             
             print("Loading BookingDataAll...")
             logger.info("Loading BookingDataAll for revenue analysis")

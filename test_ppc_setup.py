@@ -99,7 +99,7 @@ for module_name, description in dependencies:
 print("\n5. S3 Connectivity Test:")
 if all(aws_vars.values()):
     try:
-        from modules.utils.s3_data_loader import get_s3_client
+        from modules.utils.data_loader import get_s3_client
         s3_client = get_s3_client()
         # Try to list a known file
         response = s3_client.head_object(

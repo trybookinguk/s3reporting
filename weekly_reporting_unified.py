@@ -11,9 +11,9 @@ from datetime import datetime
 
 # Import shared modules
 from modules.utils.config import TEST_MODE, UK_TZ
-from modules.utils.s3_data_loader import get_s3_client
+from modules.utils.data_loader import get_s3_client
 from modules.utils.date_utils import get_week_dates, get_latest_data_date
-from modules.utils.data_loaders import load_accounts_data
+from modules.utils.data_loader import load_accounts_data
 from modules.utils.email_utils import send_html_email
 from modules.utils.metrics_calculator import calculate_percentage, aggregate_by_day_of_week, filter_date_range, calculate_yoy_change
 from modules.utils.validation import validate_environment_variables

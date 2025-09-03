@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 # Import shared modules
 from modules.utils.config import TEST_MODE, UK_TZ, CUTOFF_365, CUTOFF_730
-from modules.utils.s3_data_loader import get_s3_client, download_s3_file_cached
+from modules.utils.data_loader import get_s3_client, download_s3_file_cached
 from modules.utils.email_utils import send_html_email_with_attachments
 from modules.utils.industry_utils import (
     filter_valid_industries, prepare_booking_data_with_industry,
@@ -25,7 +25,7 @@ from modules.utils.performance import timer_decorator
 def load_all_booking_data(s3_client, report_date):
     """Load and combine BookingDataAll and BookingData."""
     # Use the shared load_booking_data function which has fallback logic
-    from modules.utils.data_loaders import load_booking_data
+    from modules.utils.data_loader import load_booking_data
     
     print("Loading BookingDataAll...")
     booking_all_df = load_booking_data(s3_client, report_date, data_type='BookingDataAll')
@@ -388,7 +388,7 @@ def main():
             report_date = today
         
         # Load accounts data using the standardized loader
-        from modules.utils.data_loaders import load_accounts_data
+        from modules.utils.data_loader import load_accounts_data
         
         print("\nLoading accounts data...")
         accounts_df = load_accounts_data(s3_client, report_date)

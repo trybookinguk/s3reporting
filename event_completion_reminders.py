@@ -8,8 +8,8 @@ import sys
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from modules.utils.s3_data_loader import get_s3_client
-from modules.utils.data_loaders import (
+from modules.utils.data_loader import get_s3_client
+from modules.utils.data_loader import (
     load_accounts_data, load_booking_data, 
     load_account_balance_data, load_account_movement_daily_data,
     load_users_data

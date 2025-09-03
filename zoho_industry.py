@@ -6,7 +6,7 @@ from datetime import datetime
 
 # Import shared modules
 from modules.utils.config import S3_BUCKET, ZOHO_DOMAIN
-from modules.utils.s3_data_loader import get_s3_client, download_s3_file_cached
+from modules.utils.data_loader import get_s3_client, download_s3_file_cached
 from modules.utils.zoho_api import get_access_token, upsert_to_zoho, delete_from_zoho
 from modules.deleted_account_handler import process_deleted_accounts
 

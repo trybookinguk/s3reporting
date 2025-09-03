@@ -38,9 +38,9 @@ from google.oauth2 import service_account
 
 # Import shared modules
 from modules.utils.config import UK_TZ, TEST_MODE
-from modules.utils.s3_data_loader import get_s3_client
+from modules.utils.data_loader import get_s3_client
 from modules.utils.date_utils import get_latest_data_date
-from modules.utils.data_loaders import load_accounts_data, load_booking_data
+from modules.utils.data_loader import load_accounts_data, load_booking_data
 from modules.utils.performance import timer_decorator
 from modules.utils.validation import validate_environment_variables
 
@@ -315,7 +315,7 @@ class PPCReporter:
         logger.info(f"Loaded {len(self.accounts_data)} accounts")
         
         # Import the shared load_booking_data function with fallback logic
-        from modules.utils.data_loaders import load_booking_data
+        from modules.utils.data_loader import load_booking_data
         
         # Load BookingDataAll (historical data)
         logger.info("Loading BookingDataAll...")

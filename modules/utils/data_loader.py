@@ -123,7 +123,8 @@ def try_load_with_fallback(s3_client, bucket: str, primary_key: str,
         if df is not None and not df.empty:
             return df
     except Exception as e:
-        if 'NoSuchKey' not in str(e):
+        error_str = str(e)
+        if 'NoSuchKey' not in error_str and '404' not in error_str and 'Not Found' not in error_str:
             raise
     
     # If we get here, primary file is missing or empty
@@ -191,7 +192,8 @@ def yield_chunks_with_fallback(s3_client, bucket: str, primary_key: str,
         if found_primary:
             return  # Successfully loaded primary file
     except Exception as e:
-        if 'NoSuchKey' not in str(e):
+        error_str = str(e)
+        if 'NoSuchKey' not in error_str and '404' not in error_str and 'Not Found' not in error_str:
             raise
     
     # If we get here, primary file is missing
@@ -386,10 +388,21 @@ class UnifiedDataLoader:
         # Download from S3
         logger.info(f"Downloading {key} from S3...")
         
-        # Get file info
-        response = self.s3_client.head_object(Bucket=S3_BUCKET, Key=key)
-        file_size_mb = response['ContentLength'] / (1024 * 1024)
-        logger.info(f"  File size: {file_size_mb:.1f} MB")
+        # Get file info (may fail if file doesn't exist)
+        try:
+            response = self.s3_client.head_object(Bucket=S3_BUCKET, Key=key)
+            file_size_mb = response['ContentLength'] / (1024 * 1024)
+            logger.info(f"  File size: {file_size_mb:.1f} MB")
+        except self.s3_client.exceptions.NoSuchKey:
+            logger.warning(f"File not found: {key}")
+            raise
+        except Exception as e:
+            if '404' in str(e) or 'Not Found' in str(e):
+                logger.warning(f"File not found: {key}")
+                raise
+            else:
+                # For other errors, log but continue
+                logger.warning(f"Could not get file info: {e}")
         
         # Read with optimized dtypes
         chunks = []

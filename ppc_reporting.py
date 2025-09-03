@@ -582,10 +582,19 @@ class PPCReporter:
         
         if matched_mask.any():
             # Calculate account age in days
-            df.loc[matched_mask, 'account_age_days'] = (
-                df.loc[matched_mask, 'conversion_date'] - 
-                df.loc[matched_mask, 'AccountCreatedDate']
-            ).dt.days
+            # Ensure both columns are datetime before subtraction
+            try:
+                df.loc[matched_mask, 'conversion_date'] = pd.to_datetime(df.loc[matched_mask, 'conversion_date'])
+                df.loc[matched_mask, 'AccountCreatedDate'] = pd.to_datetime(df.loc[matched_mask, 'AccountCreatedDate'])
+                
+                age_delta = (
+                    df.loc[matched_mask, 'conversion_date'] - 
+                    df.loc[matched_mask, 'AccountCreatedDate']
+                )
+                df.loc[matched_mask, 'account_age_days'] = age_delta.dt.days
+            except Exception as e:
+                logger.warning(f"Error calculating account age: {e}")
+                df.loc[matched_mask, 'account_age_days'] = 0
             
             # Check for previous events (beyond the converted event)
             for idx, row in df[matched_mask].iterrows():
@@ -692,7 +701,15 @@ class PPCReporter:
         date_cols = ['created_date', 'conversion_date']
         for col in date_cols:
             if col in report.columns:
-                report[col] = report[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+                try:
+                    # Ensure it's datetime before formatting
+                    report[col] = pd.to_datetime(report[col])
+                    # Handle NaT values explicitly
+                    report[col] = report[col].fillna(pd.NaT).dt.strftime('%Y-%m-%d %H:%M:%S')
+                except (AttributeError, TypeError) as e:
+                    logger.warning(f"Could not format datetime column {col}: {e}")
+                    # Leave as-is if formatting fails
+                    pass
         
         # Round numeric columns
         numeric_cols = ['total_revenue', 'revenue_12m']
@@ -741,7 +758,12 @@ class PPCReporter:
             eligible_data['AccountName'] = 'Manual Match Required - Event ' + eligible_data['event_id'].astype(str)
             eligible_data['Industry'] = 'Unknown'
             eligible_data['SubIndustry'] = 'Unknown'
-            eligible_data['AccountCreatedDate'] = pd.NaT
+            # Ensure datetime columns are proper datetime type
+            eligible_data['AccountCreatedDate'] = pd.to_datetime(pd.NaT)
+            if 'conversion_date' not in eligible_data.columns and 'date' in eligible_data.columns:
+                eligible_data['conversion_date'] = pd.to_datetime(eligible_data['date'])
+            elif 'conversion_date' in eligible_data.columns:
+                eligible_data['conversion_date'] = pd.to_datetime(eligible_data['conversion_date'])
             eligible_data['EventName'] = 'Event ' + eligible_data['event_id'].astype(str)
             eligible_data['TicketQuantity'] = 0
             eligible_data['is_eligible'] = False

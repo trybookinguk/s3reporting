@@ -8,6 +8,13 @@
       "active": true
     },
     {
+      "campaign_name": "Eventbrite",
+      "source": "google",
+      "medium": "cpc",
+      "platform": "google_ads",
+      "active": true
+    },
+    {
       "campaign_name": "We Are Digital - Organic Keywords - Paid Testing",
       "source": "google",
       "medium": "cpc",

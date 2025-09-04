@@ -397,11 +397,42 @@ class PPCReporter:
         
         # Filter booking data for these events
         # EventId is now stored as Int64 (nullable integer)
+        # First check if EventId column exists
+        if 'EventId' not in self.booking_data.columns:
+            logger.error(f"EventId column not found! Available columns: {list(self.booking_data.columns)}")
+            return pd.DataFrame()
+        
         # Check EventId data type and sample values for debugging
         logger.debug(f"EventId dtype in booking_data: {self.booking_data['EventId'].dtype}")
         event_id_sample = self.booking_data['EventId'].dropna().head()
         if not event_id_sample.empty:
             logger.debug(f"Sample EventIds from booking data: {event_id_sample.tolist()}")
+        
+        # DEBUG: Check for specific event 90699
+        if 90699 in event_ids_int:
+            logger.info("DEBUG: Event 90699 found in GA4 event IDs")
+            # Check if it exists in booking data
+            event_90699_mask = self.booking_data['EventId'] == 90699
+            event_90699_count = event_90699_mask.sum()
+            logger.info(f"DEBUG: Event 90699 found {event_90699_count} times in booking data")
+            if event_90699_count > 0:
+                sample_row = self.booking_data[event_90699_mask].iloc[0]
+                logger.info(f"DEBUG: Sample booking for event 90699 - EventId value: {sample_row['EventId']}, type: {type(sample_row['EventId'])}")
+        
+        # Check the actual values in EventId column
+        unique_event_ids = self.booking_data['EventId'].dropna().unique()
+        logger.info(f"DEBUG: Total unique EventIds in booking data: {len(unique_event_ids)}")
+        if 90699 in unique_event_ids:
+            logger.info("DEBUG: Event 90699 IS in booking data unique EventIds")
+        else:
+            logger.info("DEBUG: Event 90699 is NOT in booking data unique EventIds")
+            # Check if it might be there as a different type
+            for eid in unique_event_ids[:20]:  # Check first 20
+                try:
+                    if str(eid) == '90699' or (pd.notna(eid) and int(eid) == 90699):
+                        logger.info(f"DEBUG: Found potential match - EventId: {eid}, type: {type(eid)}")
+                except (ValueError, TypeError):
+                    pass
         
         # Direct comparison with Int64 should work
         event_bookings = self.booking_data[

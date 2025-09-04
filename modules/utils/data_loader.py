@@ -240,9 +240,10 @@ class UnifiedDataLoader:
     # Optimized data types for memory efficiency
     # Using float types for numeric columns that may contain NA values
     # (pandas can't convert NA to int directly, but can to float)
+    # For pd.read_csv, we need to use object type for IDs then convert
     OPTIMIZED_DTYPES = {
         'AccountId': 'float32',  # Changed from int32 to handle NAs
-        'EventId': 'Int64',  # Nullable integer for proper ID matching  
+        'EventId': 'object',  # Read as object, convert to int64 later  
         'BookingTransactionId': 'float64',  # Changed from int64 to handle NAs
         'BookingId': 'float64',  # Changed from int64 to handle NAs
         'TicketQuantity': 'float32',  # Changed from int32 to handle NAs
@@ -254,11 +255,14 @@ class UnifiedDataLoader:
         'Surcharge': 'float32',
         'ProcessingFeeSurcharge': 'float32',
         'Year': 'float32',  # Changed from int16 to handle NAs
-        'DonationCampaignId': 'Int64',  # Nullable integer
-        'CustomerId': 'Int64',  # Nullable integer
+        'DonationCampaignId': 'object',  # Read as object, convert later
+        'CustomerId': 'object',  # Read as object, convert later
         'GatewayId': 'object',
         'GiftCertificateId': 'object',
     }
+    
+    # Columns that should be converted to Int64 after reading
+    NULLABLE_INT_COLUMNS = ['EventId', 'DonationCampaignId', 'CustomerId']
     
     # Categorical columns for further memory optimization
     CATEGORICAL_COLUMNS = [
@@ -427,6 +431,14 @@ class UnifiedDataLoader:
                             # Skip categorical conversion if it fails
                             pass
                 
+                # Convert nullable int columns
+                for col in self.NULLABLE_INT_COLUMNS:
+                    if col in chunk.columns:
+                        try:
+                            chunk[col] = pd.to_numeric(chunk[col], errors='coerce').astype('Int64')
+                        except Exception:
+                            pass  # Keep as object if conversion fails
+                
                 chunks.append(chunk)
                 
                 if (i + 1) % 10 == 0:
@@ -503,6 +515,14 @@ class UnifiedDataLoader:
             for col in self.CATEGORICAL_COLUMNS:
                 if col in chunk.columns:
                     chunk[col] = chunk[col].astype('category')
+            
+            # Convert nullable int columns
+            for col in self.NULLABLE_INT_COLUMNS:
+                if col in chunk.columns:
+                    try:
+                        chunk[col] = pd.to_numeric(chunk[col], errors='coerce').astype('Int64')
+                    except Exception:
+                        pass  # Keep as object if conversion fails
             
             # Parse dates
             if 'TransactionDate' in chunk.columns:

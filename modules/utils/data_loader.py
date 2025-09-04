@@ -242,7 +242,7 @@ class UnifiedDataLoader:
     # (pandas can't convert NA to int directly, but can to float)
     OPTIMIZED_DTYPES = {
         'AccountId': 'float32',  # Changed from int32 to handle NAs
-        'EventId': 'float32',  
+        'EventId': 'Int64',  # Nullable integer for proper ID matching  
         'BookingTransactionId': 'float64',  # Changed from int64 to handle NAs
         'BookingId': 'float64',  # Changed from int64 to handle NAs
         'TicketQuantity': 'float32',  # Changed from int32 to handle NAs
@@ -254,8 +254,8 @@ class UnifiedDataLoader:
         'Surcharge': 'float32',
         'ProcessingFeeSurcharge': 'float32',
         'Year': 'float32',  # Changed from int16 to handle NAs
-        'DonationCampaignId': 'float32',
-        'CustomerId': 'float32',
+        'DonationCampaignId': 'Int64',  # Nullable integer
+        'CustomerId': 'Int64',  # Nullable integer
         'GatewayId': 'object',
         'GiftCertificateId': 'object',
     }

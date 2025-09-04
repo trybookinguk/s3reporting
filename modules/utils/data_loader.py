@@ -597,30 +597,38 @@ class UnifiedDataLoader:
         
         date_info = get_file_date_info(target_date)
         
-        # BookingDataAll has special naming with 05 suffix (generated on 5th of month)
-        if data_type == 'BookingDataAll':
-            filename = f"{date_info['file_prefix']}05-{data_type}-TBUK.csv"
-        else:
-            filename = f"{date_info['file_prefix']}-{data_type}-TBUK.csv"
-        
-        s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
-        
-        logger.info(f"Loading {data_type} from S3: {s3_key}")
-        
-        # For BookingDataAll, use fallback logic
+        # For BookingDataAll, dynamically find the file and use fallback logic
         if data_type == 'BookingDataAll':
             year = int(date_info['folder_year'])
             month = int(date_info['folder_month'])
             
+            # Look for any BookingDataAll file in the month (could be 01, 05, or other dates)
+            booking_all_files, _ = find_booking_files_in_month(
+                self.s3_client, S3_BUCKET, year, month
+            )
+            
+            if booking_all_files:
+                # Use the first (or only) BookingDataAll file found
+                s3_key = booking_all_files[0]
+                logger.info(f"Found {data_type} file: {s3_key}")
+            else:
+                # No file found - will trigger fallback logic below
+                s3_key = None
+                logger.info(f"No {data_type} file found in {year:04d}/{month:02d}/")
+            
             df = try_load_with_fallback(
                 s3_client=self.s3_client,
                 bucket=S3_BUCKET,
-                primary_key=s3_key,
-                load_func=lambda client, key: self.download_s3_file(key),
+                primary_key=s3_key,  # May be None if file not found
+                load_func=lambda client, key: self.download_s3_file(key) if key else None,
                 current_year=year,
                 current_month=month
             )
         else:
+            # Regular BookingData - standard filename
+            filename = f"{date_info['file_prefix']}-{data_type}-TBUK.csv"
+            s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
+            logger.info(f"Loading {data_type} from S3: {s3_key}")
             df = self.download_s3_file(s3_key)
         
         # Process booking data
@@ -661,37 +669,33 @@ class UnifiedDataLoader:
         
         date_info = get_file_date_info(target_date)
         
-        # BookingDataAll has special naming with 05 suffix (generated on 5th of month)
-        if data_type == 'BookingDataAll':
-            filename = f"{date_info['file_prefix']}05-{data_type}-TBUK.csv"
-        else:
-            filename = f"{date_info['file_prefix']}-{data_type}-TBUK.csv"
-        
-        s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
-        
-        logger.info(f"Loading chunks for {data_type} from S3: {s3_key}")
-        
-        # For BookingDataAll, use fallback logic
+        # For BookingDataAll, dynamically find the file
         if data_type == 'BookingDataAll':
             year = int(date_info['folder_year'])
             month = int(date_info['folder_month'])
             
-            for chunk in yield_chunks_with_fallback(
-                s3_client=self.s3_client,
-                bucket=S3_BUCKET,
-                primary_key=s3_key,
-                load_chunks_func=lambda client, key, chunk_size: self.load_chunks(key, chunk_size=chunk_size),
-                current_year=year,
-                current_month=month,
-                chunk_size=chunk_size
-            ):
-                # Process chunk
-                self._process_booking_chunk(chunk)
-                yield chunk
+            # Look for any BookingDataAll file in the month
+            booking_all_files, _ = find_booking_files_in_month(
+                self.s3_client, S3_BUCKET, year, month
+            )
+            
+            if booking_all_files:
+                s3_key = booking_all_files[0]
+                logger.info(f"Found {data_type} file for chunks: {s3_key}")
+            else:
+                # If no file found, return empty iterator
+                logger.warning(f"No {data_type} file found in {year:04d}/{month:02d}/")
+                return
         else:
-            for chunk in self.load_chunks(s3_key, chunk_size=chunk_size):
-                self._process_booking_chunk(chunk)
-                yield chunk
+            # Regular BookingData - standard filename
+            filename = f"{date_info['file_prefix']}-{data_type}-TBUK.csv"
+            s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
+            logger.info(f"Loading chunks for {data_type} from S3: {s3_key}")
+        
+        # Yield chunks from the file
+        for chunk in self.load_chunks(s3_key, chunk_size=chunk_size):
+            self._process_booking_chunk(chunk)
+            yield chunk
     
     def _process_booking_chunk(self, chunk: pd.DataFrame):
         """Process a booking data chunk."""

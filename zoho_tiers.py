@@ -66,14 +66,25 @@ def main():
     logger.info(f"Processing data for: {report_date.strftime('%Y-%m-%d')}")
     print(f"Processing data for: {report_date.strftime('%Y-%m-%d')}")
     
-    # S3 keys
-    key_all = f"{year}/{month}/{prefix}05-BookingDataAll-TBUK.csv"  # Files generated on 5th of month
-    key_month = f"{year}/{month}/{prefix}-BookingData-TBUK.csv"
-    key_account = f"{year}/{month}/{prefix}-Accounts-TBUK.csv"
-    
     try:
-        # Initialize S3 client
+        # Initialize S3 client first
         s3_client = get_s3_client()
+        
+        # S3 keys
+        key_month = f"{year}/{month}/{prefix}-BookingData-TBUK.csv"
+        key_account = f"{year}/{month}/{prefix}-Accounts-TBUK.csv"
+        
+        # Find BookingDataAll file dynamically (could be 01, 05, or other dates)
+        from modules.utils.data_loader import find_booking_files_in_month, S3_BUCKET
+        booking_all_files, _ = find_booking_files_in_month(s3_client, S3_BUCKET, 
+                                                           int(year), int(month))
+        
+        if booking_all_files:
+            key_all = booking_all_files[0]  # Use the first (or only) BookingDataAll file
+            logger.info(f"Found BookingDataAll file: {key_all}")
+        else:
+            key_all = None
+            logger.info(f"No BookingDataAll file found in {year}/{month}/")
         
         # Load Account report for LastEventCreation data
         print(f"Loading Account report from: {key_account}")

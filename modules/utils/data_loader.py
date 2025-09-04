@@ -385,6 +385,15 @@ class UnifiedDataLoader:
                 with open(cache_path, 'rb') as f:
                     df = pickle.load(f)
                 logger.info(f"  Loaded {len(df):,} rows from cache")
+                
+                # Convert nullable int columns even when loading from cache
+                for col in self.NULLABLE_INT_COLUMNS:
+                    if col in df.columns:
+                        try:
+                            df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+                        except Exception:
+                            pass  # Keep as-is if conversion fails
+                
                 return df
             except Exception as e:
                 logger.warning(f"Failed to load cache: {e}")
@@ -493,6 +502,14 @@ class UnifiedDataLoader:
             try:
                 with open(cache_path, 'rb') as f:
                     df = pickle.load(f)
+                
+                # Convert nullable int columns even when loading from cache
+                for col in self.NULLABLE_INT_COLUMNS:
+                    if col in df.columns:
+                        try:
+                            df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+                        except Exception:
+                            pass  # Keep as-is if conversion fails
                 
                 # Yield chunks from cached DataFrame
                 for i in range(0, len(df), chunk_size):

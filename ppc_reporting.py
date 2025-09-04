@@ -434,10 +434,22 @@ class PPCReporter:
                 except (ValueError, TypeError):
                     pass
         
-        # Direct comparison with Int64 should work
-        event_bookings = self.booking_data[
-            self.booking_data['EventId'].isin(event_ids_int)
-        ].copy()
+        # Handle comparison whether EventId is Int64, float32, or other numeric type
+        # Convert EventId to int for matching, handling both float and Int64 types
+        try:
+            # First try to convert to int directly
+            event_id_values = pd.to_numeric(self.booking_data['EventId'], errors='coerce')
+            # Round in case of float values like 90699.0
+            event_id_values = event_id_values.round().astype('Int64')
+            event_bookings = self.booking_data[
+                event_id_values.isin(event_ids_int)
+            ].copy()
+        except Exception as e:
+            logger.warning(f"Error converting EventId for matching: {e}")
+            # Fallback to direct comparison
+            event_bookings = self.booking_data[
+                self.booking_data['EventId'].isin(event_ids_int)
+            ].copy()
         
         if event_bookings.empty:
             logger.warning("No booking data found for converted events")

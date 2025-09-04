@@ -162,10 +162,10 @@ def try_load_with_fallback(s3_client, bucket: str, primary_key: str,
         logger.info(f"Combining {len(dfs_to_combine)} fallback data sources...")
         combined_df = pd.concat(dfs_to_combine, ignore_index=True)
         
-        # Remove duplicates if BookingUrlId exists
-        if 'BookingUrlId' in combined_df.columns:
+        # Remove duplicates if BookingTransactionId exists (primary key for bookings)
+        if 'BookingTransactionId' in combined_df.columns:
             initial_count = len(combined_df)
-            combined_df = combined_df.drop_duplicates(subset=['BookingUrlId'], keep='last')
+            combined_df = combined_df.drop_duplicates(subset=['BookingTransactionId'], keep='last')
             duplicates_removed = initial_count - len(combined_df)
             if duplicates_removed > 0:
                 logger.info(f"Removed {duplicates_removed:,} duplicate transactions")

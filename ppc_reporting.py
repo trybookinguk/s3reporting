@@ -379,22 +379,38 @@ class PPCReporter:
         logger.info(f"Found {len(event_ids)} unique events with conversions")
         
         # Convert event IDs to integers for matching (they come as strings from GA4)
-        # Also handle the float conversion issue where EventId might be float32
+        event_ids_int = []
         try:
-            event_ids_int = [int(float(eid)) for eid in event_ids if eid and eid.isdigit()]
+            for eid in event_ids:
+                if eid:  # Check if not None or empty
+                    try:
+                        # Convert to string first in case it's a numpy object, then to int
+                        event_ids_int.append(int(str(eid)))
+                    except (ValueError, TypeError):
+                        continue  # Skip if can't convert
             logger.info(f"Converted {len(event_ids_int)} event IDs to integers for matching")
-        except (ValueError, AttributeError) as e:
+            if event_ids_int:
+                logger.debug(f"Sample event IDs from GA4: {event_ids_int[:5]}")
+        except Exception as e:
             logger.warning(f"Error converting event IDs: {e}")
             event_ids_int = []
         
         # Filter booking data for these events
-        # Convert EventId to int for matching (it's stored as float32 due to NA handling)
+        # EventId is now stored as Int64 (nullable integer)
+        # Check EventId data type and sample values for debugging
+        logger.debug(f"EventId dtype in booking_data: {self.booking_data['EventId'].dtype}")
+        event_id_sample = self.booking_data['EventId'].dropna().head()
+        if not event_id_sample.empty:
+            logger.debug(f"Sample EventIds from booking data: {event_id_sample.tolist()}")
+        
+        # Direct comparison with Int64 should work
         event_bookings = self.booking_data[
-            self.booking_data['EventId'].fillna(-1).astype('int64').isin(event_ids_int)
+            self.booking_data['EventId'].isin(event_ids_int)
         ].copy()
         
         if event_bookings.empty:
             logger.warning("No booking data found for converted events")
+            logger.debug(f"Looked for event IDs: {event_ids_int[:10] if event_ids_int else 'None'}")
             return pd.DataFrame()
         
         # Check if we have AccountId column

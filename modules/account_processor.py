@@ -440,7 +440,16 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     # Vectorized days since last activity calculation
     # Convert to datetime if needed and calculate days difference vectorized
     last_booking_dates = pd.to_datetime(metrics_df['last_booking_date'], errors='coerce')
-    metrics_df['days_since_last'] = (pd.Timestamp(TODAY) - last_booking_dates).dt.days
+    # Ensure timezone compatibility: if last_booking_dates are timezone-aware, make TODAY timezone-aware too
+    if len(last_booking_dates) > 0 and last_booking_dates.notna().any():
+        first_valid_date = last_booking_dates.dropna().iloc[0] if last_booking_dates.notna().any() else None
+        if hasattr(first_valid_date, 'tz') and first_valid_date.tz is not None:
+            today_ts = pd.Timestamp(TODAY, tz='UTC')
+        else:
+            today_ts = pd.Timestamp(TODAY)
+    else:
+        today_ts = pd.Timestamp(TODAY)
+    metrics_df['days_since_last'] = (today_ts - last_booking_dates).dt.days
     # Fill NaT values with 999
     metrics_df['days_since_last'] = metrics_df['days_since_last'].fillna(999).astype(int)
     

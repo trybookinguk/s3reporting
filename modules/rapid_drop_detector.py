@@ -180,7 +180,16 @@ def calculate_period_revenue(account_data, weeks, offset=0):
     account_data['TransactionDate'] = pd.to_datetime(account_data['TransactionDate'], errors='coerce')
     
     # Calculate period boundaries
-    end_date = datetime.now() - timedelta(weeks=offset)
+    # Use UTC-aware datetime if TransactionDate is timezone-aware
+    if len(account_data) > 0 and account_data['TransactionDate'].notna().any():
+        first_valid_date = account_data['TransactionDate'].dropna().iloc[0] if account_data['TransactionDate'].notna().any() else None
+        if hasattr(first_valid_date, 'tz') and first_valid_date.tz is not None:
+            import pytz
+            end_date = datetime.now(pytz.UTC) - timedelta(weeks=offset)
+        else:
+            end_date = datetime.now() - timedelta(weeks=offset)
+    else:
+        end_date = datetime.now() - timedelta(weeks=offset)
     start_date = end_date - timedelta(weeks=weeks)
     
     # Filter data to period

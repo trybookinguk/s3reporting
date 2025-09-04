@@ -35,8 +35,17 @@ def calculate_activity_ratings(df):
         created_dates = pd.to_datetime(df.loc[valid_created_dates, 'account_created_date'], errors='coerce')
         valid_dates_mask = created_dates.notna()
         if valid_dates_mask.any():
+            # Ensure timezone compatibility
+            if len(created_dates[valid_dates_mask]) > 0:
+                first_date = created_dates[valid_dates_mask].iloc[0]
+                if hasattr(first_date, 'tz') and first_date.tz is not None:
+                    today_ts = pd.Timestamp(today, tz='UTC')
+                else:
+                    today_ts = pd.Timestamp(today)
+            else:
+                today_ts = pd.Timestamp(today)
             calculated_days = (
-                pd.Timestamp(today) - created_dates[valid_dates_mask]
+                today_ts - created_dates[valid_dates_mask]
             ).dt.days
             # Prevent future dates from creating negative days
             calculated_days = calculated_days.clip(lower=0)

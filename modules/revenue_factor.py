@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional, Any, Tuple
 from dataclasses import dataclass
 import logging
+import pytz
 
 from .utils.config import (
     MIN_ACCOUNTS_FOR_QUINTILES, MATURE_ACCOUNT_AGE_DAYS,
@@ -309,7 +310,9 @@ def get_revenue_factor(current_revenue: float, historical_revenue: pd.DataFrame,
                     if not account_row.empty and 'DateTimeCreated' in account_row.columns:
                         created_date = pd.to_datetime(account_row['DateTimeCreated'].iloc[0], errors='coerce')
                         if pd.notna(created_date):
-                            account_age_days = (datetime.now() - created_date).days
+                            # Use UTC-aware datetime for consistency
+                            now_utc = datetime.now(pytz.UTC) if hasattr(created_date, 'tz') and created_date.tz is not None else datetime.now()
+                            account_age_days = (now_utc - created_date).days
             except Exception as e:
                 logger.warning(f"Could not calculate account age from accounts_df: {e}")
         

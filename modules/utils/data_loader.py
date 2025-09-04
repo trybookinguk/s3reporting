@@ -597,9 +597,9 @@ class UnifiedDataLoader:
         
         date_info = get_file_date_info(target_date)
         
-        # BookingDataAll has special naming with 01 suffix
+        # BookingDataAll has special naming with 05 suffix (generated on 5th of month)
         if data_type == 'BookingDataAll':
-            filename = f"{date_info['file_prefix']}01-{data_type}-TBUK.csv"
+            filename = f"{date_info['file_prefix']}05-{data_type}-TBUK.csv"
         else:
             filename = f"{date_info['file_prefix']}-{data_type}-TBUK.csv"
         
@@ -661,9 +661,9 @@ class UnifiedDataLoader:
         
         date_info = get_file_date_info(target_date)
         
-        # BookingDataAll has special naming
+        # BookingDataAll has special naming with 05 suffix (generated on 5th of month)
         if data_type == 'BookingDataAll':
-            filename = f"{date_info['file_prefix']}01-{data_type}-TBUK.csv"
+            filename = f"{date_info['file_prefix']}05-{data_type}-TBUK.csv"
         else:
             filename = f"{date_info['file_prefix']}-{data_type}-TBUK.csv"
         

@@ -90,6 +90,10 @@ class BookingAggregator:
         # Drop duplicates
         chunk = chunk.drop_duplicates(subset='BookingTransactionId')
         
+        # Filter to only successful transactions, excluding Failed and Unknown
+        if 'Status' in chunk.columns:
+            chunk = chunk[chunk['Status'] == 'Successful']
+        
         return chunk
     
     def finalize_metrics(self) -> Dict[int, Dict[str, Any]]:

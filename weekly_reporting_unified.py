@@ -46,6 +46,8 @@ def analyze_accounts(df, week_start, week_end, last_year_week_start, last_year_w
     if not with_events.empty:
         # Use .loc to avoid SettingWithCopyWarning
         with_events = with_events.copy()
+        # Convert both DateTimeCreated and FirstEventCreation to Europe/London timezone
+        with_events.loc[:, 'DateTimeCreated'] = pd.to_datetime(with_events['DateTimeCreated'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
         with_events.loc[:, 'FirstEventCreation'] = pd.to_datetime(with_events['FirstEventCreation'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
         week_1 = with_events[with_events['FirstEventCreation'] <= with_events['DateTimeCreated'] + pd.Timedelta(weeks=1)]
         week_2 = with_events[(with_events['FirstEventCreation'] > with_events['DateTimeCreated'] + pd.Timedelta(weeks=1)) & 
@@ -60,7 +62,7 @@ def analyze_accounts(df, week_start, week_end, last_year_week_start, last_year_w
     
     # Days to create stats
     if not with_events.empty:
-        with_events = with_events.copy()
+        # No need to copy again or convert timezones - already done above
         with_events['DaysToCreate'] = (with_events['FirstEventCreation'] - with_events['DateTimeCreated']).dt.days
     else:
         with_events['DaysToCreate'] = pd.Series(dtype='float64')

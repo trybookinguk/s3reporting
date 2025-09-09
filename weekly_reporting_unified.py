@@ -46,8 +46,18 @@ def analyze_accounts(df, week_start, week_end, last_year_week_start, last_year_w
     if not with_events.empty:
         # Use .loc to avoid SettingWithCopyWarning
         with_events = with_events.copy()
-        # Convert both DateTimeCreated and FirstEventCreation to Europe/London timezone
-        with_events.loc[:, 'DateTimeCreated'] = pd.to_datetime(with_events['DateTimeCreated'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
+        
+        # Convert DateTimeCreated to Europe/London timezone
+        # It comes from load_accounts_data as UTC timezone-aware
+        if with_events['DateTimeCreated'].dt.tz is None:
+            # Timezone-naive, assume UTC and convert
+            with_events.loc[:, 'DateTimeCreated'] = pd.to_datetime(with_events['DateTimeCreated'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
+        else:
+            # Already has timezone, just convert to London
+            with_events.loc[:, 'DateTimeCreated'] = with_events['DateTimeCreated'].dt.tz_convert('Europe/London')
+        
+        # Convert FirstEventCreation to Europe/London timezone
+        # This field comes as a string from the CSV
         with_events.loc[:, 'FirstEventCreation'] = pd.to_datetime(with_events['FirstEventCreation'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
         week_1 = with_events[with_events['FirstEventCreation'] <= with_events['DateTimeCreated'] + pd.Timedelta(weeks=1)]
         week_2 = with_events[(with_events['FirstEventCreation'] > with_events['DateTimeCreated'] + pd.Timedelta(weeks=1)) & 
@@ -152,12 +162,18 @@ def create_external_email_content(stats, df_current):
     with_events_count = len(stats['with_events'])
     with_events_pct = calculate_percentage(with_events_count, total_accounts)
     
-    # Daily breakdown
+    # Daily breakdown - ensure DateTimeCreated is in London timezone for correct time classification
+    df_for_daily = df_current.copy()
+    if df_for_daily['DateTimeCreated'].dt.tz is None:
+        df_for_daily['DateTimeCreated'] = df_for_daily['DateTimeCreated'].dt.tz_localize('UTC').dt.tz_convert('Europe/London')
+    else:
+        df_for_daily['DateTimeCreated'] = df_for_daily['DateTimeCreated'].dt.tz_convert('Europe/London')
+    
     def classify_time(dt):
         return 'Day' if (dt.hour == 17 and dt.minute < 30) or (9 <= dt.hour < 17) else 'Evening'
     
     daily = (
-        df_current
+        df_for_daily
         .assign(DayName=lambda df: df['DateTimeCreated'].dt.strftime('%A'))
         .assign(TimeCategory=lambda df: df['DateTimeCreated'].apply(classify_time))
         .groupby(['DayName', 'TimeCategory'])

@@ -51,14 +51,18 @@ def analyze_accounts(df, week_start, week_end, last_year_week_start, last_year_w
         # It comes from load_accounts_data as UTC timezone-aware
         if with_events['DateTimeCreated'].dt.tz is None:
             # Timezone-naive, assume UTC and convert
-            with_events.loc[:, 'DateTimeCreated'] = pd.to_datetime(with_events['DateTimeCreated'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
+            with_events['DateTimeCreated'] = pd.to_datetime(with_events['DateTimeCreated'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
         else:
             # Already has timezone, just convert to London
-            with_events.loc[:, 'DateTimeCreated'] = with_events['DateTimeCreated'].dt.tz_convert('Europe/London')
+            with_events['DateTimeCreated'] = with_events['DateTimeCreated'].dt.tz_convert('Europe/London')
         
         # Convert FirstEventCreation to Europe/London timezone
-        # This field comes as a string from the CSV
-        with_events.loc[:, 'FirstEventCreation'] = pd.to_datetime(with_events['FirstEventCreation'], errors='coerce', utc=True).dt.tz_convert('Europe/London')
+        # Parse FirstEventCreation - it might be string or already datetime
+        first_event_parsed = pd.to_datetime(with_events['FirstEventCreation'], errors='coerce', utc=True)
+        # Only convert non-null values to avoid issues with NaT
+        with_events['FirstEventCreation'] = first_event_parsed.dt.tz_convert('Europe/London')
+        
+        # Filter comparisons
         week_1 = with_events[with_events['FirstEventCreation'] <= with_events['DateTimeCreated'] + pd.Timedelta(weeks=1)]
         week_2 = with_events[(with_events['FirstEventCreation'] > with_events['DateTimeCreated'] + pd.Timedelta(weeks=1)) & 
                              (with_events['FirstEventCreation'] <= with_events['DateTimeCreated'] + pd.Timedelta(weeks=2))]
@@ -67,15 +71,18 @@ def analyze_accounts(df, week_start, week_end, last_year_week_start, last_year_w
         week_4 = with_events[(with_events['FirstEventCreation'] > with_events['DateTimeCreated'] + pd.Timedelta(weeks=3)) & 
                              (with_events['FirstEventCreation'] <= with_events['DateTimeCreated'] + pd.Timedelta(weeks=4))]
         more_than_month = with_events[with_events['FirstEventCreation'] > with_events['DateTimeCreated'] + pd.Timedelta(weeks=4)]
+        
+        # Days to create stats - calculate only for non-null FirstEventCreation
+        valid_events = with_events['FirstEventCreation'].notna()
+        with_events.loc[valid_events, 'DaysToCreate'] = (
+            with_events.loc[valid_events, 'FirstEventCreation'] - 
+            with_events.loc[valid_events, 'DateTimeCreated']
+        ).dt.days
+        # Fill NaN for rows where FirstEventCreation is null
+        with_events['DaysToCreate'] = with_events['DaysToCreate'].fillna(pd.NA)
     else:
         week_1 = week_2 = week_3 = week_4 = more_than_month = pd.DataFrame()
-    
-    # Days to create stats
-    if not with_events.empty:
-        # No need to copy again or convert timezones - already done above
-        with_events['DaysToCreate'] = (with_events['FirstEventCreation'] - with_events['DateTimeCreated']).dt.days
-    else:
-        with_events['DaysToCreate'] = pd.Series(dtype='float64')
+        with_events = pd.DataFrame()
     
     return {
         'week_start': week_start,
@@ -90,8 +97,8 @@ def analyze_accounts(df, week_start, week_end, last_year_week_start, last_year_w
         'week_3': week_3,
         'week_4': week_4,
         'more_than_month': more_than_month,
-        'avg_days': with_events['DaysToCreate'].mean() if not with_events.empty else 0,
-        'median_days': with_events['DaysToCreate'].median() if not with_events.empty else 0,
+        'avg_days': with_events['DaysToCreate'].mean() if not with_events.empty and 'DaysToCreate' in with_events.columns else 0,
+        'median_days': with_events['DaysToCreate'].median() if not with_events.empty and 'DaysToCreate' in with_events.columns else 0,
         'current_week': current_week  # Add this for email generation
     }
 

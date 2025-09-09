@@ -238,10 +238,28 @@ class PPCReporter:
         data = []
         logger.info(f"GA4 API returned {len(response.rows)} rows")
         
+        # DEBUG: Track if we find event 90699
+        found_90699_in_ga4 = False
+        event_90699_details = []
+        
         for row in response.rows:
             # Extract event ID from page path
             page_path = row.dimension_values[0].value
             event_id = self._extract_event_id(page_path)
+            
+            # DEBUG: Check if this is event 90699
+            if event_id == '90699':
+                found_90699_in_ga4 = True
+                event_90699_details.append({
+                    'page_path': page_path,
+                    'campaign': row.dimension_values[2].value or '(not set)',
+                    'source': row.dimension_values[3].value or '(not set)',
+                    'medium': row.dimension_values[4].value or '(not set)',
+                    'date': row.dimension_values[5].value,
+                    'sessions': int(row.metric_values[0].value),
+                    'users': int(row.metric_values[1].value)
+                })
+                logger.info(f"DEBUG: Found event 90699 in GA4 raw data - path: {page_path}")
             
             if event_id:
                 data.append({
@@ -256,6 +274,14 @@ class PPCReporter:
                     'event_id': event_id
                 })
         
+        # DEBUG: Log event 90699 status
+        if found_90699_in_ga4:
+            logger.info(f"✓ DEBUG: Event 90699 found in GA4 data with {len(event_90699_details)} conversion(s)")
+            for detail in event_90699_details:
+                logger.info(f"  - Campaign: {detail['campaign']}, Source: {detail['source']}, Medium: {detail['medium']}, Date: {detail['date']}")
+        else:
+            logger.warning("✗ DEBUG: Event 90699 NOT found in GA4 raw data")
+        
         df = pd.DataFrame(data)
         
         # Convert date column
@@ -265,6 +291,14 @@ class PPCReporter:
             
             # Filter for tracked campaigns (exact match only)
             initial_count = len(df)
+            
+            # DEBUG: Check event 90699 before filtering
+            event_90699_before = df[df['event_id'] == '90699']
+            if not event_90699_before.empty:
+                logger.info(f"DEBUG: Event 90699 BEFORE campaign filtering:")
+                for _, row in event_90699_before.iterrows():
+                    logger.info(f"  - Campaign: '{row['campaign']}', Source: '{row['source']}', Medium: '{row['medium']}'")
+            
             df['is_tracked_campaign'] = df.apply(
                 lambda row: self._is_tracked_campaign(
                     row['campaign'], 
@@ -273,6 +307,16 @@ class PPCReporter:
                 ), 
                 axis=1
             )
+            
+            # DEBUG: Check if event 90699 is being filtered out
+            if not event_90699_before.empty:
+                event_90699_tracked = df[df['event_id'] == '90699']['is_tracked_campaign'].any()
+                if not event_90699_tracked:
+                    logger.warning(f"✗ DEBUG: Event 90699 is being FILTERED OUT as not a tracked campaign")
+                    logger.info(f"  Configured campaigns: {[(c['campaign_name'], c.get('source', 'any'), c.get('medium', 'any')) for c in self.campaigns]}")
+                else:
+                    logger.info(f"✓ DEBUG: Event 90699 is a tracked campaign and will be included")
+            
             df = df[df['is_tracked_campaign']].drop(columns=['is_tracked_campaign'])
             
             if initial_count != len(df):
@@ -402,7 +446,7 @@ class PPCReporter:
             logger.error(f"EventId column not found! Available columns: {list(self.booking_data.columns)}")
             return pd.DataFrame()
         
-        # Check EventId data type and sample values for debugging
+        # Log EventId data type for debugging
         logger.debug(f"EventId dtype in booking_data: {self.booking_data['EventId'].dtype}")
         event_id_sample = self.booking_data['EventId'].dropna().head()
         if not event_id_sample.empty:
@@ -435,15 +479,34 @@ class PPCReporter:
                     pass
         
         # Handle comparison whether EventId is Int64, float32, or other numeric type
-        # Convert EventId to int for matching, handling both float and Int64 types
+        # Convert both sides to the same type for reliable matching
         try:
-            # First try to convert to int directly
-            event_id_values = pd.to_numeric(self.booking_data['EventId'], errors='coerce')
-            # Round in case of float values like 90699.0
-            event_id_values = event_id_values.round().astype('Int64')
+            # Convert booking EventIds to regular Python integers for matching
+            # This handles Int64, float, and object types
+            booking_event_ids = pd.to_numeric(self.booking_data['EventId'], errors='coerce')
+            
+            # Create a mask for non-null EventIds
+            valid_event_mask = booking_event_ids.notna()
+            
+            # Convert to regular int for comparison (not Int64)
+            booking_event_ids_int = booking_event_ids[valid_event_mask].astype('int64').tolist()
+            
+            # Find matches using set intersection for efficiency
+            matching_ids = set(booking_event_ids_int) & set(event_ids_int)
+            logger.info(f"Found {len(matching_ids)} matching event IDs between GA4 and booking data")
+            
+            # Create boolean mask for matching rows
             event_bookings = self.booking_data[
-                event_id_values.isin(event_ids_int)
+                valid_event_mask & booking_event_ids.astype('Int64').isin(list(matching_ids))
             ].copy()
+            
+            # Log specific match for event 90699 if it exists
+            if 90699 in event_ids_int:
+                if 90699 in matching_ids:
+                    logger.info(f"✓ Event 90699 successfully matched in booking data")
+                else:
+                    logger.warning(f"✗ Event 90699 not found in booking data despite being in GA4 data")
+                    
         except Exception as e:
             logger.warning(f"Error converting EventId for matching: {e}")
             # Fallback to direct comparison

@@ -1,14 +1,42 @@
 {
   "campaigns": [
     {
-      "campaign_name": "Organic Keywords 2025 - Max Conversions (Was max clicks)",
+      "campaign_name": "Organic Keywords - Weekdays",
       "source": "google",
       "medium": "cpc",
       "platform": "google_ads",
       "active": true
     },
     {
-      "campaign_name": "Eventbrite",
+      "campaign_name": "Organic Keywords - Saturday",
+      "source": "google",
+      "medium": "cpc",
+      "platform": "google_ads",
+      "active": true
+    },
+    {
+      "campaign_name": "Organic Keywords - Sundays",
+      "source": "google",
+      "medium": "cpc",
+      "platform": "google_ads",
+      "active": true
+    },
+    {
+      "campaign_name": "Eventbrite - Weekdays",
+      "source": "google",
+      "medium": "cpc",
+      "platform": "google_ads",
+      "active": true
+    },
+    {
+      "campaign_name": "Eventbrite - Saturday",
+      "source": "google",
+      "medium": "cpc",
+      "platform": "google_ads",
+      "active": true
+    },
+    {
+      "campaign_name": "Eventbrite - Sundays",
       "source": "google",
       "medium": "cpc",
       "platform": "google_ads",

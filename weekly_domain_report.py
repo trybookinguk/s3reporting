@@ -9,7 +9,7 @@ import pandas as pd
 # Import shared modules
 from modules.utils.config import TEST_MODE
 
-# Check if email sending is enabled
+# Check if email sending is enabled (GitHub Actions boolean)
 SEND_EMAILS = os.environ.get("SEND_EMAILS", "true").lower() == "true"
 from modules.utils.data_loader import load_users
 from modules.utils.date_utils import get_week_dates, get_latest_data_date

@@ -5,10 +5,9 @@ Extracts email domains from user data and sends CSV report to marketing/data tea
 """
 import os
 import pandas as pd
-from datetime import datetime
 
 # Import shared modules
-from modules.utils.config import TEST_MODE, UK_TZ
+from modules.utils.config import TEST_MODE
 
 # Check if email sending is enabled
 SEND_EMAILS = os.environ.get("SEND_EMAILS", "true").lower() == "true"
@@ -122,13 +121,18 @@ def generate_domain_report():
 
 def main():
     """Main entry point."""
-    # Validate required environment variables
+    # Always require AWS credentials
     required_vars = [
         'AWS_ACCESS_KEY_ID',
-        'AWS_SECRET_ACCESS_KEY',
-        'MAILGUN_SMTP_LOGIN',
-        'MAILGUN_SMTP_PASSWORD'
+        'AWS_SECRET_ACCESS_KEY'
     ]
+    
+    # Only require email credentials if sending emails
+    if SEND_EMAILS:
+        required_vars.extend([
+            'MAILGUN_SMTP_LOGIN',
+            'MAILGUN_SMTP_PASSWORD'
+        ])
     
     validate_environment_variables(required_vars)
     

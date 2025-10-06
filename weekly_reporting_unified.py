@@ -281,15 +281,6 @@ def main(send_email_report=True):
                 subject=f"New Accounts w/c {stats['week_start'].strftime('%d %B %Y')}",
                 html_content=internal_html
             )
-            
-            # Email B - External
-            external_html = create_external_email_content(stats, stats['current_week'])
-            send_html_email(
-                to="alex@trybooking.co.uk" if TEST_MODE else "gareth@wearedgtl.co.uk, clients@wearedgtl.co.uk",
-                cc="alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, joan@trybooking.co.uk",
-                subject=f"TryBooking New Accounts w/c {stats['week_start'].strftime('%d %B %Y')}",
-                html_content=external_html
-            )
         else:
             print("\nEmail sending disabled - report generation complete")
         

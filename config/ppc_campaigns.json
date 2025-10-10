@@ -1,6 +1,20 @@
 {
   "campaigns": [
     {
+      "campaign_name": "UK Ticketing",
+      "source": "google",
+      "medium": "cpc",
+      "platform": "google_ads",
+      "active": true
+    },
+    {
+      "campaign_name": "Bing - UK Ticketing",
+      "source": "bing",
+      "medium": "cpc",
+      "platform": "bing_ads",
+      "active": true
+    },
+    {
       "campaign_name": "Organic Keywords - Weekdays",
       "source": "google",
       "medium": "cpc",

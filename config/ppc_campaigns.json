@@ -1,6 +1,13 @@
 {
   "campaigns": [
     {
+      "campaign_name": "EB Alternative Oct 2025",
+      "source": "google",
+      "medium": "cpc",
+      "platform": "google_ads",
+      "active": true
+    },
+    {
       "campaign_name": "UK Ticketing",
       "source": "google",
       "medium": "cpc",

@@ -74,17 +74,19 @@ def main():
         key_month = f"{year}/{month}/{prefix}-BookingData-TBUK.csv"
         key_account = f"{year}/{month}/{prefix}-Accounts-TBUK.csv"
         
-        # Find BookingDataAll file dynamically (could be 01, 05, or other dates)
-        from modules.utils.data_loader import find_booking_files_in_month, S3_BUCKET
-        booking_all_files, _ = find_booking_files_in_month(s3_client, S3_BUCKET, 
-                                                           int(year), int(month))
+        # Find BookingDataAll file dynamically
+        # BookingDataAll is now stored in the PREVIOUS month's folder
+        from modules.utils.data_loader import find_booking_files_in_month, S3_BUCKET, calculate_previous_month
+        booking_all_year, booking_all_month = calculate_previous_month(int(year), int(month))
+        booking_all_files, _ = find_booking_files_in_month(s3_client, S3_BUCKET,
+                                                           booking_all_year, booking_all_month)
         
         if booking_all_files:
             key_all = booking_all_files[0]  # Use the first (or only) BookingDataAll file
             logger.info(f"Found BookingDataAll file: {key_all}")
         else:
             key_all = None
-            logger.info(f"No BookingDataAll file found in {year}/{month}/")
+            logger.info(f"No BookingDataAll file found in {booking_all_year:04d}/{booking_all_month:02d}/")
         
         # Load Account report for LastEventCreation data
         print(f"Loading Account report from: {key_account}")

@@ -130,39 +130,21 @@ def main():
             logger.warning(f"Account report missing columns: {missing_cols}")
             print(f"WARNING: Account report missing columns: {missing_cols}")
         
-        # Process data using optimized chunked approach
-        logger.info("Starting optimized booking data processing")
-        # Process booking data using the new clean API
-        print("\nProcessing booking data...")
-        aggregator = BookingAggregator(
-            cutoff_365=CUTOFF_365,
-            cutoff_730=CUTOFF_730,
-            event_freq_cutoff_current=EVENT_FREQ_CUTOFF_CURRENT,
-            event_freq_cutoff_previous=EVENT_FREQ_CUTOFF_PREVIOUS
-        )
-        
-        # Load and process chunks from both files
-        chunks = load_multiple_booking_files(s3_client, [key_all, key_month])
-        account_metrics = aggregator.aggregate_bookings(chunks)
-        
-        logger.info(f"Total unique accounts found: {len(account_metrics):,}")
-        print(f"\nTotal unique accounts found: {len(account_metrics):,}")
-        
-        # Load full booking data for revenue factor calculations
-        print("\nLoading full booking data for revenue analysis...")
-        logger.info("Starting revenue analysis data loading")
+        # Load booking data once for both aggregation and revenue analysis
+        print("\nLoading booking data...")
+        logger.info("Starting booking data loading")
         booking_data_df = None
         try:
             # Load both BookingDataAll and current month BookingData
             from modules.utils.data_loader import load_booking_data
-            
+
             print("Loading BookingDataAll...")
-            logger.info("Loading BookingDataAll for revenue analysis")
+            logger.info("Loading BookingDataAll")
             booking_all_df = load_booking_data(s3_client, report_date, data_type='BookingDataAll')
-            
+
             print("Loading current month BookingData...")
             booking_month_df = load_booking_data(s3_client, report_date, data_type='BookingData')
-            
+
             # Combine and remove duplicates based on BookingTransactionId
             print("Combining booking data and removing duplicates...")
             logger.info("Combining booking data files")
@@ -172,9 +154,39 @@ def main():
             duplicates_removed = initial_count - len(booking_data_df)
             logger.info(f"Removed {duplicates_removed:,} duplicate transactions, {len(booking_data_df):,} remaining")
             print(f"Removed {duplicates_removed:,} duplicate transactions")
-            
+
+            # Free memory from separate DataFrames
+            del booking_all_df, booking_month_df
+
+            # Process data using optimized chunked approach for aggregation
+            logger.info("Starting account metrics aggregation")
+            print("\nProcessing booking data for account metrics...")
+            aggregator = BookingAggregator(
+                cutoff_365=CUTOFF_365,
+                cutoff_730=CUTOFF_730,
+                event_freq_cutoff_current=EVENT_FREQ_CUTOFF_CURRENT,
+                event_freq_cutoff_previous=EVENT_FREQ_CUTOFF_PREVIOUS
+            )
+
+            # Convert DataFrame to chunks for aggregator (reuse loaded data)
+            def df_to_chunks(df, chunk_size=100000):
+                """Convert DataFrame to chunks iterator"""
+                for i in range(0, len(df), chunk_size):
+                    yield df.iloc[i:i + chunk_size].copy()
+
+            chunks = df_to_chunks(booking_data_df, chunk_size=100000)
+            account_metrics = aggregator.aggregate_bookings(chunks)
+
+            logger.info(f"Total unique accounts found: {len(account_metrics):,}")
+            print(f"\nTotal unique accounts found: {len(account_metrics):,}")
+
+            # Prepare booking data for revenue analysis
+            print("\nPreparing booking data for revenue analysis...")
+            logger.info("Preparing booking data for revenue analysis")
+
+            # Create a copy for revenue analysis (to preserve original data)
             # Only keep necessary columns for revenue analysis to save memory
-            revenue_cols = ['AccountId', 'TransactionDate', 'PaymentReceived', 'BookingFee', 
+            revenue_cols = ['AccountId', 'TransactionDate', 'PaymentReceived', 'BookingFee',
                           'CardFee', 'ProcessingFee', 'TicketFee', 'EventId', 'TicketQuantity']
             # Keep only columns that exist in the dataframe
             available_cols = [col for col in revenue_cols if col in booking_data_df.columns]

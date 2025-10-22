@@ -625,28 +625,41 @@ class UnifiedDataLoader:
 
         # For BookingDataAll, dynamically find the file and use fallback logic
         if data_type == 'BookingDataAll':
-            # BookingDataAll is now stored in the PREVIOUS month's folder
-            # with the last day of that month as the date
-            # Example: Data for August 2025 is at 2025/08/20250831-BookingDataAll-TBUK.csv
+            # BookingDataAll file location changed in September 2025:
+            # - Old: Next month's folder with day 01 (e.g., 2025/09/20250901)
+            # - New: Same month's folder with last day (e.g., 2025/08/20250831)
+            # Check both locations and use the newest file available
             current_year = int(date_info['folder_year'])
             current_month = int(date_info['folder_month'])
 
-            # Calculate previous month for BookingDataAll location
-            year, month = calculate_previous_month(current_year, current_month)
-
-            # Look for any BookingDataAll file in the previous month
-            booking_all_files, _ = find_booking_files_in_month(
-                self.s3_client, S3_BUCKET, year, month
+            # Check new location (previous month's folder)
+            prev_year, prev_month = calculate_previous_month(current_year, current_month)
+            new_location_files, _ = find_booking_files_in_month(
+                self.s3_client, S3_BUCKET, prev_year, prev_month
             )
-            
-            if booking_all_files:
-                # Use the first (or only) BookingDataAll file found
-                s3_key = booking_all_files[0]
+
+            # Check old location (current month's folder)
+            old_location_files, _ = find_booking_files_in_month(
+                self.s3_client, S3_BUCKET, current_year, current_month
+            )
+
+            # Combine and sort all BookingDataAll files by name (which sorts by date)
+            all_files = sorted(new_location_files + old_location_files)
+
+            if all_files:
+                # Use the newest (last) file
+                s3_key = all_files[-1]
                 logger.info(f"Found {data_type} file: {s3_key}")
+                # Set year/month to the folder where we found the file for fallback logic
+                if s3_key in new_location_files:
+                    year, month = prev_year, prev_month
+                else:
+                    year, month = current_year, current_month
             else:
                 # No file found - will trigger fallback logic below
                 s3_key = None
-                logger.info(f"No {data_type} file found in {year:04d}/{month:02d}/")
+                year, month = prev_year, prev_month
+                logger.info(f"No {data_type} file found in {year:04d}/{month:02d}/ or {current_year:04d}/{current_month:02d}/")
             
             df = try_load_with_fallback(
                 s3_client=self.s3_client,
@@ -703,24 +716,31 @@ class UnifiedDataLoader:
 
         # For BookingDataAll, dynamically find the file
         if data_type == 'BookingDataAll':
-            # BookingDataAll is now stored in the PREVIOUS month's folder
+            # Check both old and new locations for BookingDataAll
             current_year = int(date_info['folder_year'])
             current_month = int(date_info['folder_month'])
 
-            # Calculate previous month for BookingDataAll location
-            year, month = calculate_previous_month(current_year, current_month)
-
-            # Look for any BookingDataAll file in the previous month
-            booking_all_files, _ = find_booking_files_in_month(
-                self.s3_client, S3_BUCKET, year, month
+            # Check new location (previous month's folder)
+            prev_year, prev_month = calculate_previous_month(current_year, current_month)
+            new_location_files, _ = find_booking_files_in_month(
+                self.s3_client, S3_BUCKET, prev_year, prev_month
             )
-            
-            if booking_all_files:
-                s3_key = booking_all_files[0]
+
+            # Check old location (current month's folder)
+            old_location_files, _ = find_booking_files_in_month(
+                self.s3_client, S3_BUCKET, current_year, current_month
+            )
+
+            # Combine and sort all BookingDataAll files by name (newest last)
+            all_files = sorted(new_location_files + old_location_files)
+
+            if all_files:
+                # Use the newest file
+                s3_key = all_files[-1]
                 logger.info(f"Found {data_type} file for chunks: {s3_key}")
             else:
                 # If no file found, return empty iterator
-                logger.warning(f"No {data_type} file found in {year:04d}/{month:02d}/")
+                logger.warning(f"No {data_type} file found in {prev_year:04d}/{prev_month:02d}/ or {current_year:04d}/{current_month:02d}/")
                 return
         else:
             # Regular BookingData - standard filename

@@ -223,12 +223,12 @@ def main():
         future_revenue = future_bookings.groupby('AccountId').agg({
             'PaymentReceived': 'sum',
             'BookingFee': 'sum',
-            'CardFee': 'sum', 
+            'CardFee': 'sum',
             'ProcessingFee': 'sum',
             'TicketFee': 'sum'
         })
         future_revenue['net_future'] = (
-            future_revenue['PaymentReceived'] - 
+            future_revenue['PaymentReceived'] -
             future_revenue[['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']].sum(axis=1)
         )
         

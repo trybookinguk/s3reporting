@@ -591,7 +591,9 @@ class UnifiedDataLoader:
         df = self.download_s3_file(s3_key)
         
         # Standardize column names
-        if 'AccountID' in df.columns and 'AccountId' not in df.columns:
+        if 'Id' in df.columns and 'AccountId' not in df.columns:
+            df['AccountId'] = df['Id']
+        elif 'AccountID' in df.columns and 'AccountId' not in df.columns:
             df['AccountId'] = df['AccountID']
 
         # Parse dates

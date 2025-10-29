@@ -152,17 +152,11 @@ def main():
     )
     
     # Merge with account data
-    # Handle both AccountId and AccountID column names
-    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'AccountID'
     event_metrics = event_metrics.merge(
-        accounts_df[[account_id_col, 'GatewayGroup', 'IsVerified']],
-        left_on='AccountId',
-        right_on=account_id_col,
+        accounts_df[['AccountId', 'GatewayGroup', 'IsVerified']],
+        on='AccountId',
         how='left'
     )
-    # Ensure AccountId column exists
-    if account_id_col == 'AccountID':
-        event_metrics['AccountId'] = event_metrics['AccountID']
     
     print(f"  Free events: {(event_metrics['event_type'] == 'free').sum()}")
     print(f"  Paid events: {(event_metrics['event_type'] == 'paid').sum()}")

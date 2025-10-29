@@ -842,7 +842,7 @@ class UnifiedDataLoader:
             target_date = get_latest_data_date()
 
         date_info = get_file_date_info(target_date)
-        filename = f"{date_info['file_prefix']}-AccountUserRelationship-TBUK.csv"
+        filename = f"{date_info['file_prefix']}-Users-TBUK.csv"
         s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
 
         logger.info(f"Loading users data from S3: {s3_key}")

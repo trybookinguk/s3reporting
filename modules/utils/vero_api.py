@@ -156,9 +156,10 @@ class VeroClient:
                 event_name = event['vero_event']
                 
                 # Build event data from remaining columns
+                # Note: Financial amounts removed as they're not displayed in emails
                 data_fields = [
                     'event_id', 'event_name', 'account_id', 'event_type',
-                    'payment_received', 'net_amount', 'ticket_quantity'
+                    'ticket_quantity'
                 ]
                 event_data = {}
                 for field in data_fields:
@@ -169,7 +170,8 @@ class VeroClient:
                 extras = {
                     'source': 'TryBooking Event Completion Script',
                     'event_name_tb': event.get('event_name', ''),  # The TryBooking event name
-                    'isMultiple': event.get('has_multiple_events', False)  # True if account has multiple events completing
+                    'isMultiple': event.get('has_multiple_events', False),  # True if account has multiple events completing
+                    'testmode': TEST_MODE  # True if running in test mode
                 }
                 
                 # Track the event

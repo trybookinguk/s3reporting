@@ -10,9 +10,9 @@ import numpy as np
 from datetime import datetime, timedelta
 from modules.utils.data_loader import get_s3_client
 from modules.utils.data_loader import (
-    load_accounts_data, load_booking_data, 
+    load_accounts_data, load_booking_data,
     load_account_balance_data, load_account_movement_daily_data,
-    load_users_data
+    load_users_data, load_risk_report_data
 )
 from modules.utils.date_utils import get_latest_data_date, UK_TZ
 from modules.utils.vero_api import VeroClient
@@ -59,22 +59,26 @@ def main():
         # Load comprehensive booking data
         booking_all_df = load_booking_data(s3_client, target_date, 'BookingDataAll')
         booking_current_df = load_booking_data(s3_client, target_date, 'BookingData')
-        
+
         # Combine for complete picture
         booking_df = pd.concat([booking_all_df, booking_current_df], ignore_index=True)
         booking_df = booking_df.drop_duplicates(subset=['BookingId'])
         print(f"  Total bookings loaded: {len(booking_df):,}")
-        
+
         # Load other reports
         accounts_df = load_accounts_data(s3_client, target_date)
         print(f"  Accounts loaded: {len(accounts_df):,}")
-        
+
         balance_df = load_account_balance_data(s3_client, target_date)
         print(f"  Account balances loaded: {len(balance_df):,}")
-        
+
         movement_df = load_account_movement_daily_data(s3_client, target_date)
         print(f"  Account movements loaded: {len(movement_df):,}")
-        
+
+        # Load Risk Report for exposure data
+        risk_df = load_risk_report_data(s3_client, target_date)
+        print(f"  Risk report loaded: {len(risk_df):,}")
+
         users_df = load_users_data(s3_client, target_date)
         print(f"  Users loaded: {len(users_df):,}")
         
@@ -207,18 +211,32 @@ def main():
     if verified_mask.any():
         print(f"  Processing {verified_mask.sum()} verified events...")
         verified_events = event_metrics[verified_mask].copy()
-        
-        # Add account balance
+
+        # Merge with Risk Report for balance data (informational only)
         verified_events = verified_events.merge(
-            balance_df[['AccountId', 'AccountBalance']], 
-            on='AccountId', 
+            risk_df[['AccountId', 'FullBalance', 'Balance', 'SalesForUpcomingEvents', 'Exposure']],
+            on='AccountId',
             how='left'
         )
-        verified_events['AccountBalance'] = pd.to_numeric(
-            verified_events['AccountBalance'], errors='coerce'
+
+        # Get account balance - use Risk Report's Balance (available, excludes pending)
+        # This is the amount available for future events
+        verified_events = verified_events.merge(
+            balance_df[['AccountId', 'AccountBalance']],
+            on='AccountId',
+            how='left',
+            suffixes=('', '_fallback')
+        )
+
+        # Use Balance from Risk Report (available balance, excludes pending)
+        # Fallback to AccountBalance, then FullBalance if neither available
+        verified_events['AccountBalance'] = verified_events['Balance'].fillna(
+            verified_events['AccountBalance']
+        ).fillna(
+            verified_events['FullBalance']
         ).fillna(0)
-        
-        # Calculate future revenue
+
+        # Calculate our own future revenue (this is what we'll actually owe them)
         future_bookings = booking_df[booking_df['EventDate'].dt.date > yesterday_date]
         future_revenue = future_bookings.groupby('AccountId').agg({
             'PaymentReceived': 'sum',
@@ -231,16 +249,18 @@ def main():
             future_revenue['PaymentReceived'] -
             future_revenue[['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']].sum(axis=1)
         )
-        
+
         verified_events = verified_events.merge(
-            future_revenue[['net_future']], 
+            future_revenue[['net_future']],
             left_on='AccountId',
             right_index=True,
             how='left'
         )
         verified_events['net_future'] = verified_events['net_future'].fillna(0)
-        
-        # Check exposure
+
+        # Calculate exposure ourselves - don't use Risk Report's definition
+        # Exposure: Available balance should be at least half of what we owe for future events
+        # This ensures they have enough buffer for future events before we pay them
         verified_events['is_exposed'] = (
             verified_events['AccountBalance'] < (verified_events['net_future'] / 2)
         )
@@ -253,37 +273,43 @@ def main():
         
         if non_exposed_mask.any():
             non_exposed = verified_events[non_exposed_mask].copy()
-            
-            # Get pending amount from AccountMovementDaily (skip diagnostic row)
-            movement_clean = movement_df.iloc[1:].copy()
-            print(f"    Movement data columns: {list(movement_clean.columns)[:10]}...")  # Show first 10 columns
-            
+
+            # Get pending and transferred amounts from AccountMovementDaily
+            # Skip first row if it's a diagnostic/header row
+            movement_clean = movement_df.iloc[1:].copy() if len(movement_df) > 1 else movement_df.copy()
+            print(f"    Movement data columns: {list(movement_clean.columns)[:10]}...")
+
             if 'Pending' in movement_clean.columns:
+                # Convert Pending to numeric
                 movement_clean['Pending'] = pd.to_numeric(
                     movement_clean['Pending'], errors='coerce'
                 ).fillna(0)
-                
-                # Get the latest pending amount per account (snapshot value)
+
+                # Get the latest pending amount per account (this is a snapshot, not cumulative)
                 latest_pending = movement_clean.groupby('AccountId')['Pending'].last()
-                
+
                 non_exposed = non_exposed.merge(
                     latest_pending,
                     on='AccountId',
                     how='left'
                 )
                 non_exposed['Pending'] = non_exposed['Pending'].fillna(0)
-                
-                # Check if pending amount >= net amount from event
+
+                # The net_amount field already has the amount from THIS completed event
+                # (calculated as PaymentReceived - TotalFees in Phase 2)
+                # Logic: Check if Pending >= net_amount from this event
+                # If yes, they've already requested a payout that includes these funds
+                # If no, they still need to request a payout for these funds
                 non_exposed['vero_event'] = np.where(
                     non_exposed['Pending'] >= non_exposed['net_amount'],
-                    'event_completed_paid_requested',
-                    'event_completed_paid_notrequested'
+                    'event_completed_paid_requested',  # Pending includes funds from this event
+                    'event_completed_paid_notrequested'  # They need to request these event funds
                 )
-                
+
                 event_metrics.loc[non_exposed.index, 'vero_event'] = non_exposed['vero_event']
-                
-                print(f"    Funds requested: {(non_exposed['vero_event'] == 'event_completed_paid_requested').sum()}")
-                print(f"    Funds not requested: {(non_exposed['vero_event'] == 'event_completed_paid_notrequested').sum()}")
+
+                print(f"    Funds requested (Pending >= event net_amount): {(non_exposed['vero_event'] == 'event_completed_paid_requested').sum()}")
+                print(f"    Funds not requested (Pending < event net_amount): {(non_exposed['vero_event'] == 'event_completed_paid_notrequested').sum()}")
             else:
                 print(f"    WARNING: 'Pending' column not found in AccountMovementDaily")
                 print(f"    Defaulting all non-exposed verified events to 'not requested'")
@@ -321,13 +347,20 @@ def main():
     
     # Add exposure and pending info for verified events
     if len(verified_events) > 0 and 'is_exposed' in verified_events.columns:
-        # First merge the basic verified event info
+        # Merge verified event info including Risk Report data
+        merge_columns = ['EventId', 'AccountBalance', 'net_future', 'is_exposed']
+        # Add Risk Report columns if available
+        risk_columns = ['FullBalance', 'SalesForUpcomingEvents', 'Exposure']
+        for col in risk_columns:
+            if col in verified_events.columns:
+                merge_columns.append(col)
+
         audit_df = audit_df.merge(
-            verified_events[['EventId', 'AccountBalance', 'net_future', 'is_exposed']],
+            verified_events[merge_columns],
             on='EventId',
             how='left'
         )
-        
+
         # If we processed non-exposed events, add Pending info
         if 'non_exposed' in locals() and 'Pending' in non_exposed.columns:
             audit_df = audit_df.merge(

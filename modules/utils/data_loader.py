@@ -835,27 +835,101 @@ class UnifiedDataLoader:
         
         return df
     
-    @timer_decorator  
+    @timer_decorator
     def load_users(self, target_date: Optional[datetime] = None) -> pd.DataFrame:
         """Load users data."""
         if target_date is None:
             target_date = get_latest_data_date()
-        
+
         date_info = get_file_date_info(target_date)
         filename = f"{date_info['file_prefix']}-AccountUserRelationship-TBUK.csv"
         s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
-        
+
         logger.info(f"Loading users data from S3: {s3_key}")
         df = self.download_s3_file(s3_key)
-        
+
         # Standardize columns
         if 'AccountID' in df.columns and 'AccountId' not in df.columns:
             df['AccountId'] = pd.to_numeric(df['AccountID'], errors='coerce')
-        
+
         df = optimize_dtypes(df)
-        
+
         return df
-    
+
+    @timer_decorator
+    def load_account_movement_daily(self, target_date: Optional[datetime] = None) -> pd.DataFrame:
+        """Load account movement daily data (includes pending transfers)."""
+        if target_date is None:
+            target_date = get_latest_data_date()
+
+        date_info = get_file_date_info(target_date)
+        filename = f"{date_info['file_prefix']}-AccountMovementDaily-TBUK.csv"
+        s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
+
+        logger.info(f"Loading account movement daily data from S3: {s3_key}")
+        df = self.download_s3_file(s3_key)
+
+        # Standardize columns
+        if 'AccountID' in df.columns and 'AccountId' not in df.columns:
+            df['AccountId'] = pd.to_numeric(df['AccountID'], errors='coerce')
+        elif 'AccountId' in df.columns:
+            df['AccountId'] = pd.to_numeric(df['AccountId'], errors='coerce')
+
+        # Convert numeric columns
+        numeric_columns = ['Pending', 'Balance', 'Transferred', 'Refunded']
+        for col in numeric_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+        df = optimize_dtypes(df)
+
+        return df
+
+    @timer_decorator
+    def load_risk_report(self, target_date: Optional[datetime] = None) -> pd.DataFrame:
+        """
+        Load risk report data.
+
+        Contains:
+        - AccountId: Account identifier
+        - AccountName: Account name
+        - FullBalance: Complete account balance (includes pending)
+        - Balance: Available balance
+        - SalesForUpcomingEvents: Calculated future sales
+        - Exposure: Risk exposure amount
+        - FutureDays: Days until next event
+        - LastEventDate: Date of most recent event
+        """
+        if target_date is None:
+            target_date = get_latest_data_date()
+
+        date_info = get_file_date_info(target_date)
+        filename = f"{date_info['file_prefix']}-RiskReport-TBUK.csv"
+        s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
+
+        logger.info(f"Loading risk report from S3: {s3_key}")
+        df = self.download_s3_file(s3_key)
+
+        # Standardize columns
+        if 'AccountID' in df.columns and 'AccountId' not in df.columns:
+            df['AccountId'] = pd.to_numeric(df['AccountID'], errors='coerce')
+        elif 'AccountId' in df.columns:
+            df['AccountId'] = pd.to_numeric(df['AccountId'], errors='coerce')
+
+        # Convert numeric columns
+        numeric_columns = ['FullBalance', 'Balance', 'SalesForUpcomingEvents', 'Exposure']
+        for col in numeric_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+        # Parse dates
+        if 'LastEventDate' in df.columns:
+            df['LastEventDate'] = pd.to_datetime(df['LastEventDate'], errors='coerce', utc=True)
+
+        df = optimize_dtypes(df)
+
+        return df
+
     def filter_successful_transactions(self, df: pd.DataFrame) -> pd.DataFrame:
         """Filter booking data to only successful transactions."""
         if 'Status' in df.columns:
@@ -901,6 +975,26 @@ def load_balance(target_date=None):
 def load_users(target_date=None):
     """Load users data."""
     return get_loader().load_users(target_date)
+
+def load_users_data(s3_client=None, target_date=None):
+    """Load users data (legacy compatibility)."""
+    return get_loader().load_users(target_date)
+
+def load_account_balance_data(s3_client=None, target_date=None):
+    """Load account balance data (legacy compatibility)."""
+    return get_loader().load_balance(target_date)
+
+def load_account_movement_daily_data(s3_client=None, target_date=None):
+    """Load account movement daily data with pending transfers (legacy compatibility)."""
+    return get_loader().load_account_movement_daily(target_date)
+
+def load_risk_report(target_date=None):
+    """Load risk report data."""
+    return get_loader().load_risk_report(target_date)
+
+def load_risk_report_data(s3_client=None, target_date=None):
+    """Load risk report data (legacy compatibility)."""
+    return get_loader().load_risk_report(target_date)
 
 def filter_successful_transactions(df):
     """Filter booking data to only successful transactions."""

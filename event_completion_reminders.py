@@ -485,37 +485,36 @@ def main():
     vero_df['error_message'] = None
     vero_df['timestamp'] = datetime.now(UK_TZ).replace(tzinfo=None)  # Store as naive datetime for CSV
     
-    # Send to Vero
-    if not TEST_MODE:
-        print("\n  Sending events to Vero...")
-        vero_client = VeroClient(VERO_API_KEY)
-        
-        # Process in batches
-        batch_size = 100
-        for i in range(0, len(vero_df), batch_size):
-            batch = vero_df.iloc[i:i+batch_size]
-            print(f"    Processing batch {i//batch_size + 1} ({len(batch)} events)...")
-            
-            try:
-                results = vero_client.batch_track_events(batch)
-                
-                # Update status based on results
-                for j, result in enumerate(results):
-                    idx = batch.index[j]
-                    if result.get('status') == 'success':
-                        vero_df.loc[idx, 'status'] = 'Success'
-                    else:
-                        vero_df.loc[idx, 'status'] = 'Failed'
-                        vero_df.loc[idx, 'error_message'] = result.get('error', 'Unknown error')
-                        
-            except Exception as e:
-                # Mark entire batch as failed
-                vero_df.loc[batch.index, 'status'] = 'Failed'
-                vero_df.loc[batch.index, 'error_message'] = str(e)
-                print(f"    Error processing batch: {e}")
-    else:
-        print("\n  TEST MODE - Not sending to Vero")
-        vero_df['status'] = 'Test Mode - Not Sent'
+    # Send to Vero (includes testmode flag in extras for filtering)
+    print("\n  Sending events to Vero...")
+    if TEST_MODE:
+        print("  (Running in TEST MODE - events will have testmode=true flag)")
+
+    vero_client = VeroClient(VERO_API_KEY)
+
+    # Process in batches
+    batch_size = 100
+    for i in range(0, len(vero_df), batch_size):
+        batch = vero_df.iloc[i:i+batch_size]
+        print(f"    Processing batch {i//batch_size + 1} ({len(batch)} events)...")
+
+        try:
+            results = vero_client.batch_track_events(batch)
+
+            # Update status based on results
+            for j, result in enumerate(results):
+                idx = batch.index[j]
+                if result.get('status') == 'success':
+                    vero_df.loc[idx, 'status'] = 'Success'
+                else:
+                    vero_df.loc[idx, 'status'] = 'Failed'
+                    vero_df.loc[idx, 'error_message'] = result.get('error', 'Unknown error')
+
+        except Exception as e:
+            # Mark entire batch as failed
+            vero_df.loc[batch.index, 'status'] = 'Failed'
+            vero_df.loc[batch.index, 'error_message'] = str(e)
+            print(f"    Error processing batch: {e}")
     
     # Save output
     output_filename = f"event_completion_reminders_{target_date.strftime('%Y%m%d')}.csv"

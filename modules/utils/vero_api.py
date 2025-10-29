@@ -174,20 +174,9 @@ class VeroClient:
                     'testmode': TEST_MODE  # True if running in test mode
                 }
                 
-                # Track the event
-                if TEST_MODE:
-                    # In test mode, just log what would be sent
-                    result = {
-                        'status': 'test_mode',
-                        'user_id': user_id,
-                        'event_name': event_name,
-                        'data': event_data,
-                        'extras': extras
-                    }
-                    print(f"TEST MODE: Would track event '{event_name}' for user {user_id}")
-                else:
-                    result = self.track_event(user_id, email, event_name, event_data, extras)
-                    result['status'] = 'success'
+                # Track the event (testmode flag in extras allows filtering in Vero)
+                result = self.track_event(user_id, email, event_name, event_data, extras)
+                result['status'] = 'success'
                 
                 results.append(result)
                 

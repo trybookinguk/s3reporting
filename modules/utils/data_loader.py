@@ -863,7 +863,9 @@ class UnifiedDataLoader:
             target_date = get_latest_data_date()
 
         date_info = get_file_date_info(target_date)
-        filename = f"{date_info['file_prefix']}-AccountMovementDaily-TBUK.csv"
+        # AccountMovementDaily uses full date format: YYYYMMDD-AccountMovementDaily-TBUK.csv
+        date_str = target_date.strftime('%Y%m%d')
+        filename = f"{date_str}-AccountMovementDaily-TBUK.csv"
         s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
 
         logger.info(f"Loading account movement daily data from S3: {s3_key}")

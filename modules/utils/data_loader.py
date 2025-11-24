@@ -391,14 +391,15 @@ class UnifiedDataLoader:
     # ========== Low-level S3 Functions ==========
     
     @timer_decorator
-    def download_s3_file(self, key: str, use_cache: bool = True) -> pd.DataFrame:
+    def download_s3_file(self, key: str, use_cache: bool = True, skiprows: Optional[int] = None) -> pd.DataFrame:
         """
         Download and load a CSV file from S3 with caching.
-        
+
         Args:
             key: S3 key of the file
             use_cache: Whether to use cache if available
-            
+            skiprows: Number of rows to skip at the start of the file (e.g. for metadata rows)
+
         Returns:
             DataFrame with the file contents
         """
@@ -455,7 +456,8 @@ class UnifiedDataLoader:
                 chunksize=chunk_size,
                 dtype=self.OPTIMIZED_DTYPES,
                 low_memory=False,
-                on_bad_lines='warn'  # Handle malformed CSV lines
+                on_bad_lines='warn',  # Handle malformed CSV lines
+                skiprows=skiprows  # Skip metadata rows if specified
             )):
                 # Apply categorical dtypes
                 for col in self.CATEGORICAL_COLUMNS:
@@ -860,7 +862,10 @@ class UnifiedDataLoader:
 
     @timer_decorator
     def load_account_movement_daily(self, target_date: Optional[datetime] = None) -> pd.DataFrame:
-        """Load account movement daily data (includes pending transfers)."""
+        """Load account movement daily data (includes pending transfers).
+
+        Note: AccountMovementDaily has a metadata header row that must be skipped.
+        """
         if target_date is None:
             target_date = get_latest_data_date()
 
@@ -871,7 +876,8 @@ class UnifiedDataLoader:
         s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
 
         logger.info(f"Loading account movement daily data from S3: {s3_key}")
-        df = self.download_s3_file(s3_key)
+        # Skip first row - it contains metadata (First Gateway ID, Start Booking Transaction ID, etc.)
+        df = self.download_s3_file(s3_key, skiprows=1)
 
         # Standardize columns
         if 'AccountID' in df.columns and 'AccountId' not in df.columns:

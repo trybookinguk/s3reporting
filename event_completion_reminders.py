@@ -288,18 +288,16 @@ def main():
             non_exposed = verified_events[non_exposed_mask].copy()
 
             # Get pending and transferred amounts from AccountMovementDaily
-            # Skip first row if it's a diagnostic/header row
-            movement_clean = movement_df.iloc[1:].copy() if len(movement_df) > 1 else movement_df.copy()
-            print(f"    Movement data columns: {list(movement_clean.columns)[:10]}...")
+            print(f"    Movement data columns: {list(movement_df.columns)[:10]}...")
 
-            if 'Pending' in movement_clean.columns:
+            if 'Pending' in movement_df.columns:
                 # Convert Pending to numeric
-                movement_clean['Pending'] = pd.to_numeric(
-                    movement_clean['Pending'], errors='coerce'
+                movement_df['Pending'] = pd.to_numeric(
+                    movement_df['Pending'], errors='coerce'
                 ).fillna(0)
 
                 # Get the latest pending amount per account (this is a snapshot, not cumulative)
-                latest_pending = movement_clean.groupby('AccountId')['Pending'].last()
+                latest_pending = movement_df.groupby('AccountId')['Pending'].last()
 
                 non_exposed = non_exposed.merge(
                     latest_pending,
@@ -435,13 +433,22 @@ def main():
     users_df['UserId'] = users_df['UserId'].astype(str)
     users_df['vero_id'] = 'uk_' + users_df['UserId']
     users_df['AccountId'] = pd.to_numeric(users_df['AccountId'], errors='coerce')
-    
+
     # Remove invalid users
+    # Filter out:
+    # - Deleted users (IsDeleted == '1')
+    # - Closed users (email ends with -YYYYMMDD-HHMMSS format)
+    # - Users with invalid AccountId or RoleName
     valid_users = users_df[
-        users_df['AccountId'].notna() & 
+        users_df['AccountId'].notna() &
         users_df['RoleName'].notna() &
-        (users_df['IsDeleted'] != '1')
+        (users_df['IsDeleted'] != '1') &
+        (~users_df['Username'].str.match(r'.*-\d{8}-\d{6}$', na=False))
     ]
+
+    print(f"  Total users: {len(users_df)}")
+    print(f"  Valid users after filtering: {len(valid_users)}")
+    print(f"  Filtered out {len(users_df) - len(valid_users)} invalid/closed users")
     
     # Build events list
     vero_events = []

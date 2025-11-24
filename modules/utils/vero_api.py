@@ -165,12 +165,14 @@ class VeroClient:
                 for field in data_fields:
                     if field in event and pd.notna(event[field]):
                         event_data[field] = event[field]
-                
-                # Add extras to identify source and provide context
+
+                # Add context fields that should be available in email templates
+                event_data['event_name_tb'] = event.get('event_name', '')  # The TryBooking event name
+                event_data['isMultiple'] = event.get('has_multiple_events', False)  # True if account has multiple events completing
+
+                # Add extras to identify source
                 extras = {
                     'source': 'TryBooking Event Completion Script',
-                    'event_name_tb': event.get('event_name', ''),  # The TryBooking event name
-                    'isMultiple': event.get('has_multiple_events', False),  # True if account has multiple events completing
                     'testmode': TEST_MODE  # True if running in test mode
                 }
                 

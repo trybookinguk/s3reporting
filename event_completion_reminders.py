@@ -343,7 +343,22 @@ def main():
                 ]
                 event_metrics.loc[valid_indices, 'vero_event'] = non_exposed.loc[valid_indices, 'vero_event']
                 event_metrics.loc[valid_indices, 'account_pending'] = non_exposed.loc[valid_indices, 'account_pending']
-                print(f"    Events defaulted to not requested: {len(non_exposed)}")
+                print(f"    Events defaulted to not requested: {len(valid_indices)}")
+
+        # Safety check: ensure ALL verified, non-exposed events got a classification
+        # If any slipped through, default them to notrequested
+        unclassified_mask = (
+            event_metrics['vero_event'].isna() &
+            (~event_metrics['skip_further_processing']) &
+            (event_metrics['event_type'] == 'paid') &
+            (event_metrics['GatewayGroup'] == 'Default (All)') &
+            (event_metrics['IsVerified'] == 1) &
+            event_metrics['EventId'].isin(verified_events['EventId'])
+        )
+        if unclassified_mask.any():
+            print(f"    WARNING: Found {unclassified_mask.sum()} unclassified verified events, defaulting to notrequested")
+            event_metrics.loc[unclassified_mask, 'vero_event'] = 'event_completed_paid_notrequested'
+            event_metrics.loc[unclassified_mask, 'account_pending'] = 0.0
 
     # Phase 4: Account-Level Aggregation
     print("\nPhase 4: Aggregating events per account...")

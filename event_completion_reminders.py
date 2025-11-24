@@ -306,16 +306,11 @@ def main():
                 )
                 non_exposed['Pending'] = non_exposed['Pending'].fillna(0)
 
-                # The net_amount field already has the amount from THIS completed event
-                # (calculated as PaymentReceived - TotalFees in Phase 2)
-                # Logic: Check if Pending >= net_amount from this event
-                # If yes, they've already requested a payout that includes these funds
-                # If no, they still need to request a payout for these funds
-                non_exposed['vero_event'] = np.where(
-                    non_exposed['Pending'] >= non_exposed['net_amount'],
-                    'event_completed_paid_requested',  # Pending includes funds from this event
-                    'event_completed_paid_notrequested'  # They need to request these event funds
-                )
+                # Store Pending data for later account-level classification
+                # We'll do the actual requested/notrequested classification AFTER aggregation
+                # because we need to compare Pending to the TOTAL net_amount for all events on the account
+                non_exposed['vero_event'] = 'event_completed_paid_pending_classification'  # Temporary marker
+                non_exposed['account_pending'] = non_exposed['Pending']  # Store for later
 
                 # Only update events in event_metrics that don't already have a classification
                 # and haven't been marked to skip (safety check)
@@ -328,15 +323,16 @@ def main():
                     print(f"    WARNING: Filtered out {len(non_exposed) - len(valid_indices)} events that already had classifications")
 
                 event_metrics.loc[valid_indices, 'vero_event'] = non_exposed.loc[valid_indices, 'vero_event']
+                # Also store Pending amount per event for aggregation
+                event_metrics.loc[valid_indices, 'account_pending'] = non_exposed.loc[valid_indices, 'account_pending']
 
-                print(f"    Funds requested (Pending >= event net_amount): {(non_exposed.loc[valid_indices, 'vero_event'] == 'event_completed_paid_requested').sum()}")
-                print(f"    Funds not requested (Pending < event net_amount): {(non_exposed.loc[valid_indices, 'vero_event'] == 'event_completed_paid_notrequested').sum()}")
-                print(f"    Successfully classified {len(valid_indices)} verified events")
+                print(f"    Successfully marked {len(valid_indices)} verified events for account-level classification")
             else:
                 print(f"    WARNING: 'Pending' column not found in AccountMovementDaily")
                 print(f"    Defaulting all non-exposed verified events to 'not requested'")
                 # Default to not requested if Pending column is missing
                 non_exposed['vero_event'] = 'event_completed_paid_notrequested'
+                non_exposed['account_pending'] = 0.0  # No pending data available
 
                 # Only update events in event_metrics that don't already have a classification
                 # and haven't been marked to skip (safety check)
@@ -345,6 +341,7 @@ def main():
                     (~event_metrics.loc[non_exposed.index, 'skip_further_processing'])
                 ]
                 event_metrics.loc[valid_indices, 'vero_event'] = non_exposed.loc[valid_indices, 'vero_event']
+                event_metrics.loc[valid_indices, 'account_pending'] = non_exposed.loc[valid_indices, 'account_pending']
                 print(f"    Events defaulted to not requested: {len(non_exposed)}")
     
     # Create audit trail CSV with all events processed
@@ -417,7 +414,8 @@ def main():
         'event_completed_paid_notverified': 2,
         'event_completed_paid_requested': 3,
         'event_completed_paid_stripe': 4,
-        'event_completed_free': 5                # Lowest priority
+        'event_completed_free': 5,               # Lowest priority
+        'event_completed_paid_pending_classification': 99  # Temporary, will be reclassified
     }
 
     events_to_send['priority'] = events_to_send['vero_event'].map(priority_map)
@@ -431,16 +429,30 @@ def main():
         'EventId': 'first',  # Use first event ID as representative
         'EventName': lambda x: ', '.join(x[:3]) if len(x) <= 3 else f'{x.iloc[0]} and {len(x)-1} others',  # Combine event names
         'event_type': 'first',  # Use first event type
-        'vero_event': lambda x: x.loc[x.map(priority_map).idxmin()],  # Highest priority vero_event
+        'vero_event': lambda x: x.loc[x.map(priority_map).idxmin()],  # Highest priority vero_event (will reclassify pending)
         'PaymentReceived': 'sum',  # Sum financial data
-        'net_amount': 'sum',
+        'net_amount': 'sum',  # Total net amount for all events on this account
         'TicketQuantity': 'sum',
-        'priority': 'min'  # Keep highest priority (lowest number)
+        'priority': 'min',  # Keep highest priority (lowest number)
+        'account_pending': 'first'  # Pending is per-account, so take first value
     }).reset_index()
 
     # Mark accounts that had multiple events
     aggregated['has_multiple_events'] = aggregated['AccountId'].isin(accounts_with_multiple)
     aggregated['event_count'] = aggregated['AccountId'].map(events_per_account)
+
+    # Now do account-level classification for pending events
+    # Compare Pending to TOTAL net_amount (sum of all events on this account)
+    pending_mask = aggregated['vero_event'] == 'event_completed_paid_pending_classification'
+    if pending_mask.any():
+        print(f"  Classifying {pending_mask.sum()} accounts based on total pending vs total net amount...")
+        aggregated.loc[pending_mask, 'vero_event'] = np.where(
+            aggregated.loc[pending_mask, 'account_pending'] >= aggregated.loc[pending_mask, 'net_amount'],
+            'event_completed_paid_requested',
+            'event_completed_paid_notrequested'
+        )
+        print(f"    Requested: {(aggregated.loc[pending_mask, 'vero_event'] == 'event_completed_paid_requested').sum()}")
+        print(f"    Not requested: {(aggregated.loc[pending_mask, 'vero_event'] == 'event_completed_paid_notrequested').sum()}")
 
     events_to_send = aggregated
 

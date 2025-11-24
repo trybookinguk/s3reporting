@@ -185,6 +185,10 @@ def main():
     # Mark ALL free events as processed (so they don't fall through to other logic)
     event_metrics.loc[event_metrics['event_type'] == 'free', 'skip_further_processing'] = True
 
+    # Mark ALL Stripe Connect events to skip further processing FIRST
+    # This ensures they don't fall through to Default (All) logic
+    event_metrics.loc[event_metrics['GatewayGroup'] == 'Stripe Connect', 'skip_further_processing'] = True
+
     # Stripe events - ONLY send if first event with >10 tickets
     stripe_mask = (
         (event_metrics['event_type'] == 'paid') &
@@ -194,9 +198,6 @@ def main():
     )
     event_metrics.loc[stripe_mask, 'vero_event'] = 'event_completed_paid_stripe'
     print(f"  Stripe events (>10 tickets): {stripe_mask.sum()}")
-
-    # Mark ALL Stripe Connect events as processed (so they don't fall through to verified logic)
-    event_metrics.loc[event_metrics['GatewayGroup'] == 'Stripe Connect', 'skip_further_processing'] = True
 
     # Not verified - handle null IsVerified as not verified
     # Only process Default (All) gateway, paid events, that haven't been marked to skip
@@ -343,63 +344,7 @@ def main():
                 event_metrics.loc[valid_indices, 'vero_event'] = non_exposed.loc[valid_indices, 'vero_event']
                 event_metrics.loc[valid_indices, 'account_pending'] = non_exposed.loc[valid_indices, 'account_pending']
                 print(f"    Events defaulted to not requested: {len(non_exposed)}")
-    
-    # Create audit trail CSV with all events processed
-    print("\nCreating audit trail CSV...")
-    audit_df = event_metrics.copy()
-    
-    # Add additional columns for audit
-    audit_df['checked_free_first_event'] = (
-        (audit_df['event_type'] == 'free') & 
-        (audit_df['is_first_event'] == True) & 
-        (audit_df['TicketQuantity'] > 10)
-    )
-    audit_df['checked_stripe_first_event'] = (
-        (audit_df['event_type'] == 'paid') & 
-        (audit_df['GatewayGroup'] == 'Stripe Connect') &
-        (audit_df['is_first_event'] == True) & 
-        (audit_df['TicketQuantity'] > 10)
-    )
-    audit_df['checked_not_verified'] = (
-        (audit_df['event_type'] == 'paid') & 
-        (audit_df['GatewayGroup'] == 'Default (All)') &
-        (audit_df['IsVerified'] != 1)
-    )
-    audit_df['checked_verified'] = (
-        (audit_df['event_type'] == 'paid') & 
-        (audit_df['GatewayGroup'] == 'Default (All)') &
-        (audit_df['IsVerified'] == 1)
-    )
-    
-    # Add exposure and pending info for verified events
-    if len(verified_events) > 0 and 'is_exposed' in verified_events.columns:
-        # Merge verified event info including Risk Report data
-        merge_columns = ['EventId', 'AccountBalance', 'net_future', 'is_exposed']
-        # Add Risk Report columns if available
-        risk_columns = ['FullBalance', 'SalesForUpcomingEvents', 'Exposure']
-        for col in risk_columns:
-            if col in verified_events.columns:
-                merge_columns.append(col)
 
-        audit_df = audit_df.merge(
-            verified_events[merge_columns],
-            on='EventId',
-            how='left'
-        )
-
-        # If we processed non-exposed events, add Pending info
-        if 'non_exposed' in locals() and 'Pending' in non_exposed.columns:
-            audit_df = audit_df.merge(
-                non_exposed[['EventId', 'Pending']],
-                on='EventId',
-                how='left'
-            )
-    
-    # Save audit trail
-    audit_filename = f"event_completion_audit_{target_date.strftime('%Y%m%d')}.csv"
-    audit_df.to_csv(audit_filename, index=False)
-    print(f"  Audit trail saved to: {audit_filename}")
-    
     # Phase 4: Account-Level Aggregation
     print("\nPhase 4: Aggregating events per account...")
     print("-" * 30)
@@ -454,6 +399,17 @@ def main():
         print(f"    Requested: {(aggregated.loc[pending_mask, 'vero_event'] == 'event_completed_paid_requested').sum()}")
         print(f"    Not requested: {(aggregated.loc[pending_mask, 'vero_event'] == 'event_completed_paid_notrequested').sum()}")
 
+        # Map final classification back to original event_metrics for audit trail
+        # For any account that had pending_classification, update ALL events for that account
+        for account_id in aggregated.loc[pending_mask, 'AccountId']:
+            final_vero_event = aggregated.loc[aggregated['AccountId'] == account_id, 'vero_event'].iloc[0]
+            # Update all events for this account that had the temporary classification
+            event_metrics.loc[
+                (event_metrics['AccountId'] == account_id) &
+                (event_metrics['vero_event'] == 'event_completed_paid_pending_classification'),
+                'vero_event'
+            ] = final_vero_event
+
     events_to_send = aggregated
 
     # Log aggregation
@@ -464,7 +420,63 @@ def main():
         print(f"  Accounts with multiple events: {len(accounts_with_multiple)}")
     else:
         print(f"  No aggregation needed: {aggregated_count} events")
-    
+
+    # Create audit trail CSV with final classifications
+    print("\nCreating audit trail CSV...")
+    audit_df = event_metrics.copy()
+
+    # Add additional columns for audit
+    audit_df['checked_free_first_event'] = (
+        (audit_df['event_type'] == 'free') &
+        (audit_df['is_first_event'] == True) &
+        (audit_df['TicketQuantity'] > 10)
+    )
+    audit_df['checked_stripe_first_event'] = (
+        (audit_df['event_type'] == 'paid') &
+        (audit_df['GatewayGroup'] == 'Stripe Connect') &
+        (audit_df['is_first_event'] == True) &
+        (audit_df['TicketQuantity'] > 10)
+    )
+    audit_df['checked_not_verified'] = (
+        (audit_df['event_type'] == 'paid') &
+        (audit_df['GatewayGroup'] == 'Default (All)') &
+        (audit_df['IsVerified'] != 1)
+    )
+    audit_df['checked_verified'] = (
+        (audit_df['event_type'] == 'paid') &
+        (audit_df['GatewayGroup'] == 'Default (All)') &
+        (audit_df['IsVerified'] == 1)
+    )
+
+    # Add exposure and pending info for verified events
+    if len(verified_events) > 0 and 'is_exposed' in verified_events.columns:
+        # Merge verified event info including Risk Report data
+        merge_columns = ['EventId', 'AccountBalance', 'net_future', 'is_exposed']
+        # Add Risk Report columns if available
+        risk_columns = ['FullBalance', 'SalesForUpcomingEvents', 'Exposure']
+        for col in risk_columns:
+            if col in verified_events.columns:
+                merge_columns.append(col)
+
+        audit_df = audit_df.merge(
+            verified_events[merge_columns],
+            on='EventId',
+            how='left'
+        )
+
+        # If we processed non-exposed events, add Pending info
+        if 'non_exposed' in locals() and 'Pending' in non_exposed.columns:
+            audit_df = audit_df.merge(
+                non_exposed[['EventId', 'Pending']],
+                on='EventId',
+                how='left'
+            )
+
+    # Save audit trail
+    audit_filename = f"event_completion_audit_{target_date.strftime('%Y%m%d')}.csv"
+    audit_df.to_csv(audit_filename, index=False)
+    print(f"  Audit trail saved to: {audit_filename}")
+
     # Phase 5: User Resolution and Event Emission
     print("\nPhase 5: Resolving users and sending events...")
     print("-" * 30)

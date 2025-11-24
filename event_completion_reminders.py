@@ -317,16 +317,34 @@ def main():
                     'event_completed_paid_notrequested'  # They need to request these event funds
                 )
 
-                event_metrics.loc[non_exposed.index, 'vero_event'] = non_exposed['vero_event']
+                # Only update events in event_metrics that don't already have a classification
+                # and haven't been marked to skip (safety check)
+                valid_indices = non_exposed.index[
+                    event_metrics.loc[non_exposed.index, 'vero_event'].isna() &
+                    (~event_metrics.loc[non_exposed.index, 'skip_further_processing'])
+                ]
 
-                print(f"    Funds requested (Pending >= event net_amount): {(non_exposed['vero_event'] == 'event_completed_paid_requested').sum()}")
-                print(f"    Funds not requested (Pending < event net_amount): {(non_exposed['vero_event'] == 'event_completed_paid_notrequested').sum()}")
+                if len(valid_indices) < len(non_exposed):
+                    print(f"    WARNING: Filtered out {len(non_exposed) - len(valid_indices)} events that already had classifications")
+
+                event_metrics.loc[valid_indices, 'vero_event'] = non_exposed.loc[valid_indices, 'vero_event']
+
+                print(f"    Funds requested (Pending >= event net_amount): {(non_exposed.loc[valid_indices, 'vero_event'] == 'event_completed_paid_requested').sum()}")
+                print(f"    Funds not requested (Pending < event net_amount): {(non_exposed.loc[valid_indices, 'vero_event'] == 'event_completed_paid_notrequested').sum()}")
+                print(f"    Successfully classified {len(valid_indices)} verified events")
             else:
                 print(f"    WARNING: 'Pending' column not found in AccountMovementDaily")
                 print(f"    Defaulting all non-exposed verified events to 'not requested'")
                 # Default to not requested if Pending column is missing
                 non_exposed['vero_event'] = 'event_completed_paid_notrequested'
-                event_metrics.loc[non_exposed.index, 'vero_event'] = non_exposed['vero_event']
+
+                # Only update events in event_metrics that don't already have a classification
+                # and haven't been marked to skip (safety check)
+                valid_indices = non_exposed.index[
+                    event_metrics.loc[non_exposed.index, 'vero_event'].isna() &
+                    (~event_metrics.loc[non_exposed.index, 'skip_further_processing'])
+                ]
+                event_metrics.loc[valid_indices, 'vero_event'] = non_exposed.loc[valid_indices, 'vero_event']
                 print(f"    Events defaulted to not requested: {len(non_exposed)}")
     
     # Create audit trail CSV with all events processed
@@ -385,45 +403,55 @@ def main():
     audit_df.to_csv(audit_filename, index=False)
     print(f"  Audit trail saved to: {audit_filename}")
     
-    # Phase 4: Account-Level Deduplication
-    print("\nPhase 4: Deduplicating events...")
+    # Phase 4: Account-Level Aggregation
+    print("\nPhase 4: Aggregating events per account...")
     print("-" * 30)
-    
+
     # Filter to events that need sending
     events_to_send = event_metrics[event_metrics['vero_event'].notna()].copy()
-    
-    # DEDUPLICATION: For accounts with multiple events completing on same day
-    # Keep only the highest priority event per account
+
+    # AGGREGATION: For accounts with multiple events completing on same day
+    # Aggregate metrics and choose highest priority vero_event type
     priority_map = {
         'event_completed_paid_notrequested': 1,  # Highest priority - needs action
-        'event_completed_paid_notverified': 2,   
-        'event_completed_paid_requested': 3,     
-        'event_completed_paid_stripe': 4,        
+        'event_completed_paid_notverified': 2,
+        'event_completed_paid_requested': 3,
+        'event_completed_paid_stripe': 4,
         'event_completed_free': 5                # Lowest priority
     }
-    
+
     events_to_send['priority'] = events_to_send['vero_event'].map(priority_map)
-    
-    # Sort by AccountId and priority, keep first (highest priority) per account
-    events_to_send = events_to_send.sort_values(['AccountId', 'priority'])
-    
-    # Before deduplication, count events per account to identify multiple events
+
+    # Count events per account to identify multiple events
     events_per_account = events_to_send.groupby('AccountId').size()
     accounts_with_multiple = set(events_per_account[events_per_account > 1].index)
-    
-    events_to_send = events_to_send.groupby('AccountId').first().reset_index()
-    
+
+    # Aggregate by account
+    aggregated = events_to_send.groupby('AccountId').agg({
+        'EventId': 'first',  # Use first event ID as representative
+        'EventName': lambda x: ', '.join(x[:3]) if len(x) <= 3 else f'{x.iloc[0]} and {len(x)-1} others',  # Combine event names
+        'event_type': 'first',  # Use first event type
+        'vero_event': lambda x: x.loc[x.map(priority_map).idxmin()],  # Highest priority vero_event
+        'PaymentReceived': 'sum',  # Sum financial data
+        'net_amount': 'sum',
+        'TicketQuantity': 'sum',
+        'priority': 'min'  # Keep highest priority (lowest number)
+    }).reset_index()
+
     # Mark accounts that had multiple events
-    events_to_send['has_multiple_events'] = events_to_send['AccountId'].isin(accounts_with_multiple)
-    
-    # Log deduplication
+    aggregated['has_multiple_events'] = aggregated['AccountId'].isin(accounts_with_multiple)
+    aggregated['event_count'] = aggregated['AccountId'].map(events_per_account)
+
+    events_to_send = aggregated
+
+    # Log aggregation
     original_count = len(event_metrics[event_metrics['vero_event'].notna()])
-    deduped_count = len(events_to_send)
-    if original_count > deduped_count:
-        print(f"  Deduplication: Reduced {original_count} events to {deduped_count}")
+    aggregated_count = len(events_to_send)
+    if original_count > aggregated_count:
+        print(f"  Aggregation: Combined {original_count} events into {aggregated_count} notifications")
         print(f"  Accounts with multiple events: {len(accounts_with_multiple)}")
     else:
-        print(f"  No deduplication needed: {deduped_count} events")
+        print(f"  No aggregation needed: {aggregated_count} events")
     
     # Phase 5: User Resolution and Event Emission
     print("\nPhase 5: Resolving users and sending events...")
@@ -546,7 +574,7 @@ def main():
     print("=" * 50)
     print(f"Events with completed sessions: {len(event_metrics)}")
     print(f"Events requiring notification: {original_count}")
-    print(f"After deduplication: {deduped_count}")
+    print(f"After aggregation: {aggregated_count}")
     print(f"Vero events created: {len(vero_df)}")
     
     if not TEST_MODE:

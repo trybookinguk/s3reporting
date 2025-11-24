@@ -165,46 +165,59 @@ def main():
     # Phase 3: Event Classification
     print("\nPhase 3: Classifying events...")
     print("-" * 30)
-    
+
     # Initialize
     event_metrics['vero_event'] = None
-    
-    # Free events
+
+    # Mark events to skip (free events and Stripe Connect that don't meet criteria)
+    # These will be explicitly excluded from further processing
+    event_metrics['skip_further_processing'] = False
+
+    # Free events - ONLY send if first event with >10 tickets
     free_events_mask = (
-        (event_metrics['event_type'] == 'free') & 
-        (event_metrics['is_first_event'] == True) & 
+        (event_metrics['event_type'] == 'free') &
+        (event_metrics['is_first_event'] == True) &
         (event_metrics['TicketQuantity'] > 10)
     )
     event_metrics.loc[free_events_mask, 'vero_event'] = 'event_completed_free'
     print(f"  Free events (>10 tickets): {free_events_mask.sum()}")
-    
-    # Stripe events
+
+    # Mark ALL free events as processed (so they don't fall through to other logic)
+    event_metrics.loc[event_metrics['event_type'] == 'free', 'skip_further_processing'] = True
+
+    # Stripe events - ONLY send if first event with >10 tickets
     stripe_mask = (
-        (event_metrics['event_type'] == 'paid') & 
+        (event_metrics['event_type'] == 'paid') &
         (event_metrics['GatewayGroup'] == 'Stripe Connect') &
-        (event_metrics['is_first_event'] == True) & 
+        (event_metrics['is_first_event'] == True) &
         (event_metrics['TicketQuantity'] > 10)
     )
     event_metrics.loc[stripe_mask, 'vero_event'] = 'event_completed_paid_stripe'
     print(f"  Stripe events (>10 tickets): {stripe_mask.sum()}")
-    
-    # Not verified
+
+    # Mark ALL Stripe Connect events as processed (so they don't fall through to verified logic)
+    event_metrics.loc[event_metrics['GatewayGroup'] == 'Stripe Connect', 'skip_further_processing'] = True
+
+    # Not verified - handle null IsVerified as not verified
+    # Only process Default (All) gateway, paid events, that haven't been marked to skip
     not_verified_mask = (
-        (event_metrics['event_type'] == 'paid') & 
+        (event_metrics['event_type'] == 'paid') &
         (event_metrics['GatewayGroup'] == 'Default (All)') &
-        (event_metrics['IsVerified'] != 1)
+        (event_metrics['IsVerified'] != 1) &
+        (~event_metrics['skip_further_processing'])
     )
     event_metrics.loc[not_verified_mask, 'vero_event'] = 'event_completed_paid_notverified'
     print(f"  Not verified events: {not_verified_mask.sum()}")
-    
+
     # Initialize verified_events as empty DataFrame for audit trail
     verified_events = pd.DataFrame()
-    
-    # Verified accounts
+
+    # Verified accounts - only process those not already handled
     verified_mask = (
-        (event_metrics['event_type'] == 'paid') & 
+        (event_metrics['event_type'] == 'paid') &
         (event_metrics['GatewayGroup'] == 'Default (All)') &
         (event_metrics['IsVerified'] == 1) &
+        (~event_metrics['skip_further_processing']) &
         (event_metrics['vero_event'].isna())
     )
     

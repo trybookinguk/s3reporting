@@ -192,5 +192,88 @@ class VeroClient:
                 }
                 results.append(error_result)
                 print(f"Error tracking event: {e}")
-        
+
+        return results
+
+    def add_tags(self, user_id: str, tags: List[str]) -> Dict:
+        """
+        Add tags to a user in Vero.
+
+        Args:
+            user_id: Unique user identifier (e.g., 'uk_12345')
+            tags: List of tags to add
+
+        Returns:
+            API response
+        """
+        @retry_with_backoff
+        def _make_request():
+            url = f"{self.base_url}/api/v2/users/tags/edit?auth_token={self.auth_token}"
+
+            payload = {
+                "id": user_id,
+                "add": tags
+            }
+
+            response = self.session.put(
+                url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                }
+            )
+
+            if response.status_code >= 400:
+                print(f"    API Error {response.status_code}: {response.text}")
+                print(f"    Request payload: {json.dumps(payload, indent=2)}")
+
+            response.raise_for_status()
+            return response.json()
+
+        return _make_request()
+
+    def batch_add_tags(self, users_df) -> List[Dict]:
+        """
+        Add tags to multiple users in batches.
+
+        Args:
+            users_df: DataFrame containing user data with columns:
+                - vero_user_id: User identifier
+                - vero_tag: Tag to add
+
+        Returns:
+            List of results for each user
+        """
+        results = []
+
+        for _, user in users_df.iterrows():
+            try:
+                user_id = user['vero_user_id']
+                tag = user['vero_tag']
+
+                if TEST_MODE:
+                    # In test mode, don't actually call API
+                    result = {
+                        'status': 'success',
+                        'test_mode': True,
+                        'user_id': user_id,
+                        'tag': tag
+                    }
+                else:
+                    result = self.add_tags(user_id, [tag])
+                    result['status'] = 'success'
+
+                results.append(result)
+
+            except Exception as e:
+                error_result = {
+                    'status': 'error',
+                    'error': str(e),
+                    'user_id': user.get('vero_user_id', 'unknown'),
+                    'tag': user.get('vero_tag', 'unknown')
+                }
+                results.append(error_result)
+                print(f"Error adding tag: {e}")
+
         return results

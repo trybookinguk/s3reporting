@@ -482,6 +482,11 @@ def send_reports(report_df, period_description, commission_config):
             sales_person_name=sales_person_name
         )
 
+        if not sales_person_email:
+            # No email configured - skip individual report
+            print(f"  Skipped {sales_person_name} (no email configured)")
+            continue
+
         if TEST_MODE:
             # TEST MODE: Send all individual reports to MD only
             send_html_email(
@@ -491,7 +496,7 @@ def send_reports(report_df, period_description, commission_config):
                 attachments=[(person_filename, person_csv.encode('utf-8'), 'text', 'csv')]
             )
             print(f"  Sent {sales_person_name}'s report to MD (TEST MODE)")
-        elif sales_person_email:
+        else:
             # PRODUCTION: Send to sales person with MD on CC
             send_html_email(
                 to=sales_person_email,
@@ -501,16 +506,6 @@ def send_reports(report_df, period_description, commission_config):
                 attachments=[(person_filename, person_csv.encode('utf-8'), 'text', 'csv')]
             )
             print(f"  Sent to {sales_person_name} ({sales_person_email})")
-        else:
-            # No email found - send to MD only
-            print(f"  Warning: No email found for {sales_person_name}, sending to MD only")
-
-            send_html_email(
-                to=MD_EMAIL,
-                subject=f"Sales Commission for {sales_person_name} - {period_name}",
-                html_content=person_html,
-                attachments=[(person_filename, person_csv.encode('utf-8'), 'text', 'csv')]
-            )
 
 
 def main():

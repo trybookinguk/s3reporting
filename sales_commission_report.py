@@ -24,9 +24,11 @@ Environment Variables:
 import os
 import sys
 import json
+import io
 import pandas as pd
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+from weasyprint import HTML
 
 from modules.utils.config import (
     TEST_MODE, UK_TZ, ZOHO_DOMAIN,
@@ -347,6 +349,8 @@ def generate_html_email_content(report_df, period_description, is_individual=Fal
     total_commission = report_df['total_commission'].sum()
     total_ticket_sales = report_df['ticket_sales'].sum()
     total_fees = report_df['total_fees'].sum()
+    total_flat_fees = report_df['flat_fee'].sum()
+    total_commission_on_sales = report_df['commission_on_sales'].sum()
 
     if is_individual:
         title = f"Your Sales Commission - {period_name}"
@@ -393,6 +397,8 @@ def generate_html_email_content(report_df, period_description, is_individual=Fal
             <tr><th style="text-align: left;">Total Qualifying Accounts</th><td>{total_accounts}</td></tr>
             <tr><th style="text-align: left;">Total Ticket Sales</th><td>£{total_ticket_sales:,.2f}</td></tr>
             <tr><th style="text-align: left;">Total Fees</th><td>£{total_fees:,.2f}</td></tr>
+            <tr><th style="text-align: left;">New Account Commission</th><td>£{total_flat_fees:,.2f}</td></tr>
+            <tr><th style="text-align: left;">Event Commission</th><td>£{total_commission_on_sales:,.2f}</td></tr>
             <tr><th style="text-align: left;">Total Commission Payable</th><td><strong>£{total_commission:,.2f}</strong></td></tr>
         </table>
 
@@ -405,6 +411,229 @@ def generate_html_email_content(report_df, period_description, is_individual=Fal
     """
 
     return html
+
+
+def generate_pdf_report(report_df, period_description, sales_person_name):
+    """
+    Generate a styled PDF commission report for a sales person.
+
+    Args:
+        report_df: DataFrame with commission data for this sales person
+        period_description: Human-readable period (e.g., "November 2025")
+        sales_person_name: Name of the sales person
+
+    Returns:
+        bytes: PDF content
+    """
+    if report_df.empty:
+        # Empty report
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; }}
+                h1 {{ color: #333; }}
+            </style>
+        </head>
+        <body>
+            <h1>Sales Commission Report - {period_description}</h1>
+            <p>Hi {sales_person_name.split()[0] if sales_person_name else 'there'},</p>
+            <p>No qualifying commissions for this period.</p>
+        </body>
+        </html>
+        """
+        pdf_buffer = io.BytesIO()
+        HTML(string=html_content).write_pdf(pdf_buffer)
+        return pdf_buffer.getvalue()
+
+    # Calculate totals
+    total_accounts = len(report_df)
+    total_commission = report_df['total_commission'].sum()
+    total_ticket_sales = report_df['ticket_sales'].sum()
+    total_fees = report_df['total_fees'].sum()
+    total_flat_fees = report_df['flat_fee'].sum()
+    total_commission_on_sales = report_df['commission_on_sales'].sum()
+
+    # Build the detail rows
+    detail_rows = ""
+    for _, row in report_df.iterrows():
+        detail_rows += f"""
+        <tr>
+            <td>{row.get('account_name', row.get('account_id', 'N/A'))}</td>
+            <td>{row.get('event_name', 'N/A')}</td>
+            <td>{row.get('event_completed_date', 'N/A')}</td>
+            <td style="text-align: right;">£{row.get('ticket_sales', 0):,.2f}</td>
+            <td style="text-align: right;">£{row.get('total_fees', 0):,.2f}</td>
+            <td style="text-align: right;">£{row.get('flat_fee', 0):,.2f}</td>
+            <td style="text-align: right;">£{row.get('commission_on_sales', 0):,.2f}</td>
+            <td style="text-align: right;"><strong>£{row.get('total_commission', 0):,.2f}</strong></td>
+        </tr>
+        """
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+        <style>
+            @page {{
+                size: A4 landscape;
+                margin: 20mm;
+            }}
+            body {{
+                font-family: 'Inter', sans-serif;
+                font-size: 10pt;
+                color: #333;
+            }}
+            .header {{
+                border-bottom: 3px solid #01517f;
+                padding-bottom: 15px;
+                margin-bottom: 20px;
+            }}
+            .header h1 {{
+                color: #01517f;
+                margin: 0;
+                font-size: 24pt;
+                font-weight: 600;
+            }}
+            .header .period {{
+                color: #666;
+                font-size: 14pt;
+                margin-top: 5px;
+            }}
+            .greeting {{
+                margin-bottom: 20px;
+            }}
+            .summary-section {{
+                background: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 5px;
+                padding: 15px;
+                margin-bottom: 25px;
+            }}
+            .summary-section h2 {{
+                margin-top: 0;
+                color: #01517f;
+                font-size: 14pt;
+                font-weight: 600;
+            }}
+            .summary-table {{
+                width: 100%;
+                border-collapse: collapse;
+            }}
+            .summary-table th {{
+                text-align: left;
+                padding: 8px 15px 8px 0;
+                border-bottom: 1px solid #dee2e6;
+                width: 70%;
+                font-weight: 500;
+            }}
+            .summary-table td {{
+                text-align: right;
+                padding: 8px 0;
+                border-bottom: 1px solid #dee2e6;
+                font-weight: 600;
+            }}
+            .summary-table tr:last-child th,
+            .summary-table tr:last-child td {{
+                border-bottom: none;
+                font-size: 12pt;
+                color: #01517f;
+            }}
+            .detail-section h2 {{
+                color: #01517f;
+                font-size: 14pt;
+                font-weight: 600;
+                margin-bottom: 10px;
+            }}
+            .detail-table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 9pt;
+            }}
+            .detail-table th {{
+                background: #01517f;
+                color: white;
+                padding: 10px 8px;
+                text-align: left;
+                font-weight: 600;
+            }}
+            .detail-table th:nth-child(n+4) {{
+                text-align: right;
+            }}
+            .detail-table td {{
+                padding: 8px;
+                border-bottom: 1px solid #dee2e6;
+            }}
+            .detail-table tr:nth-child(even) {{
+                background: #f8f9fa;
+            }}
+            .footer {{
+                margin-top: 30px;
+                padding-top: 15px;
+                border-top: 1px solid #dee2e6;
+                color: #666;
+                font-size: 9pt;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>Sales Commission Report</h1>
+            <div class="period">{period_description}</div>
+        </div>
+
+        <div class="greeting">
+            <p>Hi {sales_person_name.split()[0] if sales_person_name else 'there'},</p>
+            <p>Here is your commission report for {period_description}.</p>
+        </div>
+
+        <div class="summary-section">
+            <h2>Summary</h2>
+            <table class="summary-table">
+                <tr><th>Total Qualifying Accounts</th><td>{total_accounts}</td></tr>
+                <tr><th>Total Ticket Sales</th><td>£{total_ticket_sales:,.2f}</td></tr>
+                <tr><th>Total Fees</th><td>£{total_fees:,.2f}</td></tr>
+                <tr><th>New Account Commission</th><td>£{total_flat_fees:,.2f}</td></tr>
+                <tr><th>Event Commission</th><td>£{total_commission_on_sales:,.2f}</td></tr>
+                <tr><th>Total Commission Payable</th><td>£{total_commission:,.2f}</td></tr>
+            </table>
+        </div>
+
+        <div class="detail-section">
+            <h2>Commission Details</h2>
+            <table class="detail-table">
+                <thead>
+                    <tr>
+                        <th>Account</th>
+                        <th>Event</th>
+                        <th>Completed</th>
+                        <th>Ticket Sales</th>
+                        <th>Fees</th>
+                        <th>New Account</th>
+                        <th>Event Comm.</th>
+                        <th>Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {detail_rows}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="footer">
+            <p>This report was generated automatically on {datetime.now(UK_TZ).strftime('%d %B %Y at %H:%M')}.</p>
+        </div>
+    </body>
+    </html>
+    """
+
+    pdf_buffer = io.BytesIO()
+    HTML(string=html_content).write_pdf(pdf_buffer)
+    return pdf_buffer.getvalue()
 
 
 def send_reports(report_df, period_description, commission_config):
@@ -424,7 +653,7 @@ def send_reports(report_df, period_description, commission_config):
     csv_columns = [
         'sales_person_name', 'account_id', 'account_name', 'account_created_date',
         'event_completed_date', 'event_name', 'event_id', 'gateway_type',
-        'ticket_sales', 'total_fees', 'commission_on_sales', 'total_commission'
+        'ticket_sales', 'total_fees', 'flat_fee', 'commission_on_sales', 'total_commission'
     ]
 
     # In TEST_MODE, all emails go to MD_EMAIL only
@@ -467,39 +696,56 @@ def send_reports(report_df, period_description, commission_config):
         if person_config.get('email'):
             sales_person_email = person_config['email']
 
-        # Generate individual report
-        person_filename = f"commission_{sales_person_name.replace(' ', '_')}_{file_code}.csv"
+        # Generate individual report files
+        person_filename_csv = f"commission_{sales_person_name.replace(' ', '_')}_{file_code}.csv"
+        person_filename_pdf = f"commission_{sales_person_name.replace(' ', '_')}_{file_code}.pdf"
         person_csv = person_df[csv_columns].to_csv(index=False)
+        person_pdf = generate_pdf_report(person_df, period_name, sales_person_name)
         person_html = generate_html_email_content(
             person_df, period_name,
             is_individual=True,
             sales_person_name=sales_person_name
         )
 
+        # MD gets CSV, sales person gets PDF
+        pdf_attachment = [(person_filename_pdf, person_pdf, 'application', 'pdf')]
+        csv_attachment = [(person_filename_csv, person_csv.encode('utf-8'), 'text', 'csv')]
+
         if not sales_person_email:
-            # No email configured - skip individual report
-            print(f"  Skipped {sales_person_name} (no email configured)")
+            # No email configured - send CSV to MD only
+            send_html_email(
+                to=MD_EMAIL,
+                subject=f"Commission for {sales_person_name} - {period_name}",
+                html_content=person_html,
+                attachments=csv_attachment
+            )
+            print(f"  Sent {sales_person_name}'s CSV to MD (no email configured for sales person)")
             continue
 
         if TEST_MODE:
-            # TEST MODE: Send all individual reports to MD only
+            # TEST MODE: Send both to MD only (PDF and CSV)
             send_html_email(
                 to=MD_EMAIL,
                 subject=f"[TEST] Commission for {sales_person_name} - {period_name}",
                 html_content=person_html,
-                attachments=[(person_filename, person_csv.encode('utf-8'), 'text', 'csv')]
+                attachments=pdf_attachment + csv_attachment
             )
             print(f"  Sent {sales_person_name}'s report to MD (TEST MODE)")
         else:
-            # PRODUCTION: Send to sales person with MD on CC
+            # PRODUCTION: PDF to sales person, CSV to MD
             send_html_email(
                 to=sales_person_email,
-                cc=MD_EMAIL,
                 subject=f"Your Sales Commission - {period_name}",
                 html_content=person_html,
-                attachments=[(person_filename, person_csv.encode('utf-8'), 'text', 'csv')]
+                attachments=pdf_attachment
             )
-            print(f"  Sent to {sales_person_name} ({sales_person_email})")
+            send_html_email(
+                to=MD_EMAIL,
+                subject=f"Commission for {sales_person_name} - {period_name}",
+                html_content=person_html,
+                attachments=csv_attachment
+            )
+            print(f"  Sent PDF to {sales_person_name} ({sales_person_email}), CSV to MD")
 
 
 def main():
@@ -650,7 +896,7 @@ def main():
     final_columns = [
         'sales_person_name', 'account_id', 'account_name', 'account_created_date',
         'event_completed_date', 'event_name', 'event_id', 'gateway_type',
-        'ticket_sales', 'total_fees', 'commission_on_sales', 'total_commission', 'claimed_user_id'
+        'ticket_sales', 'total_fees', 'flat_fee', 'commission_on_sales', 'total_commission', 'claimed_user_id'
     ]
     report_df = report_df[[col for col in final_columns if col in report_df.columns]]
 

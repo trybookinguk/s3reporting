@@ -600,6 +600,9 @@ def main():
         how='inner'
     )
 
+    # Drop duplicate account_id column from claimed_accounts (keep AccountId)
+    qualifying_events = qualifying_events.drop(columns=['account_id'])
+
     print(f"  Qualifying accounts after joining: {len(qualifying_events)}")
 
     if qualifying_events.empty:

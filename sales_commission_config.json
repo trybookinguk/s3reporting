@@ -8,6 +8,12 @@
       "flat_fee": 15.00,
       "commission_rate": 0.10,
       "email": "nicola@trybooking.co.uk"
+    },
+
+    "Alex Ashley": {
+      "flat_fee": 15.00,
+      "commission_rate": 0.10,
+      "email": "alex@trybooking.co.uk"
     }
   }
 }

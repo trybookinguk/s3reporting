@@ -121,7 +121,7 @@ Our platform provides several reports via S3 that can be used for data analysis.
 | ProcessingFee | The processing fee which has been paid by the ticket purchaser. |
 | Surcharge | **No longer used in UK.** Payment surcharges (e.g. AU charge extra for PP) |
 | ProcessingFeeSurcharge | **No longer used in UK.** Payment surcharges (e.g. AU charge extra for PP) |
-| TicketFee | The processing fee which has been paid by the ticket purchaser. |
+| TicketFee | The ticket fee which has been paid by the ticket purchaser. |
 | TransactionType | Appears to always be Payment. |
 | PaymentType | **Paid tickets only**. The payment type used for the transaction. |
 | EventPostcode | The postcode added to the event as venue details. |

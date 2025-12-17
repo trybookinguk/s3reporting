@@ -464,12 +464,18 @@ def generate_pdf_report(report_df, period_description, sales_person_name):
     total_flat_fees = report_df['flat_fee'].sum()
     total_commission_on_sales = report_df['commission_on_sales'].sum()
 
+    # Sort by event completed date
+    sorted_df = report_df.copy()
+    sorted_df['_sort_date'] = pd.to_datetime(sorted_df['event_completed_date'], errors='coerce')
+    sorted_df = sorted_df.sort_values('_sort_date', ascending=True)
+
     # Build the detail rows
     detail_rows = ""
-    for _, row in report_df.iterrows():
+    for _, row in sorted_df.iterrows():
         detail_rows += f"""
         <tr>
             <td>{row.get('account_name', row.get('account_id', 'N/A'))}</td>
+            <td>{row.get('account_created_date', 'N/A')}</td>
             <td>{row.get('event_name', 'N/A')}</td>
             <td>{row.get('event_completed_date', 'N/A')}</td>
             <td style="text-align: right;">£{row.get('ticket_sales', 0):,.2f}</td>
@@ -572,7 +578,7 @@ def generate_pdf_report(report_df, period_description, sales_person_name):
                 text-align: left;
                 font-weight: 600;
             }}
-            .detail-table th:nth-child(n+4) {{
+            .detail-table th:nth-child(n+5) {{
                 text-align: right;
             }}
             .detail-table td {{
@@ -620,6 +626,7 @@ def generate_pdf_report(report_df, period_description, sales_person_name):
                 <thead>
                     <tr>
                         <th>Account</th>
+                        <th>Opened</th>
                         <th>Event</th>
                         <th>Completed</th>
                         <th>Ticket Sales</th>

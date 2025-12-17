@@ -922,11 +922,21 @@ def main():
         'sales_person_name': 'team_member_name'
     })
 
-    # Format dates
+    # Format dates (UK format: DD/MM/YYYY)
     if 'account_created_date' in report_df.columns and report_df['account_created_date'].notna().any():
-        report_df['account_created_date'] = pd.to_datetime(report_df['account_created_date']).dt.strftime('%Y-%m-%d')
+        report_df['account_created_date'] = pd.to_datetime(report_df['account_created_date']).dt.strftime('%d/%m/%Y')
     if 'event_completed_date' in report_df.columns and report_df['event_completed_date'].notna().any():
-        report_df['event_completed_date'] = pd.to_datetime(report_df['event_completed_date']).dt.strftime('%Y-%m-%d')
+        report_df['event_completed_date'] = pd.to_datetime(report_df['event_completed_date']).dt.strftime('%d/%m/%Y')
+
+    # Map gateway types to user-friendly names
+    gateway_display_names = {
+        'Stripe Connect': 'Stripe',
+        'Default (All)': 'TryBooking'
+    }
+    if 'gateway_type' in report_df.columns:
+        report_df['gateway_type'] = report_df['gateway_type'].map(
+            lambda x: gateway_display_names.get(x, x) if pd.notna(x) else 'TryBooking'
+        )
 
     # Select and order columns
     final_columns = [

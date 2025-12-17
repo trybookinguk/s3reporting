@@ -278,6 +278,14 @@ def find_first_paid_events(booking_df, report_start, report_end):
     # Filter to only first paid events
     qualifying_events = event_metrics[event_metrics['is_first_paid_event']].copy()
 
+    # Add total fees column (sum of all fee types)
+    qualifying_events['TotalFees'] = (
+        qualifying_events['BookingFee'] +
+        qualifying_events['CardFee'] +
+        qualifying_events['ProcessingFee'] +
+        qualifying_events['TicketFee']
+    )
+
     print(f"  First paid events completing in month: {len(qualifying_events)}")
 
     return qualifying_events
@@ -414,7 +422,7 @@ def send_reports(report_df, period_description, commission_config):
     csv_columns = [
         'sales_person_name', 'account_id', 'account_name', 'account_created_date',
         'event_completed_date', 'event_name', 'event_id', 'gateway_type',
-        'ticket_sales', 'commission_on_sales', 'total_commission'
+        'ticket_sales', 'total_fees', 'commission_on_sales', 'total_commission'
     ]
 
     # In TEST_MODE, all emails go to MD_EMAIL only
@@ -626,7 +634,8 @@ def main():
         'EventName': 'event_name',
         'EventId': 'event_id',
         'GatewayGroup': 'gateway_type',
-        'PaymentReceived': 'ticket_sales'
+        'PaymentReceived': 'ticket_sales',
+        'TotalFees': 'total_fees'
     })
 
     # Format dates
@@ -639,7 +648,7 @@ def main():
     final_columns = [
         'sales_person_name', 'account_id', 'account_name', 'account_created_date',
         'event_completed_date', 'event_name', 'event_id', 'gateway_type',
-        'ticket_sales', 'commission_on_sales', 'total_commission', 'claimed_user_id'
+        'ticket_sales', 'total_fees', 'commission_on_sales', 'total_commission', 'claimed_user_id'
     ]
     report_df = report_df[[col for col in final_columns if col in report_df.columns]]
 

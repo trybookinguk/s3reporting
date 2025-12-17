@@ -280,6 +280,14 @@ def find_first_paid_events(booking_df, report_start, report_end):
     # Filter to only first paid events
     qualifying_events = event_metrics[event_metrics['is_first_paid_event']].copy()
 
+    # Filter to events with at least 10 tickets sold (to exclude test/minimal events)
+    MIN_TICKETS_FOR_COMMISSION = 10
+    before_ticket_filter = len(qualifying_events)
+    qualifying_events = qualifying_events[qualifying_events['TicketQuantity'] >= MIN_TICKETS_FOR_COMMISSION]
+    filtered_out = before_ticket_filter - len(qualifying_events)
+    if filtered_out > 0:
+        print(f"  Events filtered out (< {MIN_TICKETS_FOR_COMMISSION} tickets): {filtered_out}")
+
     # Add total fees column (sum of all fee types)
     qualifying_events['TotalFees'] = (
         qualifying_events['BookingFee'] +
@@ -288,7 +296,7 @@ def find_first_paid_events(booking_df, report_start, report_end):
         qualifying_events['TicketFee']
     )
 
-    print(f"  First paid events completing in month: {len(qualifying_events)}")
+    print(f"  Qualifying first paid events (>= {MIN_TICKETS_FOR_COMMISSION} tickets): {len(qualifying_events)}")
 
     return qualifying_events
 
@@ -360,18 +368,18 @@ def generate_html_email_content(report_df, period_description, is_individual=Fal
         intro = f"<p>Commission report for all sales team members for {period_name}.</p>"
 
         # Add per-person summary for MD report
-        person_summary = report_df.groupby('sales_person_name').agg(
+        person_summary = report_df.groupby('team_member_name').agg(
             Accounts=('total_commission', 'count'),
             Total_Commission=('total_commission', 'sum')
         ).reset_index()
-        person_summary.columns = ['Sales Person', 'Accounts', 'Total Commission']
+        person_summary.columns = ['Team Member', 'Accounts', 'Total Commission']
         person_summary['Total Commission'] = person_summary['Total Commission'].apply(lambda x: f"£{x:,.2f}")
 
         person_table = """
-        <h3>Commission by Sales Person</h3>
+        <h3>Commission by Team Member</h3>
         <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
             <tr style="background-color: #f0f0f0;">
-                <th>Sales Person</th>
+                <th>Team Member</th>
                 <th>Accounts</th>
                 <th>Total Commission</th>
             </tr>
@@ -379,7 +387,7 @@ def generate_html_email_content(report_df, period_description, is_individual=Fal
         for _, row in person_summary.iterrows():
             person_table += f"""
             <tr>
-                <td>{row['Sales Person']}</td>
+                <td>{row['Team Member']}</td>
                 <td>{row['Accounts']}</td>
                 <td>{row['Total Commission']}</td>
             </tr>
@@ -543,6 +551,9 @@ def generate_pdf_report(report_df, period_description, sales_person_name):
                 font-size: 12pt;
                 color: #01517f;
             }}
+            .detail-section {{
+                page-break-before: always;
+            }}
             .detail-section h2 {{
                 color: #01517f;
                 font-size: 14pt;
@@ -649,12 +660,29 @@ def send_reports(report_df, period_description, commission_config):
     # Generate a file-safe code for filenames
     file_code = period_description.replace(' ', '_').lower()
 
-    # Prepare CSV columns for output
+    # Prepare CSV columns for output (internal names)
     csv_columns = [
-        'sales_person_name', 'account_id', 'account_name', 'account_created_date',
+        'team_member_name', 'account_id', 'account_name', 'account_created_date',
         'event_completed_date', 'event_name', 'event_id', 'gateway_type',
         'ticket_sales', 'total_fees', 'flat_fee', 'commission_on_sales', 'total_commission'
     ]
+
+    # User-friendly column names for CSV export
+    csv_column_names = {
+        'team_member_name': 'Team Member',
+        'account_id': 'Account ID',
+        'account_name': 'Account Name',
+        'account_created_date': 'Account Created',
+        'event_completed_date': 'Event Completed',
+        'event_name': 'Event Name',
+        'event_id': 'Event ID',
+        'gateway_type': 'Gateway',
+        'ticket_sales': 'Ticket Sales (£)',
+        'total_fees': 'Total Fees (£)',
+        'flat_fee': 'New Account Commission (£)',
+        'commission_on_sales': 'Event Commission (£)',
+        'total_commission': 'Total Commission (£)'
+    }
 
     # In TEST_MODE, all emails go to MD_EMAIL only
     if TEST_MODE:
@@ -665,10 +693,10 @@ def send_reports(report_df, period_description, commission_config):
     summary_filename = f"commission_summary_{file_code}.csv"
 
     if not report_df.empty:
-        summary_csv = report_df[csv_columns].to_csv(index=False)
+        summary_csv = report_df[csv_columns].rename(columns=csv_column_names).to_csv(index=False)
     else:
-        # Empty CSV with headers
-        summary_csv = ','.join(csv_columns) + '\n'
+        # Empty CSV with friendly headers
+        summary_csv = ','.join(csv_column_names.values()) + '\n'
 
     summary_html = generate_html_email_content(report_df, period_name, is_individual=False)
 
@@ -683,69 +711,69 @@ def send_reports(report_df, period_description, commission_config):
         print("  No individual reports to send (no qualifying commissions)")
         return
 
-    # Send individual reports to each sales person
+    # Send individual reports to each team member
     print("\nSending individual reports...")
 
-    for sales_person_name in report_df['sales_person_name'].unique():
-        person_df = report_df[report_df['sales_person_name'] == sales_person_name]
+    for team_member_name in report_df['team_member_name'].unique():
+        person_df = report_df[report_df['team_member_name'] == team_member_name]
 
-        # Get sales person email from config
-        sales_person_email = None
-        person_config = commission_config.get('sales_people', {}).get(sales_person_name, {})
+        # Get team member email from config
+        team_member_email = None
+        person_config = commission_config.get('sales_people', {}).get(team_member_name, {})
 
         if person_config.get('email'):
-            sales_person_email = person_config['email']
+            team_member_email = person_config['email']
 
         # Generate individual report files
-        person_filename_csv = f"commission_{sales_person_name.replace(' ', '_')}_{file_code}.csv"
-        person_filename_pdf = f"commission_{sales_person_name.replace(' ', '_')}_{file_code}.pdf"
-        person_csv = person_df[csv_columns].to_csv(index=False)
-        person_pdf = generate_pdf_report(person_df, period_name, sales_person_name)
+        person_filename_csv = f"commission_{team_member_name.replace(' ', '_')}_{file_code}.csv"
+        person_filename_pdf = f"commission_{team_member_name.replace(' ', '_')}_{file_code}.pdf"
+        person_csv = person_df[csv_columns].rename(columns=csv_column_names).to_csv(index=False)
+        person_pdf = generate_pdf_report(person_df, period_name, team_member_name)
         person_html = generate_html_email_content(
             person_df, period_name,
             is_individual=True,
-            sales_person_name=sales_person_name
+            sales_person_name=team_member_name
         )
 
-        # MD gets CSV, sales person gets PDF
+        # MD gets CSV, team member gets PDF
         pdf_attachment = [(person_filename_pdf, person_pdf, 'application', 'pdf')]
         csv_attachment = [(person_filename_csv, person_csv.encode('utf-8'), 'text', 'csv')]
 
-        if not sales_person_email:
+        if not team_member_email:
             # No email configured - send CSV to MD only
             send_html_email(
                 to=MD_EMAIL,
-                subject=f"Commission for {sales_person_name} - {period_name}",
+                subject=f"Commission for {team_member_name} - {period_name}",
                 html_content=person_html,
                 attachments=csv_attachment
             )
-            print(f"  Sent {sales_person_name}'s CSV to MD (no email configured for sales person)")
+            print(f"  Sent {team_member_name}'s CSV to MD (no email configured for team member)")
             continue
 
         if TEST_MODE:
             # TEST MODE: Send both to MD only (PDF and CSV)
             send_html_email(
                 to=MD_EMAIL,
-                subject=f"[TEST] Commission for {sales_person_name} - {period_name}",
+                subject=f"[TEST] Commission for {team_member_name} - {period_name}",
                 html_content=person_html,
                 attachments=pdf_attachment + csv_attachment
             )
-            print(f"  Sent {sales_person_name}'s report to MD (TEST MODE)")
+            print(f"  Sent {team_member_name}'s report to MD (TEST MODE)")
         else:
-            # PRODUCTION: PDF to sales person, CSV to MD
+            # PRODUCTION: PDF to team member, CSV to MD
             send_html_email(
-                to=sales_person_email,
+                to=team_member_email,
                 subject=f"Your Sales Commission - {period_name}",
                 html_content=person_html,
                 attachments=pdf_attachment
             )
             send_html_email(
                 to=MD_EMAIL,
-                subject=f"Commission for {sales_person_name} - {period_name}",
+                subject=f"Commission for {team_member_name} - {period_name}",
                 html_content=person_html,
                 attachments=csv_attachment
             )
-            print(f"  Sent PDF to {sales_person_name} ({sales_person_email}), CSV to MD")
+            print(f"  Sent PDF to {team_member_name} ({team_member_email}), CSV to MD")
 
 
 def main():
@@ -883,7 +911,8 @@ def main():
         'EventId': 'event_id',
         'GatewayGroup': 'gateway_type',
         'PaymentReceived': 'ticket_sales',
-        'TotalFees': 'total_fees'
+        'TotalFees': 'total_fees',
+        'sales_person_name': 'team_member_name'
     })
 
     # Format dates
@@ -894,7 +923,7 @@ def main():
 
     # Select and order columns
     final_columns = [
-        'sales_person_name', 'account_id', 'account_name', 'account_created_date',
+        'team_member_name', 'account_id', 'account_name', 'account_created_date',
         'event_completed_date', 'event_name', 'event_id', 'gateway_type',
         'ticket_sales', 'total_fees', 'flat_fee', 'commission_on_sales', 'total_commission', 'claimed_user_id'
     ]

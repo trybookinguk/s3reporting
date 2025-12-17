@@ -43,7 +43,7 @@ from modules.utils.date_utils import get_latest_data_date
 
 # Constants
 COMMISSION_CONFIG_FILE = 'sales_commission_config.json'
-MD_EMAIL = 'alex@trybooking.co.uk'
+MD_EMAIL = 'joan@trybooking.co.uk'
 
 
 def validate_environment():

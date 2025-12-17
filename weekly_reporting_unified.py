@@ -276,7 +276,7 @@ def main(send_email_report=True):
             # Email A - Internal
             internal_html = create_internal_email_content(stats, stats['current_week'])
             send_html_email(
-                to="alex@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk",
+                to="alex@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk, kathryn@trybooking.co.uk",
                 cc="alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, louise@trybooking.co.uk",
                 subject=f"New Accounts w/c {stats['week_start'].strftime('%d %B %Y')}",
                 html_content=internal_html

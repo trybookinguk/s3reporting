@@ -152,7 +152,7 @@ Chats by day:
 """
     
     send_html_email(
-        to="alex@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk",
+        to="alex@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk, kathryn@trybooking.co.uk",
         cc="alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk",
         subject=f"SalesIQ Weekly Chat Summary w/c {last_monday.strftime('%d %B %Y')}",
         html_content=html_content,

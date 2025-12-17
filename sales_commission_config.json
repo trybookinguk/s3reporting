@@ -1,0 +1,13 @@
+{
+  "default_rates": {
+    "flat_fee": 15.00,
+    "commission_rate": 0.10
+  },
+  "sales_people": {
+    "Nicola Hurst": {
+      "flat_fee": 15.00,
+      "commission_rate": 0.10,
+      "email": "nicola@trybooking.co.uk"
+    }
+  }
+}

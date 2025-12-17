@@ -158,52 +158,6 @@ def save_commission_history(history):
         json.dump(history, f, indent=2, default=str)
 
 
-def fetch_zoho_users(token):
-    """
-    Fetch all Zoho CRM users with their details.
-
-    Args:
-        token: Zoho OAuth access token
-
-    Returns:
-        Dict mapping user_id -> {name, email}
-    """
-    session = get_session()
-    headers = {"Authorization": f"Zoho-oauthtoken {token}"}
-    all_users = []
-    page = 1
-
-    print("Fetching Zoho users...")
-
-    while True:
-        params = {"page": page, "per_page": 200}
-        resp = session.get(f"{ZOHO_DOMAIN}/crm/v2/users", headers=headers, params=params)
-        resp.raise_for_status()
-
-        data = resp.json().get("users", [])
-        if not data:
-            break
-
-        all_users.extend(data)
-
-        if not resp.json().get("info", {}).get("more_records"):
-            break
-        page += 1
-
-    # Build lookup dictionary
-    user_map = {}
-    for user in all_users:
-        user_id = user.get("id")
-        if user_id:
-            user_map[user_id] = {
-                "name": user.get("full_name") or user.get("name", "Unknown"),
-                "email": user.get("email")
-            }
-
-    print(f"  Loaded {len(user_map)} users")
-    return user_map
-
-
 def fetch_claimed_accounts(token):
     """
     Fetch all Zoho CRM accounts that have the 'Claimed' field populated.
@@ -459,14 +413,13 @@ def generate_html_email_content(report_df, period_description, is_individual=Fal
     return html
 
 
-def send_reports(report_df, period_description, zoho_users, commission_config):
+def send_reports(report_df, period_description, commission_config):
     """
     Send commission reports via email.
 
     Args:
         report_df: DataFrame with all commission data
         period_description: Human-readable period (e.g., "November 2025" or "All Time")
-        zoho_users: Dict mapping user_id -> {name, email}
         commission_config: Commission configuration dict (for email overrides)
     """
     period_name = period_description
@@ -513,21 +466,12 @@ def send_reports(report_df, period_description, zoho_users, commission_config):
     for sales_person_name in report_df['sales_person_name'].unique():
         person_df = report_df[report_df['sales_person_name'] == sales_person_name]
 
-        # Get sales person email - first check config override, then Zoho
+        # Get sales person email from config
         sales_person_email = None
         person_config = commission_config.get('sales_people', {}).get(sales_person_name, {})
 
         if person_config.get('email'):
-            # Use email from config as override
             sales_person_email = person_config['email']
-        else:
-            # Fall back to Zoho user email
-            claimed_user_ids = person_df['claimed_user_id'].unique()
-            for user_id in claimed_user_ids:
-                user_info = zoho_users.get(user_id, {})
-                if user_info.get('email'):
-                    sales_person_email = user_info['email']
-                    break
 
         # Generate individual report
         person_filename = f"commission_{sales_person_name.replace(' ', '_')}_{file_code}.csv"
@@ -602,17 +546,11 @@ def main():
     print("=" * 60)
 
     token = get_access_token()
-    zoho_users = fetch_zoho_users(token)
     claimed_accounts = fetch_claimed_accounts(token)
 
     if claimed_accounts.empty:
         print("\nNo claimed accounts found in Zoho CRM. Exiting.")
         sys.exit(0)
-
-    # Enrich with user emails
-    claimed_accounts['claimed_user_email'] = claimed_accounts['claimed_user_id'].apply(
-        lambda x: zoho_users.get(x, {}).get('email')
-    )
 
     # Phase 2: Load commission history and filter
     print("\n" + "=" * 60)
@@ -630,7 +568,7 @@ def main():
 
     if unpaid_claimed.empty:
         print("\nNo unpaid claimed accounts. Sending empty report.")
-        send_reports(pd.DataFrame(), period_description, zoho_users, commission_config)
+        send_reports(pd.DataFrame(), period_description, commission_config)
         sys.exit(0)
 
     # Phase 3: Load S3 data (filtered to claimed accounts)
@@ -652,7 +590,7 @@ def main():
 
     if booking_df.empty:
         print("\nNo booking data for claimed accounts. Sending empty report.")
-        send_reports(pd.DataFrame(), period_description, zoho_users, commission_config)
+        send_reports(pd.DataFrame(), period_description, commission_config)
         sys.exit(0)
 
     # Phase 4: Find qualifying events
@@ -664,7 +602,7 @@ def main():
 
     if qualifying_events.empty:
         print("\nNo qualifying events found. Sending empty report.")
-        send_reports(pd.DataFrame(), period_description, zoho_users, commission_config)
+        send_reports(pd.DataFrame(), period_description, commission_config)
         sys.exit(0)
 
     # Phase 5: Enrich with account and sales person data
@@ -695,7 +633,7 @@ def main():
 
     if qualifying_events.empty:
         print("\nNo accounts match after joining with Zoho data. Sending empty report.")
-        send_reports(pd.DataFrame(), period_description, zoho_users, commission_config)
+        send_reports(pd.DataFrame(), period_description, commission_config)
         sys.exit(0)
 
     # Calculate commissions
@@ -740,7 +678,7 @@ def main():
     print("Phase 6: Sending reports")
     print("=" * 60)
 
-    send_reports(report_df, period_description, zoho_users, commission_config)
+    send_reports(report_df, period_description, commission_config)
 
     # Phase 7: Update commission history
     print("\n" + "=" * 60)

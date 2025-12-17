@@ -346,6 +346,7 @@ def generate_html_email_content(report_df, period_description, is_individual=Fal
     total_accounts = len(report_df)
     total_commission = report_df['total_commission'].sum()
     total_ticket_sales = report_df['ticket_sales'].sum()
+    total_fees = report_df['total_fees'].sum()
 
     if is_individual:
         title = f"Your Sales Commission - {period_name}"
@@ -391,6 +392,7 @@ def generate_html_email_content(report_df, period_description, is_individual=Fal
         <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse;">
             <tr><th style="text-align: left;">Total Qualifying Accounts</th><td>{total_accounts}</td></tr>
             <tr><th style="text-align: left;">Total Ticket Sales</th><td>£{total_ticket_sales:,.2f}</td></tr>
+            <tr><th style="text-align: left;">Total Fees</th><td>£{total_fees:,.2f}</td></tr>
             <tr><th style="text-align: left;">Total Commission Payable</th><td><strong>£{total_commission:,.2f}</strong></td></tr>
         </table>
 

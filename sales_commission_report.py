@@ -25,7 +25,6 @@ import os
 import sys
 import json
 import pandas as pd
-import requests
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
@@ -41,7 +40,6 @@ from modules.utils.email_utils import send_html_email
 from modules.utils.date_utils import get_latest_data_date
 
 # Constants
-COMMISSION_HISTORY_FILE = 'commission_paid_accounts.json'
 COMMISSION_CONFIG_FILE = 'sales_commission_config.json'
 MD_EMAIL = 'alex@trybooking.co.uk'
 
@@ -142,20 +140,6 @@ def get_rates_for_sales_person(config, sales_person_name):
         'flat_fee': person_rates.get('flat_fee', default_rates['flat_fee']),
         'commission_rate': person_rates.get('commission_rate', default_rates['commission_rate'])
     }
-
-
-def load_commission_history():
-    """Load commission history from file."""
-    if os.path.exists(COMMISSION_HISTORY_FILE):
-        with open(COMMISSION_HISTORY_FILE, 'r') as f:
-            return json.load(f)
-    return {"paid_accounts": []}
-
-
-def save_commission_history(history):
-    """Save commission history to file."""
-    with open(COMMISSION_HISTORY_FILE, 'w') as f:
-        json.dump(history, f, indent=2, default=str)
 
 
 def fetch_claimed_accounts(token):
@@ -547,28 +531,12 @@ def main():
         print("\nNo claimed accounts found in Zoho CRM. Exiting.")
         sys.exit(0)
 
-    # Phase 2: Load commission history and filter
-    print("\n" + "=" * 60)
-    print("Phase 2: Loading commission history")
-    print("=" * 60)
-
-    history = load_commission_history()
-    paid_account_ids = {str(h['account_id']) for h in history.get('paid_accounts', [])}
-    print(f"  Previously paid accounts: {len(paid_account_ids)}")
-
-    # Filter out already-paid accounts
+    # Ensure account_id is string for matching
     claimed_accounts['account_id'] = claimed_accounts['account_id'].astype(str)
-    unpaid_claimed = claimed_accounts[~claimed_accounts['account_id'].isin(paid_account_ids)]
-    print(f"  Claimed accounts not yet paid: {len(unpaid_claimed)}")
 
-    if unpaid_claimed.empty:
-        print("\nNo unpaid claimed accounts. Sending empty report.")
-        send_reports(pd.DataFrame(), period_description, commission_config)
-        sys.exit(0)
-
-    # Phase 3: Load S3 data (filtered to claimed accounts)
+    # Phase 2: Load S3 data (filtered to claimed accounts)
     print("\n" + "=" * 60)
-    print("Phase 3: Loading S3 booking data")
+    print("Phase 2: Loading S3 booking data")
     print("=" * 60)
 
     target_date = get_latest_data_date()
@@ -578,8 +546,16 @@ def main():
     accounts_df = load_accounts_data(target_date=target_date)
 
     # Filter booking data to claimed accounts only
-    claimed_account_ids = set(unpaid_claimed['account_id'].astype(str))
-    booking_df['AccountId'] = booking_df['AccountId'].astype(str)
+    # Convert AccountId to clean string (handle float -> int -> str to avoid "12345.0")
+    claimed_account_ids = set(claimed_accounts['account_id'].astype(str))
+    booking_df['AccountId'] = booking_df['AccountId'].fillna(0).astype(int).astype(str)
+
+    # Debug: Show sample of IDs for matching diagnostics
+    sample_claimed = list(claimed_account_ids)[:5]
+    sample_booking = booking_df['AccountId'].unique()[:5].tolist()
+    print(f"  Sample claimed account IDs: {sample_claimed}")
+    print(f"  Sample booking AccountIds: {sample_booking}")
+
     booking_df = booking_df[booking_df['AccountId'].isin(claimed_account_ids)]
     print(f"  Bookings for claimed accounts: {len(booking_df):,}")
 
@@ -588,9 +564,9 @@ def main():
         send_reports(pd.DataFrame(), period_description, commission_config)
         sys.exit(0)
 
-    # Phase 4: Find qualifying events
+    # Phase 3: Find qualifying events
     print("\n" + "=" * 60)
-    print("Phase 4: Finding qualifying events")
+    print("Phase 3: Finding qualifying events")
     print("=" * 60)
 
     qualifying_events = find_first_paid_events(booking_df, report_start, report_end)
@@ -600,16 +576,16 @@ def main():
         send_reports(pd.DataFrame(), period_description, commission_config)
         sys.exit(0)
 
-    # Phase 5: Enrich with account and sales person data
+    # Phase 4: Enrich with account and sales person data
     print("\n" + "=" * 60)
-    print("Phase 5: Enriching data and calculating commissions")
+    print("Phase 4: Enriching data and calculating commissions")
     print("=" * 60)
 
-    # Convert AccountId to string for joining
-    qualifying_events['AccountId'] = qualifying_events['AccountId'].astype(str)
+    # Convert AccountId to clean string for joining (handle float -> int -> str)
+    qualifying_events['AccountId'] = qualifying_events['AccountId'].fillna(0).astype(int).astype(str)
 
     # Merge with account data for gateway type and creation date
-    accounts_df['AccountId'] = accounts_df['AccountId'].astype(str)
+    accounts_df['AccountId'] = accounts_df['AccountId'].fillna(0).astype(int).astype(str)
     qualifying_events = qualifying_events.merge(
         accounts_df[['AccountId', 'AccountName', 'DateTimeCreated', 'GatewayGroup']],
         on='AccountId',
@@ -618,7 +594,7 @@ def main():
 
     # Merge with claimed accounts data for sales person info
     qualifying_events = qualifying_events.merge(
-        unpaid_claimed[['account_id', 'claimed_user_id', 'claimed_user_name']],
+        claimed_accounts[['account_id', 'claimed_user_id', 'claimed_user_name']],
         left_on='AccountId',
         right_on='account_id',
         how='inner'
@@ -668,32 +644,12 @@ def main():
     print(f"\n  Total qualifying accounts: {len(report_df)}")
     print(f"  Total commission payable: £{report_df['total_commission'].sum():,.2f}")
 
-    # Phase 6: Send reports
+    # Phase 5: Send reports
     print("\n" + "=" * 60)
-    print("Phase 6: Sending reports")
+    print("Phase 5: Sending reports")
     print("=" * 60)
 
     send_reports(report_df, period_description, commission_config)
-
-    # Phase 7: Update commission history
-    print("\n" + "=" * 60)
-    print("Phase 7: Updating commission history")
-    print("=" * 60)
-
-    new_paid_accounts = []
-    now = datetime.now(UK_TZ)
-    for _, row in report_df.iterrows():
-        new_paid_accounts.append({
-            'account_id': str(row['account_id']),
-            'paid_date': now.strftime('%Y-%m'),
-            'event_id': str(row['event_id']),
-            'amount': row['total_commission'],
-            'sales_person': row['sales_person_name']
-        })
-
-    history['paid_accounts'].extend(new_paid_accounts)
-    save_commission_history(history)
-    print(f"  Added {len(new_paid_accounts)} accounts to commission history")
 
     print("\n" + "=" * 60)
     print("Sales Commission Report Complete")

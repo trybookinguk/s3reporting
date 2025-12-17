@@ -347,10 +347,10 @@ def generate_html_email_content(report_df, period_description, is_individual=Fal
         intro = f"<p>Commission report for all sales team members for {period_name}.</p>"
 
         # Add per-person summary for MD report
-        person_summary = report_df.groupby('sales_person_name').agg({
-            'account_id': 'count',
-            'total_commission': 'sum'
-        }).reset_index()
+        person_summary = report_df.groupby('sales_person_name').agg(
+            Accounts=('total_commission', 'count'),
+            Total_Commission=('total_commission', 'sum')
+        ).reset_index()
         person_summary.columns = ['Sales Person', 'Accounts', 'Total Commission']
         person_summary['Total Commission'] = person_summary['Total Commission'].apply(lambda x: f"£{x:,.2f}")
 

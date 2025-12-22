@@ -334,17 +334,17 @@ def calculate_monthly_metrics(accounts_df, booking_df, year, month):
     # 12. Average tickets per booking
     avg_tickets_per_booking = (total_tickets_sold / total_transactions) if total_transactions > 0 else 0
 
-    # 13. Average account value (revenue per account selling in month)
-    avg_account_value = (total_ticket_sales / accounts_selling_in_month) if accounts_selling_in_month > 0 else 0
+    # 13. Average account ticket sales (ticket revenue per account selling in month)
+    avg_account_ticket_sales = (total_ticket_sales / accounts_selling_in_month) if accounts_selling_in_month > 0 else 0
 
-    # 14. Average event value (revenue per event with sales in month)
-    avg_event_value = (total_ticket_sales / events_with_sales) if events_with_sales > 0 else 0
+    # 14. Average event ticket sales (ticket revenue per event with sales in month)
+    avg_event_ticket_sales = (total_ticket_sales / events_with_sales) if events_with_sales > 0 else 0
 
-    # 15. Average fees per account
-    avg_fees_per_account = (total_fees / accounts_selling_in_month) if accounts_selling_in_month > 0 else 0
+    # 15. Average account fees (fees per account selling in month)
+    avg_account_fees = (total_fees / accounts_selling_in_month) if accounts_selling_in_month > 0 else 0
 
-    # 16. Average fees per event
-    avg_fees_per_event = (total_fees / events_with_sales) if events_with_sales > 0 else 0
+    # 16. Average event fees (fees per event with sales in month)
+    avg_event_fees = (total_fees / events_with_sales) if events_with_sales > 0 else 0
 
     # Calculate percentages
     pct_with_events = (activated_with_events / total_new_accounts * 100) if total_new_accounts > 0 else 0
@@ -370,10 +370,10 @@ def calculate_monthly_metrics(accounts_df, booking_df, year, month):
         'Avg Price Per Ticket': round(avg_price_per_ticket, 2),
         'Avg Transaction Value': round(avg_transaction_value, 2),
         'Avg Tickets Per Booking': round(avg_tickets_per_booking, 2),
-        'Avg Account Value': round(avg_account_value, 2),
-        'Avg Event Value': round(avg_event_value, 2),
-        'Avg Fees Per Account': round(avg_fees_per_account, 2),
-        'Avg Fees Per Event': round(avg_fees_per_event, 2),
+        'Avg Account Ticket Sales': round(avg_account_ticket_sales, 2),
+        'Avg Event Ticket Sales': round(avg_event_ticket_sales, 2),
+        'Avg Account Fees': round(avg_account_fees, 2),
+        'Avg Event Fees': round(avg_event_fees, 2),
         '% With Events': round(pct_with_events, 1),
         '% Sold Tickets': round(pct_sold_tickets, 1),
         '% Tier Qualified': round(pct_tier_qualified, 1),
@@ -557,9 +557,9 @@ def print_summary(results_df):
     print("\n" + "=" * 100)
     print("TRANSACTION & PRICING METRICS")
     print("=" * 100)
-    print(f"\n{'Month':<12} {'Accts':>8} {'Avg Tix':>10} {'Avg Trans':>12} {'Avg Tix/':>10} {'Avg Acct':>12} {'Avg Event':>12}")
-    print(f"{'':12} {'Selling':>8} {'Price':>10} {'Value':>12} {'Booking':>10} {'Value':>12} {'Value':>12}")
-    print("-" * 80)
+    print(f"\n{'Month':<12} {'Accts':>8} {'Avg Tix':>10} {'Avg Trans':>12} {'Avg Tix/':>10} {'Avg Acct':>14} {'Avg Event':>14}")
+    print(f"{'':12} {'Selling':>8} {'Price':>10} {'Value':>12} {'Booking':>10} {'Tix Sales':>14} {'Tix Sales':>14}")
+    print("-" * 85)
 
     for _, row in results_df.iterrows():
         month_label = f"{row['Month Name'][:3]} {row['Year']}"
@@ -568,18 +568,18 @@ def print_summary(results_df):
               f"£{row['Avg Price Per Ticket']:>8,.2f} "
               f"£{row['Avg Transaction Value']:>10,.2f} "
               f"{row['Avg Tickets Per Booking']:>10,.2f} "
-              f"£{row['Avg Account Value']:>10,.2f} "
-              f"£{row['Avg Event Value']:>10,.2f}")
+              f"£{row['Avg Account Ticket Sales']:>12,.2f} "
+              f"£{row['Avg Event Ticket Sales']:>12,.2f}")
 
     # Print averages
-    print("-" * 80)
+    print("-" * 85)
     print(f"{'AVERAGE':<12} "
           f"{results_df['Accounts Selling In Month'].mean():>8,.0f} "
           f"£{results_df['Avg Price Per Ticket'].mean():>8,.2f} "
           f"£{results_df['Avg Transaction Value'].mean():>10,.2f} "
           f"{results_df['Avg Tickets Per Booking'].mean():>10,.2f} "
-          f"£{results_df['Avg Account Value'].mean():>10,.2f} "
-          f"£{results_df['Avg Event Value'].mean():>10,.2f}")
+          f"£{results_df['Avg Account Ticket Sales'].mean():>12,.2f} "
+          f"£{results_df['Avg Event Ticket Sales'].mean():>12,.2f}")
 
     # Additional insights
     print("\n" + "=" * 100)
@@ -602,8 +602,10 @@ def print_summary(results_df):
     print(f"  Avg Price Per Ticket (Period):     £{total_revenue / total_tickets:.2f}" if total_tickets > 0 else "  Avg Price Per Ticket (Period):     N/A")
     print(f"  Avg Transaction Value (Period):    £{total_revenue / total_transactions:.2f}" if total_transactions > 0 else "  Avg Transaction Value (Period):    N/A")
     print(f"  Avg Tickets Per Booking (Period):  {total_tickets / total_transactions:.2f}" if total_transactions > 0 else "  Avg Tickets Per Booking (Period):  N/A")
-    print(f"  Avg Account Value (Period):        £{total_revenue / total_accounts_selling:.2f}" if total_accounts_selling > 0 else "  Avg Account Value (Period):        N/A")
-    print(f"  Avg Event Value (Period):          £{total_revenue / total_events:.2f}" if total_events > 0 else "  Avg Event Value (Period):          N/A")
+    print(f"  Avg Account Ticket Sales (Period): £{total_revenue / total_accounts_selling:.2f}" if total_accounts_selling > 0 else "  Avg Account Ticket Sales (Period): N/A")
+    print(f"  Avg Event Ticket Sales (Period):   £{total_revenue / total_events:.2f}" if total_events > 0 else "  Avg Event Ticket Sales (Period):   N/A")
+    print(f"  Avg Account Fees (Period):         £{total_fees / total_accounts_selling:.2f}" if total_accounts_selling > 0 else "  Avg Account Fees (Period):         N/A")
+    print(f"  Avg Event Fees (Period):           £{total_fees / total_events:.2f}" if total_events > 0 else "  Avg Event Fees (Period):           N/A")
     print(f"  Fee Rate (Fees/Revenue):           {total_fees / total_revenue * 100:.2f}%" if total_revenue > 0 else "  Fee Rate (Fees/Revenue):           N/A")
 
 

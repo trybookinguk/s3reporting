@@ -654,9 +654,9 @@ def main():
     # Print summary
     print_summary(results_df)
 
-    # Save to CSV
+    # Save to CSV - ensure no scientific notation for large numbers
     output_file = args.output
-    results_df.to_csv(output_file, index=False)
+    results_df.to_csv(output_file, index=False, float_format='%.2f')
     print(f"\n✓ Results saved to: {output_file}")
 
     print(f"\n=== Report Complete ===")

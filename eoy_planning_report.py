@@ -1172,6 +1172,251 @@ def generate_industry_breakdown_csv(accounts_df, booking_df, months, output_file
     return industry_file
 
 
+def _calculate_industry_metrics_for_period(booking_df, accounts_df, period_start, period_end, account_id_col):
+    """
+    Calculate industry/sub-industry metrics for a specific period.
+
+    Args:
+        booking_df: Full booking DataFrame
+        accounts_df: Full accounts DataFrame
+        period_start: Start timestamp
+        period_end: End timestamp
+        account_id_col: Column name for account ID
+
+    Returns:
+        Dictionary mapping (industry, sub_industry) tuple to metrics dict
+    """
+    # Filter bookings to period
+    period_bookings = booking_df[
+        (booking_df['TransactionDate'] >= period_start) &
+        (booking_df['TransactionDate'] <= period_end)
+    ].copy()
+
+    if len(period_bookings) == 0:
+        return {}
+
+    # Get industry from booking data or merge from accounts
+    if 'Industry' not in period_bookings.columns and 'Industry' in accounts_df.columns:
+        period_bookings = period_bookings.merge(
+            accounts_df[[account_id_col, 'Industry', 'SubIndustry']].rename(columns={account_id_col: 'AccountId'}),
+            on='AccountId',
+            how='left'
+        )
+    elif 'SubIndustry' not in period_bookings.columns and 'SubIndustry' in accounts_df.columns:
+        period_bookings = period_bookings.merge(
+            accounts_df[[account_id_col, 'SubIndustry']].rename(columns={account_id_col: 'AccountId'}),
+            on='AccountId',
+            how='left'
+        )
+
+    if 'Industry' not in period_bookings.columns:
+        return {}
+
+    # Filter new accounts created in period
+    new_accounts = accounts_df[
+        (accounts_df['DateTimeCreated'] >= period_start) &
+        (accounts_df['DateTimeCreated'] <= period_end)
+    ].copy()
+
+    # Aggregate by industry and sub-industry
+    industry_metrics = {}
+
+    # Handle SubIndustry column - might not exist
+    has_sub_industry = 'SubIndustry' in period_bookings.columns
+
+    if has_sub_industry:
+        # Group by both Industry and SubIndustry
+        for (industry, sub_industry), group in period_bookings.groupby(['Industry', 'SubIndustry'], dropna=False):
+            if pd.isna(industry):
+                continue
+
+            # Handle NaN sub-industry
+            sub_industry_str = sub_industry if pd.notna(sub_industry) else 'Unspecified'
+
+            # Filter new accounts for this industry/sub-industry
+            if 'Industry' in new_accounts.columns and 'SubIndustry' in new_accounts.columns:
+                ind_new_accounts = new_accounts[
+                    (new_accounts['Industry'] == industry) &
+                    ((new_accounts['SubIndustry'] == sub_industry) | (pd.isna(new_accounts['SubIndustry']) & pd.isna(sub_industry)))
+                ]
+            else:
+                ind_new_accounts = pd.DataFrame()
+
+            metrics = {
+                'New Accounts': len(ind_new_accounts),
+                'Active Accounts': group['AccountId'].nunique(),
+                'Events With Sales': group['EventId'].nunique() if 'EventId' in group.columns else 0,
+                'Total Tickets': int(group['TicketQuantity'].sum()) if 'TicketQuantity' in group.columns else 0,
+                'Total Transactions': len(group),
+                'Total Ticket Revenue': round(group['PaymentReceived'].sum(), 2) if 'PaymentReceived' in group.columns else 0,
+                'Total Fees': round(group['TotalFees'].sum(), 2) if 'TotalFees' in group.columns else 0,
+            }
+
+            industry_metrics[(industry, sub_industry_str)] = metrics
+    else:
+        # Group by Industry only
+        for industry, group in period_bookings.groupby('Industry', dropna=False):
+            if pd.isna(industry):
+                continue
+
+            # Filter new accounts for this industry
+            if 'Industry' in new_accounts.columns:
+                ind_new_accounts = new_accounts[new_accounts['Industry'] == industry]
+            else:
+                ind_new_accounts = pd.DataFrame()
+
+            metrics = {
+                'New Accounts': len(ind_new_accounts),
+                'Active Accounts': group['AccountId'].nunique(),
+                'Events With Sales': group['EventId'].nunique() if 'EventId' in group.columns else 0,
+                'Total Tickets': int(group['TicketQuantity'].sum()) if 'TicketQuantity' in group.columns else 0,
+                'Total Transactions': len(group),
+                'Total Ticket Revenue': round(group['PaymentReceived'].sum(), 2) if 'PaymentReceived' in group.columns else 0,
+                'Total Fees': round(group['TotalFees'].sum(), 2) if 'TotalFees' in group.columns else 0,
+            }
+
+            industry_metrics[(industry, 'Unspecified')] = metrics
+
+    return industry_metrics
+
+
+def generate_industry_subindustry_breakdown_csv(accounts_df, booking_df, months, output_file):
+    """
+    Generate industry/sub-industry breakdown CSV with metrics and YoY comparison.
+
+    Args:
+        accounts_df: Accounts DataFrame
+        booking_df: Booking transactions DataFrame
+        months: List of (year, month) tuples
+        output_file: Base output filename
+
+    Returns:
+        Path to generated CSV file
+    """
+    if not months:
+        return None
+
+    # Get date range for current period
+    first_year, first_month = months[0]
+    last_year, last_month = months[-1]
+
+    period_start = pd.Timestamp(year=first_year, month=first_month, day=1, tz='Europe/London')
+    last_day = calendar.monthrange(last_year, last_month)[1]
+    period_end = pd.Timestamp(year=last_year, month=last_month, day=last_day,
+                              hour=23, minute=59, second=59, tz='Europe/London')
+
+    # Calculate previous year period
+    py_start = pd.Timestamp(year=first_year - 1, month=first_month, day=1, tz='Europe/London')
+    py_last_day = calendar.monthrange(last_year - 1, last_month)[1]
+    py_end = pd.Timestamp(year=last_year - 1, month=last_month, day=py_last_day,
+                          hour=23, minute=59, second=59, tz='Europe/London')
+
+    # Determine account ID column
+    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Id'
+
+    # Check if industry data is available
+    if 'Industry' not in booking_df.columns and 'Industry' not in accounts_df.columns:
+        print("  Warning: No industry data available")
+        return None
+
+    # Calculate metrics for both periods
+    current_metrics = _calculate_industry_metrics_for_period(
+        booking_df, accounts_df, period_start, period_end, account_id_col
+    )
+    py_metrics = _calculate_industry_metrics_for_period(
+        booking_df, accounts_df, py_start, py_end, account_id_col
+    )
+
+    # Combine all industry/sub-industry pairs from both periods
+    all_keys = set(current_metrics.keys()) | set(py_metrics.keys())
+
+    # Build combined metrics with YoY comparison
+    industry_rows = []
+    for key in all_keys:
+        industry, sub_industry = key
+        curr = current_metrics.get(key, {})
+        prev = py_metrics.get(key, {})
+
+        row = {
+            'Industry': industry,
+            'Sub-Industry': sub_industry,
+            # Current year metrics
+            'New Accounts': curr.get('New Accounts', 0),
+            'Active Accounts': curr.get('Active Accounts', 0),
+            'Events With Sales': curr.get('Events With Sales', 0),
+            'Total Tickets': curr.get('Total Tickets', 0),
+            'Total Transactions': curr.get('Total Transactions', 0),
+            'Total Ticket Revenue': curr.get('Total Ticket Revenue', 0),
+            'Total Fees': curr.get('Total Fees', 0),
+            # Previous year metrics
+            'PY New Accounts': prev.get('New Accounts', 0),
+            'PY Active Accounts': prev.get('Active Accounts', 0),
+            'PY Events With Sales': prev.get('Events With Sales', 0),
+            'PY Total Tickets': prev.get('Total Tickets', 0),
+            'PY Total Transactions': prev.get('Total Transactions', 0),
+            'PY Total Ticket Revenue': prev.get('Total Ticket Revenue', 0),
+            'PY Total Fees': prev.get('Total Fees', 0),
+        }
+
+        # Calculate YoY changes
+        curr_revenue = curr.get('Total Ticket Revenue', 0)
+        prev_revenue = prev.get('Total Ticket Revenue', 0)
+        if prev_revenue > 0:
+            row['Revenue YoY %'] = round((curr_revenue - prev_revenue) / prev_revenue * 100, 1)
+        else:
+            row['Revenue YoY %'] = None
+
+        curr_tickets = curr.get('Total Tickets', 0)
+        prev_tickets = prev.get('Total Tickets', 0)
+        if prev_tickets > 0:
+            row['Tickets YoY %'] = round((curr_tickets - prev_tickets) / prev_tickets * 100, 1)
+        else:
+            row['Tickets YoY %'] = None
+
+        curr_accounts = curr.get('Active Accounts', 0)
+        prev_accounts = prev.get('Active Accounts', 0)
+        if prev_accounts > 0:
+            row['Active Accounts YoY %'] = round((curr_accounts - prev_accounts) / prev_accounts * 100, 1)
+        else:
+            row['Active Accounts YoY %'] = None
+
+        curr_fees = curr.get('Total Fees', 0)
+        prev_fees = prev.get('Total Fees', 0)
+        if prev_fees > 0:
+            row['Fees YoY %'] = round((curr_fees - prev_fees) / prev_fees * 100, 1)
+        else:
+            row['Fees YoY %'] = None
+
+        # Calculate averages for current period
+        if row['Active Accounts'] > 0:
+            row['Avg Revenue Per Account'] = round(row['Total Ticket Revenue'] / row['Active Accounts'], 2)
+            row['Avg Fees Per Account'] = round(row['Total Fees'] / row['Active Accounts'], 2)
+        else:
+            row['Avg Revenue Per Account'] = 0
+            row['Avg Fees Per Account'] = 0
+
+        if row['Events With Sales'] > 0:
+            row['Avg Revenue Per Event'] = round(row['Total Ticket Revenue'] / row['Events With Sales'], 2)
+        else:
+            row['Avg Revenue Per Event'] = 0
+
+        industry_rows.append(row)
+
+    # Sort by industry, then sub-industry, then by total revenue descending
+    industry_df = pd.DataFrame(industry_rows)
+    industry_df = industry_df.sort_values(
+        ['Industry', 'Total Ticket Revenue'],
+        ascending=[True, False]
+    )
+
+    # Generate filename
+    base_name = output_file.rsplit('.', 1)[0]
+    industry_file = f"{base_name}_by_industry_subindustry.csv"
+
+    industry_df.to_csv(industry_file, index=False, float_format='%.2f')
+    return industry_file
+
+
 def _calculate_geo_metrics_for_period(booking_df, accounts_df, period_start, period_end, postcode_col):
     """
     Calculate geographic metrics for a specific period.
@@ -1648,6 +1893,11 @@ def main():
     industry_file = generate_industry_breakdown_csv(accounts_df, booking_df, months, output_file)
     if industry_file:
         print(f"✓ Industry breakdown saved to: {industry_file}")
+
+    # Generate industry/sub-industry breakdown CSV with YoY
+    industry_sub_file = generate_industry_subindustry_breakdown_csv(accounts_df, booking_df, months, output_file)
+    if industry_sub_file:
+        print(f"✓ Industry/Sub-Industry breakdown saved to: {industry_sub_file}")
 
     # Generate geographic breakdown CSV
     geo_file = generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_file)

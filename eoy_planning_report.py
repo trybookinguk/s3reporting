@@ -42,6 +42,11 @@ from modules.utils.data_loader import (
 from modules.utils.date_utils import get_latest_data_date
 from modules.utils.performance import timer_decorator
 from modules.tier_calculator import determine_tier_from_percentiles
+from modules.uk_regional_segmentation import (
+    extract_postcode_areas_vectorized,
+    get_regions_vectorized,
+    VALID_UK_POSTCODE_AREAS
+)
 
 
 def parse_args():
@@ -1171,6 +1176,9 @@ def generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_fi
     """
     Generate geographic breakdown CSV with metrics per region (based on postcodes).
 
+    Uses the shared uk_regional_segmentation module for consistent postcode handling,
+    including BFPO support and validation against known UK postcode areas.
+
     Args:
         accounts_df: Accounts DataFrame
         booking_df: Booking transactions DataFrame
@@ -1209,9 +1217,14 @@ def generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_fi
         print("  Warning: No postcode data available")
         return None
 
-    # Extract postcode area (first 1-2 letters)
-    period_bookings['PostcodeArea'] = period_bookings[postcode_col].astype(str).str.extract(r'^([A-Za-z]{1,2})', expand=False)
-    period_bookings['PostcodeArea'] = period_bookings['PostcodeArea'].str.upper()
+    # Extract postcode areas and regions using shared module (handles BFPO, validation)
+    period_bookings['PostcodeArea'] = extract_postcode_areas_vectorized(period_bookings[postcode_col])
+    period_bookings['Region'] = get_regions_vectorized(period_bookings['PostcodeArea'])
+
+    # Filter to valid UK postcode areas only
+    period_bookings = period_bookings[
+        period_bookings['PostcodeArea'].isin(VALID_UK_POSTCODE_AREAS)
+    ]
 
     # Filter new accounts created in period
     new_accounts = accounts_df[
@@ -1219,24 +1232,24 @@ def generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_fi
         (accounts_df['DateTimeCreated'] <= period_end)
     ].copy()
 
-    # Extract postcode area from accounts if available
+    # Extract postcode area from accounts if available using shared module
     account_postcode_col = 'Postcode' if 'Postcode' in new_accounts.columns else None
     if account_postcode_col:
-        new_accounts['PostcodeArea'] = new_accounts[account_postcode_col].astype(str).str.extract(r'^([A-Za-z]{1,2})', expand=False)
-        new_accounts['PostcodeArea'] = new_accounts['PostcodeArea'].str.upper()
+        new_accounts['PostcodeArea'] = extract_postcode_areas_vectorized(new_accounts[account_postcode_col])
 
     # Aggregate by postcode area
     geo_metrics = []
 
     for area in period_bookings['PostcodeArea'].dropna().unique():
-        if not area or area == 'NAN' or len(area) == 0:
-            continue
-
         area_bookings = period_bookings[period_bookings['PostcodeArea'] == area]
         area_new_accounts = new_accounts[new_accounts['PostcodeArea'] == area] if 'PostcodeArea' in new_accounts.columns else pd.DataFrame()
 
+        # Get the region for this postcode area
+        region = area_bookings['Region'].iloc[0] if len(area_bookings) > 0 else 'Unknown'
+
         metrics = {
             'Postcode Area': area,
+            'Region': region,
             'New Accounts': len(area_new_accounts),
             'Active Accounts': area_bookings['AccountId'].nunique(),
             'Events With Sales': area_bookings['EventId'].nunique() if 'EventId' in area_bookings.columns else 0,

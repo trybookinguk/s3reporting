@@ -47,6 +47,7 @@ from modules.uk_regional_segmentation import (
     get_regions_vectorized,
     VALID_UK_POSTCODE_AREAS
 )
+from modules.event_keyword_analysis import generate_keyword_analysis_csvs
 
 
 def parse_args():
@@ -2131,6 +2132,13 @@ def main():
     cross_file = generate_industry_geography_crosstab_csv(accounts_df, booking_df, months, output_file)
     if cross_file:
         print(f"✓ Industry x Geography cross-tab saved to: {cross_file}")
+
+    # Generate keyword analysis reports
+    keyword_files = generate_keyword_analysis_csvs(booking_df, output_file)
+    if keyword_files:
+        print(f"✓ Keyword analysis reports generated:")
+        for report_type, filepath in keyword_files.items():
+            print(f"    - {report_type}: {filepath}")
 
     print(f"\n=== Report Complete ===")
 

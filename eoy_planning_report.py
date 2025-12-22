@@ -389,13 +389,17 @@ def calculate_monthly_metrics(accounts_df, booking_df, year, month):
     # This shows how far in advance new accounts set up events before they happen
     avg_days_creation_to_event = None
     if len(new_account_bookings) > 0 and 'EventDate' in new_account_bookings.columns:
+        # Rename the account creation date column to avoid conflict with booking's DateTimeCreated
+        account_creation_df = new_accounts[[account_id_col, 'DateTimeCreated']].rename(
+            columns={account_id_col: 'AccountId', 'DateTimeCreated': 'AccountCreatedDate'}
+        )
         bookings_with_dates = new_account_bookings.merge(
-            new_accounts[[account_id_col, 'DateTimeCreated']].rename(columns={account_id_col: 'AccountId'}),
+            account_creation_df,
             on='AccountId',
             how='left'
         )
-        if len(bookings_with_dates) > 0:
-            created = pd.to_datetime(bookings_with_dates['DateTimeCreated'], utc=True)
+        if len(bookings_with_dates) > 0 and 'AccountCreatedDate' in bookings_with_dates.columns:
+            created = pd.to_datetime(bookings_with_dates['AccountCreatedDate'], utc=True)
             event_date = pd.to_datetime(bookings_with_dates['EventDate'], utc=True)
             days_to_event = (event_date - created).dt.total_seconds() / 86400
             # Filter valid values (event after account creation, within 2 years)

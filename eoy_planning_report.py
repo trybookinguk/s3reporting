@@ -522,6 +522,57 @@ def print_summary(results_df):
                   f"£{row['Total Fees']:>8,.0f} ({py_fees:>6}) "
                   f"{fmt_yoy(row.get('YoY Fees')):>8}")
 
+        # Add summary row with period totals and averages
+        print("-" * 110)
+
+        # Calculate totals and averages for YoY comparison
+        total_new_accts = results_df['Total New Accounts'].sum()
+        total_py_accts = results_df['PY New Accounts'].dropna().sum()
+        total_events = results_df['Events With Sales'].sum()
+        total_py_events = results_df['PY Events With Sales'].dropna().sum()
+        total_revenue = results_df['Total Ticket Revenue'].sum()
+        total_py_revenue = results_df['PY Ticket Revenue'].dropna().sum()
+        total_fees = results_df['Total Fees'].sum()
+        total_py_fees = results_df['PY Fees'].dropna().sum()
+
+        # Calculate overall YoY percentages
+        yoy_accts = ((total_new_accts - total_py_accts) / total_py_accts * 100) if total_py_accts > 0 else None
+        yoy_events = ((total_events - total_py_events) / total_py_events * 100) if total_py_events > 0 else None
+        yoy_revenue = ((total_revenue - total_py_revenue) / total_py_revenue * 100) if total_py_revenue > 0 else None
+        yoy_fees = ((total_fees - total_py_fees) / total_py_fees * 100) if total_py_fees > 0 else None
+
+        print(f"{'TOTAL':<12} "
+              f"{int(total_new_accts):>6,} ({int(total_py_accts):>5,}) "
+              f"{fmt_yoy(yoy_accts):>8} "
+              f"{int(total_events):>6,} ({int(total_py_events):>5,}) "
+              f"{fmt_yoy(yoy_events):>8} "
+              f"£{total_revenue:>8,.0f} (£{total_py_revenue:>5,.0f}) "
+              f"{fmt_yoy(yoy_revenue):>8} "
+              f"£{total_fees:>8,.0f} (£{total_py_fees:>5,.0f}) "
+              f"{fmt_yoy(yoy_fees):>8}")
+
+        # Calculate monthly averages
+        num_months = len(results_df)
+        avg_new_accts = total_new_accts / num_months
+        avg_py_accts = total_py_accts / num_months if total_py_accts > 0 else 0
+        avg_events = total_events / num_months
+        avg_py_events = total_py_events / num_months if total_py_events > 0 else 0
+        avg_revenue = total_revenue / num_months
+        avg_py_revenue = total_py_revenue / num_months if total_py_revenue > 0 else 0
+        avg_fees = total_fees / num_months
+        avg_py_fees = total_py_fees / num_months if total_py_fees > 0 else 0
+
+        # Average YoY is same as total YoY for the period
+        print(f"{'AVERAGE':<12} "
+              f"{avg_new_accts:>6,.0f} ({avg_py_accts:>5,.0f}) "
+              f"{fmt_yoy(yoy_accts):>8} "
+              f"{avg_events:>6,.0f} ({avg_py_events:>5,.0f}) "
+              f"{fmt_yoy(yoy_events):>8} "
+              f"£{avg_revenue:>8,.0f} (£{avg_py_revenue:>5,.0f}) "
+              f"{fmt_yoy(yoy_revenue):>8} "
+              f"£{avg_fees:>8,.0f} (£{avg_py_fees:>5,.0f}) "
+              f"{fmt_yoy(yoy_fees):>8}")
+
     # Print activation timing metrics
     print("\n" + "=" * 100)
     print("ACTIVATION TIMING (Average days from account creation)")
@@ -571,8 +622,15 @@ def print_summary(results_df):
               f"£{row['Avg Account Ticket Sales']:>12,.2f} "
               f"£{row['Avg Event Ticket Sales']:>12,.2f}")
 
-    # Print averages
+    # Print totals and averages
     print("-" * 85)
+    print(f"{'TOTAL':<12} "
+          f"{results_df['Accounts Selling In Month'].sum():>8,} "
+          f"{'':>10} "
+          f"{'':>12} "
+          f"{'':>10} "
+          f"{'':>14} "
+          f"{'':>14}")
     print(f"{'AVERAGE':<12} "
           f"{results_df['Accounts Selling In Month'].mean():>8,.0f} "
           f"£{results_df['Avg Price Per Ticket'].mean():>8,.2f} "
@@ -607,6 +665,139 @@ def print_summary(results_df):
     print(f"  Avg Account Fees (Period):         £{total_fees / total_accounts_selling:.2f}" if total_accounts_selling > 0 else "  Avg Account Fees (Period):         N/A")
     print(f"  Avg Event Fees (Period):           £{total_fees / total_events:.2f}" if total_events > 0 else "  Avg Event Fees (Period):           N/A")
     print(f"  Fee Rate (Fees/Revenue):           {total_fees / total_revenue * 100:.2f}%" if total_revenue > 0 else "  Fee Rate (Fees/Revenue):           N/A")
+
+
+def generate_summary_csv(results_df, output_file):
+    """
+    Generate a summary CSV with period totals and monthly breakdown.
+
+    Args:
+        results_df: DataFrame with monthly metrics
+        output_file: Base output filename (will create _summary version)
+    """
+    # Calculate period totals
+    total_tickets = results_df['Total Tickets Sold'].sum()
+    total_transactions = results_df['Total Transactions'].sum()
+    total_revenue = results_df['Total Ticket Revenue'].sum()
+    total_fees = results_df['Total Fees'].sum()
+    total_accounts_selling = results_df['Accounts Selling In Month'].sum()
+    total_events = results_df['Events With Sales'].sum()
+
+    # YoY totals if available
+    has_yoy = 'PY New Accounts' in results_df.columns and results_df['PY New Accounts'].notna().any()
+
+    if has_yoy:
+        total_py_accts = results_df['PY New Accounts'].dropna().sum()
+        total_py_events = results_df['PY Events With Sales'].dropna().sum()
+        total_py_revenue = results_df['PY Ticket Revenue'].dropna().sum()
+        total_py_fees = results_df['PY Fees'].dropna().sum()
+
+        yoy_accts = ((results_df['Total New Accounts'].sum() - total_py_accts) / total_py_accts * 100) if total_py_accts > 0 else None
+        yoy_events = ((total_events - total_py_events) / total_py_events * 100) if total_py_events > 0 else None
+        yoy_revenue = ((total_revenue - total_py_revenue) / total_py_revenue * 100) if total_py_revenue > 0 else None
+        yoy_fees = ((total_fees - total_py_fees) / total_py_fees * 100) if total_py_fees > 0 else None
+
+    # Build summary rows
+    summary_rows = []
+
+    # Period summary row
+    period_row = {
+        'Period': 'TOTAL',
+        'Total New Accounts': results_df['Total New Accounts'].sum(),
+        'Activated (Created Events)': results_df['Activated (Created Events)'].sum(),
+        'Activated (Sold 10+ Tickets)': results_df['Activated (Sold 10+ Tickets)'].sum(),
+        'New Accounts Sold Tickets': results_df['New Accounts Sold Tickets'].sum(),
+        'New Accounts Tier Qualified': results_df['New Accounts Tier Qualified'].sum(),
+        'Accounts Selling In Month': total_accounts_selling,
+        'Events With Sales': total_events,
+        'Total Tickets Sold': total_tickets,
+        'Total Transactions': total_transactions,
+        'Total Ticket Revenue': round(total_revenue, 2),
+        'Total Fees': round(total_fees, 2),
+        'Avg Price Per Ticket': round(total_revenue / total_tickets, 2) if total_tickets > 0 else 0,
+        'Avg Transaction Value': round(total_revenue / total_transactions, 2) if total_transactions > 0 else 0,
+        'Avg Tickets Per Booking': round(total_tickets / total_transactions, 2) if total_transactions > 0 else 0,
+        'Avg Account Ticket Sales': round(total_revenue / total_accounts_selling, 2) if total_accounts_selling > 0 else 0,
+        'Avg Event Ticket Sales': round(total_revenue / total_events, 2) if total_events > 0 else 0,
+        'Avg Account Fees': round(total_fees / total_accounts_selling, 2) if total_accounts_selling > 0 else 0,
+        'Avg Event Fees': round(total_fees / total_events, 2) if total_events > 0 else 0,
+        '% With Events': round(results_df['% With Events'].mean(), 1),
+        '% Sold Tickets': round(results_df['% Sold Tickets'].mean(), 1),
+        '% Tier Qualified': round(results_df['% Tier Qualified'].mean(), 1),
+        'Avg Days to First Event': round(results_df['Avg Days to First Event'].dropna().mean(), 1) if results_df['Avg Days to First Event'].notna().any() else None,
+        'Avg Days to First Sale': round(results_df['Avg Days to First Sale'].dropna().mean(), 1) if results_df['Avg Days to First Sale'].notna().any() else None,
+    }
+
+    if has_yoy:
+        period_row['PY New Accounts'] = total_py_accts
+        period_row['PY Events With Sales'] = total_py_events
+        period_row['PY Ticket Revenue'] = round(total_py_revenue, 2)
+        period_row['PY Fees'] = round(total_py_fees, 2)
+        period_row['YoY New Accounts'] = round(yoy_accts, 1) if yoy_accts is not None else None
+        period_row['YoY Events With Sales'] = round(yoy_events, 1) if yoy_events is not None else None
+        period_row['YoY Ticket Revenue'] = round(yoy_revenue, 1) if yoy_revenue is not None else None
+        period_row['YoY Fees'] = round(yoy_fees, 1) if yoy_fees is not None else None
+
+    summary_rows.append(period_row)
+
+    # Average row
+    num_months = len(results_df)
+    avg_row = {
+        'Period': 'AVERAGE',
+        'Total New Accounts': round(results_df['Total New Accounts'].mean(), 0),
+        'Activated (Created Events)': round(results_df['Activated (Created Events)'].mean(), 0),
+        'Activated (Sold 10+ Tickets)': round(results_df['Activated (Sold 10+ Tickets)'].mean(), 0),
+        'New Accounts Sold Tickets': round(results_df['New Accounts Sold Tickets'].mean(), 0),
+        'New Accounts Tier Qualified': round(results_df['New Accounts Tier Qualified'].mean(), 0),
+        'Accounts Selling In Month': round(results_df['Accounts Selling In Month'].mean(), 0),
+        'Events With Sales': round(results_df['Events With Sales'].mean(), 0),
+        'Total Tickets Sold': round(results_df['Total Tickets Sold'].mean(), 0),
+        'Total Transactions': round(results_df['Total Transactions'].mean(), 0),
+        'Total Ticket Revenue': round(results_df['Total Ticket Revenue'].mean(), 2),
+        'Total Fees': round(results_df['Total Fees'].mean(), 2),
+        'Avg Price Per Ticket': round(results_df['Avg Price Per Ticket'].mean(), 2),
+        'Avg Transaction Value': round(results_df['Avg Transaction Value'].mean(), 2),
+        'Avg Tickets Per Booking': round(results_df['Avg Tickets Per Booking'].mean(), 2),
+        'Avg Account Ticket Sales': round(results_df['Avg Account Ticket Sales'].mean(), 2),
+        'Avg Event Ticket Sales': round(results_df['Avg Event Ticket Sales'].mean(), 2),
+        'Avg Account Fees': round(results_df['Avg Account Fees'].mean(), 2),
+        'Avg Event Fees': round(results_df['Avg Event Fees'].mean(), 2),
+        '% With Events': round(results_df['% With Events'].mean(), 1),
+        '% Sold Tickets': round(results_df['% Sold Tickets'].mean(), 1),
+        '% Tier Qualified': round(results_df['% Tier Qualified'].mean(), 1),
+        'Avg Days to First Event': round(results_df['Avg Days to First Event'].dropna().mean(), 1) if results_df['Avg Days to First Event'].notna().any() else None,
+        'Avg Days to First Sale': round(results_df['Avg Days to First Sale'].dropna().mean(), 1) if results_df['Avg Days to First Sale'].notna().any() else None,
+    }
+
+    if has_yoy:
+        avg_row['PY New Accounts'] = round(total_py_accts / num_months, 0) if total_py_accts > 0 else 0
+        avg_row['PY Events With Sales'] = round(total_py_events / num_months, 0) if total_py_events > 0 else 0
+        avg_row['PY Ticket Revenue'] = round(total_py_revenue / num_months, 2) if total_py_revenue > 0 else 0
+        avg_row['PY Fees'] = round(total_py_fees / num_months, 2) if total_py_fees > 0 else 0
+        avg_row['YoY New Accounts'] = round(yoy_accts, 1) if yoy_accts is not None else None
+        avg_row['YoY Events With Sales'] = round(yoy_events, 1) if yoy_events is not None else None
+        avg_row['YoY Ticket Revenue'] = round(yoy_revenue, 1) if yoy_revenue is not None else None
+        avg_row['YoY Fees'] = round(yoy_fees, 1) if yoy_fees is not None else None
+
+    summary_rows.append(avg_row)
+
+    # Add monthly rows with Period column
+    for _, row in results_df.iterrows():
+        month_row = {'Period': f"{row['Month Name'][:3]} {row['Year']}"}
+        for col in results_df.columns:
+            if col not in ['Year', 'Month', 'Month Name']:
+                month_row[col] = row[col]
+        summary_rows.append(month_row)
+
+    # Create DataFrame and save
+    summary_df = pd.DataFrame(summary_rows)
+
+    # Generate summary filename
+    base_name = output_file.rsplit('.', 1)[0]
+    summary_file = f"{base_name}_summary.csv"
+
+    summary_df.to_csv(summary_file, index=False, float_format='%.2f')
+    return summary_file
 
 
 def main():
@@ -659,7 +850,11 @@ def main():
     # Save to CSV - ensure no scientific notation for large numbers
     output_file = args.output
     results_df.to_csv(output_file, index=False, float_format='%.2f')
-    print(f"\n✓ Results saved to: {output_file}")
+    print(f"\n✓ Monthly results saved to: {output_file}")
+
+    # Generate summary CSV with totals and averages
+    summary_file = generate_summary_csv(results_df, output_file)
+    print(f"✓ Summary report saved to: {summary_file}")
 
     print(f"\n=== Report Complete ===")
 

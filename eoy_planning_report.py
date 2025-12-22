@@ -1172,52 +1172,30 @@ def generate_industry_breakdown_csv(accounts_df, booking_df, months, output_file
     return industry_file
 
 
-def generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_file):
+def _calculate_geo_metrics_for_period(booking_df, accounts_df, period_start, period_end, postcode_col):
     """
-    Generate geographic breakdown CSV with metrics per region (based on postcodes).
-
-    Uses the shared uk_regional_segmentation module for consistent postcode handling,
-    including BFPO support and validation against known UK postcode areas.
+    Calculate geographic metrics for a specific period.
 
     Args:
-        accounts_df: Accounts DataFrame
-        booking_df: Booking transactions DataFrame
-        months: List of (year, month) tuples
-        output_file: Base output filename
+        booking_df: Full booking DataFrame
+        accounts_df: Full accounts DataFrame
+        period_start: Start timestamp
+        period_end: End timestamp
+        postcode_col: Column name for postcode data
 
     Returns:
-        Path to generated CSV file
+        Dictionary mapping postcode area to metrics dict
     """
-    if not months:
-        return None
-
-    # Get date range
-    first_year, first_month = months[0]
-    last_year, last_month = months[-1]
-
-    period_start = pd.Timestamp(year=first_year, month=first_month, day=1, tz='Europe/London')
-    last_day = calendar.monthrange(last_year, last_month)[1]
-    period_end = pd.Timestamp(year=last_year, month=last_month, day=last_day,
-                              hour=23, minute=59, second=59, tz='Europe/London')
-
     # Filter bookings to period
     period_bookings = booking_df[
         (booking_df['TransactionDate'] >= period_start) &
         (booking_df['TransactionDate'] <= period_end)
     ].copy()
 
-    # Use EventPostcode or AccountPostcode
-    postcode_col = None
-    if 'EventPostcode' in period_bookings.columns:
-        postcode_col = 'EventPostcode'
-    elif 'AccountPostcode' in period_bookings.columns:
-        postcode_col = 'AccountPostcode'
+    if len(period_bookings) == 0:
+        return {}
 
-    if postcode_col is None:
-        print("  Warning: No postcode data available")
-        return None
-
-    # Extract postcode areas and regions using shared module (handles BFPO, validation)
+    # Extract postcode areas and regions using shared module
     period_bookings['PostcodeArea'] = extract_postcode_areas_vectorized(period_bookings[postcode_col])
     period_bookings['Region'] = get_regions_vectorized(period_bookings['PostcodeArea'])
 
@@ -1232,13 +1210,13 @@ def generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_fi
         (accounts_df['DateTimeCreated'] <= period_end)
     ].copy()
 
-    # Extract postcode area from accounts if available using shared module
+    # Extract postcode area from accounts if available
     account_postcode_col = 'Postcode' if 'Postcode' in new_accounts.columns else None
     if account_postcode_col:
         new_accounts['PostcodeArea'] = extract_postcode_areas_vectorized(new_accounts[account_postcode_col])
 
     # Aggregate by postcode area
-    geo_metrics = []
+    geo_metrics = {}
 
     for area in period_bookings['PostcodeArea'].dropna().unique():
         area_bookings = period_bookings[period_bookings['PostcodeArea'] == area]
@@ -1248,7 +1226,6 @@ def generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_fi
         region = area_bookings['Region'].iloc[0] if len(area_bookings) > 0 else 'Unknown'
 
         metrics = {
-            'Postcode Area': area,
             'Region': region,
             'New Accounts': len(area_new_accounts),
             'Active Accounts': area_bookings['AccountId'].nunique(),
@@ -1259,21 +1236,135 @@ def generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_fi
             'Total Fees': round(area_bookings['TotalFees'].sum(), 2) if 'TotalFees' in area_bookings.columns else 0,
         }
 
-        # Calculate averages
-        if metrics['Active Accounts'] > 0:
-            metrics['Avg Revenue Per Account'] = round(metrics['Total Ticket Revenue'] / metrics['Active Accounts'], 2)
-        else:
-            metrics['Avg Revenue Per Account'] = 0
+        geo_metrics[area] = metrics
 
-        if metrics['Events With Sales'] > 0:
-            metrics['Avg Revenue Per Event'] = round(metrics['Total Ticket Revenue'] / metrics['Events With Sales'], 2)
-        else:
-            metrics['Avg Revenue Per Event'] = 0
+    return geo_metrics
 
-        geo_metrics.append(metrics)
+
+def generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_file):
+    """
+    Generate geographic breakdown CSV with metrics per region (based on postcodes).
+
+    Uses the shared uk_regional_segmentation module for consistent postcode handling,
+    including BFPO support and validation against known UK postcode areas.
+    Includes YoY comparison with previous year's same period.
+
+    Args:
+        accounts_df: Accounts DataFrame
+        booking_df: Booking transactions DataFrame
+        months: List of (year, month) tuples
+        output_file: Base output filename
+
+    Returns:
+        Path to generated CSV file
+    """
+    if not months:
+        return None
+
+    # Get date range for current period
+    first_year, first_month = months[0]
+    last_year, last_month = months[-1]
+
+    period_start = pd.Timestamp(year=first_year, month=first_month, day=1, tz='Europe/London')
+    last_day = calendar.monthrange(last_year, last_month)[1]
+    period_end = pd.Timestamp(year=last_year, month=last_month, day=last_day,
+                              hour=23, minute=59, second=59, tz='Europe/London')
+
+    # Calculate previous year period
+    py_start = pd.Timestamp(year=first_year - 1, month=first_month, day=1, tz='Europe/London')
+    py_last_day = calendar.monthrange(last_year - 1, last_month)[1]
+    py_end = pd.Timestamp(year=last_year - 1, month=last_month, day=py_last_day,
+                          hour=23, minute=59, second=59, tz='Europe/London')
+
+    # Determine postcode column
+    postcode_col = None
+    if 'EventPostcode' in booking_df.columns:
+        postcode_col = 'EventPostcode'
+    elif 'AccountPostcode' in booking_df.columns:
+        postcode_col = 'AccountPostcode'
+
+    if postcode_col is None:
+        print("  Warning: No postcode data available")
+        return None
+
+    # Calculate metrics for both periods
+    current_metrics = _calculate_geo_metrics_for_period(
+        booking_df, accounts_df, period_start, period_end, postcode_col
+    )
+    py_metrics = _calculate_geo_metrics_for_period(
+        booking_df, accounts_df, py_start, py_end, postcode_col
+    )
+
+    # Combine all postcode areas from both periods
+    all_areas = set(current_metrics.keys()) | set(py_metrics.keys())
+
+    # Build combined metrics with YoY comparison
+    geo_rows = []
+    for area in all_areas:
+        curr = current_metrics.get(area, {})
+        prev = py_metrics.get(area, {})
+
+        # Get region from whichever period has data
+        region = curr.get('Region') or prev.get('Region', 'Unknown')
+
+        row = {
+            'Postcode Area': area,
+            'Region': region,
+            # Current year metrics
+            'New Accounts': curr.get('New Accounts', 0),
+            'Active Accounts': curr.get('Active Accounts', 0),
+            'Events With Sales': curr.get('Events With Sales', 0),
+            'Total Tickets': curr.get('Total Tickets', 0),
+            'Total Transactions': curr.get('Total Transactions', 0),
+            'Total Ticket Revenue': curr.get('Total Ticket Revenue', 0),
+            'Total Fees': curr.get('Total Fees', 0),
+            # Previous year metrics
+            'PY New Accounts': prev.get('New Accounts', 0),
+            'PY Active Accounts': prev.get('Active Accounts', 0),
+            'PY Events With Sales': prev.get('Events With Sales', 0),
+            'PY Total Tickets': prev.get('Total Tickets', 0),
+            'PY Total Transactions': prev.get('Total Transactions', 0),
+            'PY Total Ticket Revenue': prev.get('Total Ticket Revenue', 0),
+            'PY Total Fees': prev.get('Total Fees', 0),
+        }
+
+        # Calculate YoY changes
+        curr_revenue = curr.get('Total Ticket Revenue', 0)
+        prev_revenue = prev.get('Total Ticket Revenue', 0)
+        if prev_revenue > 0:
+            row['Revenue YoY %'] = round((curr_revenue - prev_revenue) / prev_revenue * 100, 1)
+        else:
+            row['Revenue YoY %'] = None
+
+        curr_tickets = curr.get('Total Tickets', 0)
+        prev_tickets = prev.get('Total Tickets', 0)
+        if prev_tickets > 0:
+            row['Tickets YoY %'] = round((curr_tickets - prev_tickets) / prev_tickets * 100, 1)
+        else:
+            row['Tickets YoY %'] = None
+
+        curr_accounts = curr.get('Active Accounts', 0)
+        prev_accounts = prev.get('Active Accounts', 0)
+        if prev_accounts > 0:
+            row['Active Accounts YoY %'] = round((curr_accounts - prev_accounts) / prev_accounts * 100, 1)
+        else:
+            row['Active Accounts YoY %'] = None
+
+        # Calculate averages for current period
+        if row['Active Accounts'] > 0:
+            row['Avg Revenue Per Account'] = round(row['Total Ticket Revenue'] / row['Active Accounts'], 2)
+        else:
+            row['Avg Revenue Per Account'] = 0
+
+        if row['Events With Sales'] > 0:
+            row['Avg Revenue Per Event'] = round(row['Total Ticket Revenue'] / row['Events With Sales'], 2)
+        else:
+            row['Avg Revenue Per Event'] = 0
+
+        geo_rows.append(row)
 
     # Sort by total revenue descending
-    geo_df = pd.DataFrame(geo_metrics)
+    geo_df = pd.DataFrame(geo_rows)
     geo_df = geo_df.sort_values('Total Ticket Revenue', ascending=False)
 
     # Generate filename

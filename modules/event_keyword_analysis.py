@@ -5,6 +5,8 @@ Extracts marketing intelligence from event data:
 - Keyword extraction from event names
 - Temporal patterns (when events happen, lead times)
 - Keyword associations (co-occurring terms)
+
+Optimised for large datasets using vectorised operations.
 """
 
 import pandas as pd
@@ -52,30 +54,34 @@ VENUE_WORDS = frozenset([
 
 # Simple stemming rules (suffix stripping)
 STEM_RULES = [
-    (r'ies$', 'y'),      # parties -> party
-    (r'ves$', 'f'),      # wolves -> wolf
-    (r'oes$', 'o'),      # heroes -> hero
-    (r'ses$', 's'),      # classes -> class
-    (r'xes$', 'x'),      # boxes -> box
-    (r'ches$', 'ch'),    # matches -> match
-    (r'shes$', 'sh'),    # wishes -> wish
-    (r'ing$', ''),       # running -> run
-    (r'tion$', 't'),     # celebration -> celebrat
-    (r'sion$', 's'),     # admission -> admis
-    (r'ness$', ''),      # happiness -> happi
-    (r'ment$', ''),      # entertainment -> entertain
-    (r'able$', ''),      # suitable -> suit
-    (r'ible$', ''),      # possible -> poss
-    (r'ful$', ''),       # wonderful -> wonder
-    (r'less$', ''),      # endless -> end
-    (r'ous$', ''),       # famous -> fam
-    (r'ive$', ''),       # creative -> creat
-    (r'ly$', ''),        # quickly -> quick
-    (r'er$', ''),        # runner -> runn
-    (r'est$', ''),       # fastest -> fast
-    (r'ed$', ''),        # played -> play
-    (r's$', ''),         # runs -> run (must be last)
+    (re.compile(r'ies$'), 'y'),      # parties -> party
+    (re.compile(r'ves$'), 'f'),      # wolves -> wolf
+    (re.compile(r'oes$'), 'o'),      # heroes -> hero
+    (re.compile(r'ses$'), 's'),      # classes -> class
+    (re.compile(r'xes$'), 'x'),      # boxes -> box
+    (re.compile(r'ches$'), 'ch'),    # matches -> match
+    (re.compile(r'shes$'), 'sh'),    # wishes -> wish
+    (re.compile(r'ing$'), ''),       # running -> run
+    (re.compile(r'tion$'), 't'),     # celebration -> celebrat
+    (re.compile(r'sion$'), 's'),     # admission -> admis
+    (re.compile(r'ness$'), ''),      # happiness -> happi
+    (re.compile(r'ment$'), ''),      # entertainment -> entertain
+    (re.compile(r'able$'), ''),      # suitable -> suit
+    (re.compile(r'ible$'), ''),      # possible -> poss
+    (re.compile(r'ful$'), ''),       # wonderful -> wonder
+    (re.compile(r'less$'), ''),      # endless -> end
+    (re.compile(r'ous$'), ''),       # famous -> fam
+    (re.compile(r'ive$'), ''),       # creative -> creat
+    (re.compile(r'ly$'), ''),        # quickly -> quick
+    (re.compile(r'er$'), ''),        # runner -> runn
+    (re.compile(r'est$'), ''),       # fastest -> fast
+    (re.compile(r'ed$'), ''),        # played -> play
+    (re.compile(r's$'), ''),         # runs -> run (must be last)
 ]
+
+# Pre-compiled regex for cleaning
+YEAR_PATTERN = re.compile(r'^(19|20)\d{2}$')
+NON_ALPHA_PATTERN = re.compile(r'[^a-z\s]')
 
 
 def simple_stem(word: str) -> str:
@@ -86,12 +92,10 @@ def simple_stem(word: str) -> str:
     if len(word) <= 3:
         return word
 
-    original = word
     for pattern, replacement in STEM_RULES:
-        new_word = re.sub(pattern, replacement, word)
+        new_word = pattern.sub(replacement, word)
         if new_word != word and len(new_word) >= 3:
-            word = new_word
-            break  # Apply only one rule
+            return new_word
 
     return word
 
@@ -110,49 +114,65 @@ def extract_keywords(event_name: str, min_length: int = 3) -> List[str]:
     if not event_name or not isinstance(event_name, str):
         return []
 
-    # Lowercase
-    text = event_name.lower()
+    # Lowercase and remove special characters
+    text = NON_ALPHA_PATTERN.sub(' ', event_name.lower())
 
-    # Remove special characters, keep letters and spaces
-    text = re.sub(r'[^a-z\s]', ' ', text)
-
-    # Split into words
-    words = text.split()
-
-    # Filter and process
+    # Split and filter
     keywords = []
-    for word in words:
-        # Skip short words
-        if len(word) < min_length:
-            continue
+    for word in text.split():
+        # Skip short words, stopwords, venue words, years
+        if (len(word) >= min_length and
+            word not in STOPWORDS and
+            word not in VENUE_WORDS and
+            not YEAR_PATTERN.match(word)):
 
-        # Skip stopwords
-        if word in STOPWORDS:
-            continue
-
-        # Skip venue words
-        if word in VENUE_WORDS:
-            continue
-
-        # Skip if it looks like a year (4 digits that could be 19xx or 20xx)
-        if re.match(r'^(19|20)\d{2}$', word):
-            continue
-
-        # Apply stemming
-        stemmed = simple_stem(word)
-
-        # Skip if too short after stemming
-        if len(stemmed) < min_length:
-            continue
-
-        keywords.append(stemmed)
+            stemmed = simple_stem(word)
+            if len(stemmed) >= min_length:
+                keywords.append(stemmed)
 
     return keywords
+
+
+def _aggregate_events(booking_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate booking data to event level for efficient processing.
+
+    Returns DataFrame with one row per event containing:
+    - EventId, EventName, total_revenue, total_tickets, event_date, first_sale
+    """
+    # Ensure required columns exist
+    required_cols = ['EventId', 'EventName']
+    if not all(col in booking_df.columns for col in required_cols):
+        return pd.DataFrame()
+
+    # Aggregate to event level
+    agg_dict = {
+        'EventName': 'first',
+        'PaymentReceived': 'sum',
+        'TicketQuantity': 'sum',
+    }
+
+    if 'EventDate' in booking_df.columns:
+        agg_dict['EventDate'] = 'first'
+    if 'TransactionDate' in booking_df.columns:
+        agg_dict['TransactionDate'] = 'min'  # First sale
+
+    events_df = booking_df.groupby('EventId').agg(agg_dict).reset_index()
+
+    # Rename columns
+    events_df = events_df.rename(columns={
+        'PaymentReceived': 'total_revenue',
+        'TicketQuantity': 'total_tickets',
+        'TransactionDate': 'first_sale'
+    })
+
+    return events_df
 
 
 def build_keyword_frequency_table(booking_df: pd.DataFrame) -> pd.DataFrame:
     """
     Build a frequency table of keywords weighted by count, revenue, and tickets.
+    Optimised to aggregate at event level first.
 
     Args:
         booking_df: Booking DataFrame with EventName, PaymentReceived, TicketQuantity
@@ -160,44 +180,45 @@ def build_keyword_frequency_table(booking_df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame with keyword metrics
     """
-    keyword_stats = defaultdict(lambda: {
-        'event_count': 0,
-        'total_revenue': 0.0,
-        'total_tickets': 0,
-        'event_ids': set()
-    })
+    # Aggregate to event level first
+    events_df = _aggregate_events(booking_df)
 
-    # Process each booking
-    for _, row in booking_df.iterrows():
-        event_name = row.get('EventName', '')
-        event_id = row.get('EventId')
-        revenue = row.get('PaymentReceived', 0) or 0
-        tickets = row.get('TicketQuantity', 0) or 0
+    if len(events_df) == 0:
+        return pd.DataFrame()
 
-        keywords = extract_keywords(event_name)
+    # Extract keywords for each event (vectorised apply is faster than iterrows)
+    events_df['keywords'] = events_df['EventName'].apply(extract_keywords)
+
+    # Build keyword stats
+    keyword_stats = defaultdict(lambda: {'event_count': 0, 'total_revenue': 0.0, 'total_tickets': 0})
+
+    for _, row in events_df.iterrows():
+        keywords = row['keywords']
+        revenue = row.get('total_revenue', 0) or 0
+        tickets = row.get('total_tickets', 0) or 0
 
         for keyword in keywords:
             stats = keyword_stats[keyword]
+            stats['event_count'] += 1
             stats['total_revenue'] += revenue
             stats['total_tickets'] += tickets
-            if event_id and event_id not in stats['event_ids']:
-                stats['event_ids'].add(event_id)
-                stats['event_count'] += 1
 
     # Convert to DataFrame
     rows = []
     for keyword, stats in keyword_stats.items():
+        event_count = stats['event_count']
         rows.append({
             'Keyword': keyword,
-            'Event Count': stats['event_count'],
+            'Event Count': event_count,
             'Total Revenue': round(stats['total_revenue'], 2),
             'Total Tickets': stats['total_tickets'],
-            'Avg Revenue Per Event': round(stats['total_revenue'] / stats['event_count'], 2) if stats['event_count'] > 0 else 0,
-            'Avg Tickets Per Event': round(stats['total_tickets'] / stats['event_count'], 1) if stats['event_count'] > 0 else 0,
+            'Avg Revenue Per Event': round(stats['total_revenue'] / event_count, 2) if event_count > 0 else 0,
+            'Avg Tickets Per Event': round(stats['total_tickets'] / event_count, 1) if event_count > 0 else 0,
         })
 
     df = pd.DataFrame(rows)
-    df = df.sort_values('Total Revenue', ascending=False)
+    if len(df) > 0:
+        df = df.sort_values('Total Revenue', ascending=False)
 
     return df
 
@@ -205,6 +226,7 @@ def build_keyword_frequency_table(booking_df: pd.DataFrame) -> pd.DataFrame:
 def analyse_temporal_patterns(booking_df: pd.DataFrame, top_n: int = 100) -> pd.DataFrame:
     """
     Analyse temporal patterns for top keywords by revenue.
+    Optimised to work at event level.
 
     Args:
         booking_df: Booking DataFrame with EventName, EventDate, TransactionDate
@@ -213,109 +235,86 @@ def analyse_temporal_patterns(booking_df: pd.DataFrame, top_n: int = 100) -> pd.
     Returns:
         DataFrame with temporal pattern analysis
     """
-    # First get top keywords by revenue
+    # Aggregate to event level
+    events_df = _aggregate_events(booking_df)
+
+    if len(events_df) == 0:
+        return pd.DataFrame()
+
+    # Extract keywords
+    events_df['keywords'] = events_df['EventName'].apply(extract_keywords)
+
+    # Build keyword revenue totals first
     keyword_revenue = defaultdict(float)
-    keyword_events = defaultdict(set)
-
-    for _, row in booking_df.iterrows():
-        event_name = row.get('EventName', '')
-        event_id = row.get('EventId')
-        revenue = row.get('PaymentReceived', 0) or 0
-
-        for keyword in extract_keywords(event_name):
+    for _, row in events_df.iterrows():
+        revenue = row.get('total_revenue', 0) or 0
+        for keyword in row['keywords']:
             keyword_revenue[keyword] += revenue
-            if event_id:
-                keyword_events[keyword].add(event_id)
 
     # Get top N keywords
     top_keywords = sorted(keyword_revenue.keys(), key=lambda k: keyword_revenue[k], reverse=True)[:top_n]
+    top_keywords_set = set(top_keywords)
 
-    # Build event-level data for analysis
-    event_data = {}  # event_id -> {keywords, event_date, first_sale, creation_date, transactions}
+    # Prepare event date and first sale columns
+    has_event_date = 'EventDate' in events_df.columns
+    has_first_sale = 'first_sale' in events_df.columns
 
-    for _, row in booking_df.iterrows():
-        event_id = row.get('EventId')
-        if not event_id:
-            continue
+    if has_event_date:
+        events_df['event_month'] = pd.to_datetime(events_df['EventDate'], errors='coerce').dt.month
 
-        event_name = row.get('EventName', '')
-        event_date = row.get('EventDate')
-        transaction_date = row.get('TransactionDate')
-
-        if event_id not in event_data:
-            event_data[event_id] = {
-                'keywords': set(extract_keywords(event_name)),
-                'event_date': event_date,
-                'first_sale': transaction_date,
-                'last_sale': transaction_date,
-                'transactions': []
-            }
-        else:
-            # Update first/last sale dates
-            if transaction_date:
-                if event_data[event_id]['first_sale'] is None or transaction_date < event_data[event_id]['first_sale']:
-                    event_data[event_id]['first_sale'] = transaction_date
-                if event_data[event_id]['last_sale'] is None or transaction_date > event_data[event_id]['last_sale']:
-                    event_data[event_id]['last_sale'] = transaction_date
-            event_data[event_id]['transactions'].append(transaction_date)
+    if has_event_date and has_first_sale:
+        event_dates = pd.to_datetime(events_df['EventDate'], errors='coerce')
+        first_sales = pd.to_datetime(events_df['first_sale'], errors='coerce')
+        events_df['sales_lead_days'] = (event_dates - first_sales).dt.days
 
     # Analyse each top keyword
     results = []
 
     for keyword in top_keywords:
         # Get events containing this keyword
-        keyword_event_ids = [eid for eid, data in event_data.items() if keyword in data['keywords']]
+        mask = events_df['keywords'].apply(lambda kws: keyword in kws)
+        keyword_events = events_df[mask]
 
-        if not keyword_event_ids:
+        if len(keyword_events) == 0:
             continue
 
+        event_count = len(keyword_events)
+
         # Event month distribution
-        month_counts = Counter()
-        creation_lead_times = []
-        sales_lead_times = []
-
-        for eid in keyword_event_ids:
-            data = event_data[eid]
-            event_date = data['event_date']
-            first_sale = data['first_sale']
-
-            if pd.notna(event_date):
-                try:
-                    event_dt = pd.to_datetime(event_date)
-                    month_counts[event_dt.month] += 1
-
-                    # Sales lead time (days before event that first ticket sells)
-                    if pd.notna(first_sale):
-                        first_sale_dt = pd.to_datetime(first_sale)
-                        lead_time = (event_dt - first_sale_dt).days
-                        if 0 <= lead_time <= 365:  # Reasonable range
-                            sales_lead_times.append(lead_time)
-                except:
-                    pass
-
-        # Calculate primary months (top 3 by frequency)
-        top_months = month_counts.most_common(3)
-        primary_months = ', '.join([calendar.month_abbr[m] for m, _ in top_months]) if top_months else 'N/A'
-
-        # Peak month
-        peak_month = calendar.month_abbr[top_months[0][0]] if top_months else 'N/A'
-
-        # Average sales lead time
-        avg_sales_lead = round(np.mean(sales_lead_times)) if sales_lead_times else None
-        median_sales_lead = round(np.median(sales_lead_times)) if sales_lead_times else None
-
-        # Recommended campaign start (based on 75th percentile of sales lead time + 2 weeks buffer)
-        if sales_lead_times:
-            p75_lead = np.percentile(sales_lead_times, 75)
-            recommended_lead = int(p75_lead + 14)  # Add 2 weeks buffer
-            recommended_lead_weeks = round(recommended_lead / 7, 1)
+        if has_event_date and 'event_month' in keyword_events.columns:
+            month_counts = keyword_events['event_month'].dropna().astype(int).value_counts()
+            top_months = month_counts.head(3)
+            primary_months = ', '.join([calendar.month_abbr[m] for m in top_months.index]) if len(top_months) > 0 else 'N/A'
+            peak_month = calendar.month_abbr[top_months.index[0]] if len(top_months) > 0 else 'N/A'
         else:
+            primary_months = 'N/A'
+            peak_month = 'N/A'
+
+        # Sales lead time
+        if 'sales_lead_days' in keyword_events.columns:
+            valid_leads = keyword_events['sales_lead_days'].dropna()
+            valid_leads = valid_leads[(valid_leads >= 0) & (valid_leads <= 365)]
+
+            if len(valid_leads) > 0:
+                avg_sales_lead = round(valid_leads.mean())
+                median_sales_lead = round(valid_leads.median())
+                p75_lead = valid_leads.quantile(0.75)
+                recommended_lead = int(p75_lead + 14)  # Add 2 weeks buffer
+                recommended_lead_weeks = round(recommended_lead / 7, 1)
+            else:
+                avg_sales_lead = None
+                median_sales_lead = None
+                recommended_lead = None
+                recommended_lead_weeks = None
+        else:
+            avg_sales_lead = None
+            median_sales_lead = None
             recommended_lead = None
             recommended_lead_weeks = None
 
         results.append({
             'Keyword': keyword,
-            'Event Count': len(keyword_event_ids),
+            'Event Count': event_count,
             'Total Revenue': round(keyword_revenue[keyword], 2),
             'Primary Months': primary_months,
             'Peak Month': peak_month,
@@ -331,7 +330,7 @@ def analyse_temporal_patterns(booking_df: pd.DataFrame, top_n: int = 100) -> pd.
 def find_keyword_associations(booking_df: pd.DataFrame, min_cooccurrence: int = 5) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Find keyword pairs and triplets that frequently appear together.
-    Weighted by revenue.
+    Weighted by revenue. Optimised for performance.
 
     Args:
         booking_df: Booking DataFrame with EventName, PaymentReceived
@@ -340,41 +339,30 @@ def find_keyword_associations(booking_df: pd.DataFrame, min_cooccurrence: int = 
     Returns:
         Tuple of (pairs_df, triplets_df)
     """
-    # Build event-level keyword sets with revenue
-    event_keywords = {}  # event_id -> (keywords_set, total_revenue)
+    # Aggregate to event level
+    events_df = _aggregate_events(booking_df)
 
-    for _, row in booking_df.iterrows():
-        event_id = row.get('EventId')
-        if not event_id:
-            continue
+    if len(events_df) == 0:
+        return pd.DataFrame(), pd.DataFrame()
 
-        event_name = row.get('EventName', '')
-        revenue = row.get('PaymentReceived', 0) or 0
+    # Extract keywords
+    events_df['keywords'] = events_df['EventName'].apply(lambda x: tuple(sorted(set(extract_keywords(x)))))
 
-        keywords = set(extract_keywords(event_name))
-
-        if event_id not in event_keywords:
-            event_keywords[event_id] = (keywords, revenue)
-        else:
-            # Add revenue to existing event
-            existing_keywords, existing_revenue = event_keywords[event_id]
-            event_keywords[event_id] = (existing_keywords | keywords, existing_revenue + revenue)
-
-    # Count pairs
+    # Count pairs and triplets
     pair_stats = defaultdict(lambda: {'count': 0, 'revenue': 0.0})
     triplet_stats = defaultdict(lambda: {'count': 0, 'revenue': 0.0})
 
-    for event_id, (keywords, revenue) in event_keywords.items():
-        keyword_list = sorted(keywords)  # Sort for consistent ordering
+    for _, row in events_df.iterrows():
+        keywords = row['keywords']
+        revenue = row.get('total_revenue', 0) or 0
 
-        # Generate pairs
-        for pair in combinations(keyword_list, 2):
-            pair_stats[pair]['count'] += 1
-            pair_stats[pair]['revenue'] += revenue
+        if len(keywords) >= 2:
+            for pair in combinations(keywords, 2):
+                pair_stats[pair]['count'] += 1
+                pair_stats[pair]['revenue'] += revenue
 
-        # Generate triplets (only if we have at least 3 keywords)
-        if len(keyword_list) >= 3:
-            for triplet in combinations(keyword_list, 3):
+        if len(keywords) >= 3:
+            for triplet in combinations(keywords, 3):
                 triplet_stats[triplet]['count'] += 1
                 triplet_stats[triplet]['revenue'] += revenue
 
@@ -431,7 +419,7 @@ def get_top_associations_for_keyword(keyword: str, pairs_df: pd.DataFrame, top_n
 
     # Find pairs containing this keyword
     mask = (pairs_df['Keyword 1'] == keyword) | (pairs_df['Keyword 2'] == keyword)
-    relevant_pairs = pairs_df[mask].head(top_n * 2)  # Get extra in case of duplicates
+    relevant_pairs = pairs_df[mask].head(top_n * 2)
 
     associations = []
     for _, row in relevant_pairs.iterrows():
@@ -457,6 +445,9 @@ def generate_keyword_summary(booking_df: pd.DataFrame, top_n: int = 50) -> pd.Da
     """
     print("  Extracting keywords...")
     freq_table = build_keyword_frequency_table(booking_df)
+
+    if len(freq_table) == 0:
+        return pd.DataFrame()
 
     print("  Analysing temporal patterns...")
     temporal_df = analyse_temporal_patterns(booking_df, top_n=top_n)
@@ -513,42 +504,55 @@ def generate_keyword_analysis_csvs(booking_df: pd.DataFrame, output_file: str) -
 
     print("\nGenerating keyword analysis reports...")
 
+    # Check if we have required columns
+    if 'EventName' not in booking_df.columns or 'EventId' not in booking_df.columns:
+        print("  Warning: Missing EventName or EventId columns, skipping keyword analysis")
+        return output_files
+
     # 1. Full keyword frequency table
     print("  Building keyword frequency table...")
     freq_table = build_keyword_frequency_table(booking_df)
-    freq_file = f"{base_name}_keywords_frequency.csv"
-    freq_table.to_csv(freq_file, index=False, float_format='%.2f')
-    output_files['frequency'] = freq_file
-    print(f"    Saved: {freq_file} ({len(freq_table)} keywords)")
+    if len(freq_table) > 0:
+        freq_file = f"{base_name}_keywords_frequency.csv"
+        freq_table.to_csv(freq_file, index=False, float_format='%.2f')
+        output_files['frequency'] = freq_file
+        print(f"    Saved: {freq_file} ({len(freq_table)} keywords)")
+    else:
+        print("    Warning: No keywords extracted")
+        return output_files
 
     # 2. Temporal patterns for top 100
     print("  Analysing temporal patterns...")
     temporal_df = analyse_temporal_patterns(booking_df, top_n=100)
-    temporal_file = f"{base_name}_keywords_temporal.csv"
-    temporal_df.to_csv(temporal_file, index=False, float_format='%.2f')
-    output_files['temporal'] = temporal_file
-    print(f"    Saved: {temporal_file}")
+    if len(temporal_df) > 0:
+        temporal_file = f"{base_name}_keywords_temporal.csv"
+        temporal_df.to_csv(temporal_file, index=False, float_format='%.2f')
+        output_files['temporal'] = temporal_file
+        print(f"    Saved: {temporal_file}")
 
     # 3. Keyword associations (pairs and triplets)
     print("  Finding keyword associations...")
     pairs_df, triplets_df = find_keyword_associations(booking_df)
 
-    pairs_file = f"{base_name}_keywords_pairs.csv"
-    pairs_df.head(500).to_csv(pairs_file, index=False, float_format='%.2f')
-    output_files['pairs'] = pairs_file
-    print(f"    Saved: {pairs_file} ({len(pairs_df)} pairs)")
+    if len(pairs_df) > 0:
+        pairs_file = f"{base_name}_keywords_pairs.csv"
+        pairs_df.head(500).to_csv(pairs_file, index=False, float_format='%.2f')
+        output_files['pairs'] = pairs_file
+        print(f"    Saved: {pairs_file} ({len(pairs_df)} pairs)")
 
-    triplets_file = f"{base_name}_keywords_triplets.csv"
-    triplets_df.head(200).to_csv(triplets_file, index=False, float_format='%.2f')
-    output_files['triplets'] = triplets_file
-    print(f"    Saved: {triplets_file} ({len(triplets_df)} triplets)")
+    if len(triplets_df) > 0:
+        triplets_file = f"{base_name}_keywords_triplets.csv"
+        triplets_df.head(200).to_csv(triplets_file, index=False, float_format='%.2f')
+        output_files['triplets'] = triplets_file
+        print(f"    Saved: {triplets_file} ({len(triplets_df)} triplets)")
 
     # 4. Summary table (top 50)
     print("  Generating summary table...")
     summary_df = generate_keyword_summary(booking_df, top_n=50)
-    summary_file = f"{base_name}_keywords_summary.csv"
-    summary_df.to_csv(summary_file, index=False, float_format='%.2f')
-    output_files['summary'] = summary_file
-    print(f"    Saved: {summary_file}")
+    if len(summary_df) > 0:
+        summary_file = f"{base_name}_keywords_summary.csv"
+        summary_df.to_csv(summary_file, index=False, float_format='%.2f')
+        output_files['summary'] = summary_file
+        print(f"    Saved: {summary_file}")
 
     return output_files

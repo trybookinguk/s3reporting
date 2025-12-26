@@ -1844,6 +1844,389 @@ def generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_fi
     return geo_file
 
 
+def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
+    """
+    Generate seasonality analysis showing monthly patterns by industry and event type.
+    Identifies dips and peaks to help plan contra-seasonal strategies.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Tuple of (industry_seasonality_file, keyword_seasonality_file)
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+
+    # Get industry from accounts if not in bookings
+    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Id'
+    if 'Industry' not in booking_df.columns and 'Industry' in accounts_df.columns:
+        booking_df = booking_df.merge(
+            accounts_df[[account_id_col, 'Industry']].rename(columns={account_id_col: 'AccountId'}),
+            on='AccountId',
+            how='left'
+        )
+
+    # Ensure we have TransactionDate as datetime
+    if 'TransactionDate' not in booking_df.columns:
+        return None, None
+
+    booking_df = booking_df.copy()
+    booking_df['Month'] = pd.to_datetime(booking_df['TransactionDate']).dt.month
+    booking_df['Year'] = pd.to_datetime(booking_df['TransactionDate']).dt.year
+    booking_df['YearMonth'] = booking_df['Year'].astype(str) + '-' + booking_df['Month'].astype(str).str.zfill(2)
+
+    # === INDUSTRY SEASONALITY ===
+    if 'Industry' in booking_df.columns:
+        # Calculate monthly revenue by industry
+        industry_monthly = booking_df.groupby(['Industry', 'Month']).agg({
+            'PaymentReceived': 'sum',
+            'TicketQuantity': 'sum',
+            'EventId': 'nunique'
+        }).reset_index()
+        industry_monthly.columns = ['Industry', 'Month', 'Revenue', 'Tickets', 'Events']
+
+        # Calculate each industry's annual total
+        industry_annual = industry_monthly.groupby('Industry')['Revenue'].sum().reset_index()
+        industry_annual.columns = ['Industry', 'Annual Revenue']
+
+        # Merge to get percentage
+        industry_monthly = industry_monthly.merge(industry_annual, on='Industry')
+        industry_monthly['% of Annual'] = round(industry_monthly['Revenue'] / industry_monthly['Annual Revenue'] * 100, 1)
+
+        # Calculate expected % if perfectly flat (8.33% per month)
+        industry_monthly['Expected %'] = 8.33
+        industry_monthly['Variance %'] = round(industry_monthly['% of Annual'] - 8.33, 1)
+
+        # Flag dips (more than 2% below expected) and peaks (more than 2% above)
+        industry_monthly['Status'] = 'Normal'
+        industry_monthly.loc[industry_monthly['Variance %'] <= -2, 'Status'] = 'DIP'
+        industry_monthly.loc[industry_monthly['Variance %'] >= 2, 'Status'] = 'PEAK'
+
+        # Add month names
+        industry_monthly['Month Name'] = industry_monthly['Month'].apply(lambda m: calendar.month_abbr[m])
+
+        # Pivot to show months as columns for easier reading
+        industry_pivot = industry_monthly.pivot(index='Industry', columns='Month Name', values='% of Annual')
+
+        # Reorder columns to calendar order
+        month_order = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        month_order = [m for m in month_order if m in industry_pivot.columns]
+        industry_pivot = industry_pivot[month_order]
+
+        # Add annual revenue for context
+        industry_pivot = industry_pivot.merge(industry_annual.set_index('Industry'), left_index=True, right_index=True)
+
+        # Calculate volatility (std dev of monthly %)
+        monthly_cols = [c for c in industry_pivot.columns if c in month_order]
+        industry_pivot['Volatility'] = industry_pivot[monthly_cols].std(axis=1).round(1)
+
+        # Sort by annual revenue
+        industry_pivot = industry_pivot.sort_values('Annual Revenue', ascending=False)
+
+        industry_file = f"{base_name}_seasonality_by_industry.csv"
+        industry_pivot.to_csv(industry_file, float_format='%.1f')
+        print(f"  ✓ Industry seasonality saved to: {industry_file}")
+
+        # Also save the detailed view with dip/peak flags
+        detail_file = f"{base_name}_seasonality_industry_detail.csv"
+        industry_monthly_out = industry_monthly[['Industry', 'Month Name', 'Revenue', 'Tickets', 'Events', '% of Annual', 'Variance %', 'Status']]
+        industry_monthly_out = industry_monthly_out.sort_values(['Industry', 'Month'])
+        industry_monthly_out.to_csv(detail_file, index=False, float_format='%.1f')
+        print(f"  ✓ Industry seasonality detail saved to: {detail_file}")
+    else:
+        industry_file = None
+
+    # === EVENT TYPE (KEYWORD) SEASONALITY ===
+    # Use keywords from event names to identify event types
+    from modules.event_keyword_analysis import extract_keywords
+
+    # Get unique events with their keywords
+    events_df = booking_df.groupby('EventId').agg({
+        'EventName': 'first',
+        'PaymentReceived': 'sum',
+        'TicketQuantity': 'sum',
+        'Month': 'first'
+    }).reset_index()
+
+    events_df['keywords'] = events_df['EventName'].apply(extract_keywords)
+
+    # Explode keywords and aggregate by keyword + month
+    keyword_rows = []
+    for _, row in events_df.iterrows():
+        for kw in row['keywords']:
+            keyword_rows.append({
+                'Keyword': kw,
+                'Month': row['Month'],
+                'Revenue': row['PaymentReceived'],
+                'Tickets': row['TicketQuantity']
+            })
+
+    if keyword_rows:
+        keyword_df = pd.DataFrame(keyword_rows)
+        keyword_monthly = keyword_df.groupby(['Keyword', 'Month']).agg({
+            'Revenue': 'sum',
+            'Tickets': 'sum'
+        }).reset_index()
+
+        # Get top 50 keywords by total revenue
+        keyword_totals = keyword_monthly.groupby('Keyword')['Revenue'].sum().reset_index()
+        keyword_totals.columns = ['Keyword', 'Annual Revenue']
+        top_keywords = keyword_totals.nlargest(50, 'Annual Revenue')['Keyword'].tolist()
+
+        keyword_monthly = keyword_monthly[keyword_monthly['Keyword'].isin(top_keywords)]
+        keyword_monthly = keyword_monthly.merge(keyword_totals, on='Keyword')
+
+        keyword_monthly['% of Annual'] = round(keyword_monthly['Revenue'] / keyword_monthly['Annual Revenue'] * 100, 1)
+        keyword_monthly['Variance %'] = round(keyword_monthly['% of Annual'] - 8.33, 1)
+        keyword_monthly['Status'] = 'Normal'
+        keyword_monthly.loc[keyword_monthly['Variance %'] <= -2, 'Status'] = 'DIP'
+        keyword_monthly.loc[keyword_monthly['Variance %'] >= 2, 'Status'] = 'PEAK'
+        keyword_monthly['Month Name'] = keyword_monthly['Month'].apply(lambda m: calendar.month_abbr[m])
+
+        # Pivot for overview
+        keyword_pivot = keyword_monthly.pivot(index='Keyword', columns='Month Name', values='% of Annual')
+        keyword_pivot = keyword_pivot[[m for m in month_order if m in keyword_pivot.columns]]
+        keyword_pivot = keyword_pivot.merge(keyword_totals.set_index('Keyword'), left_index=True, right_index=True)
+        keyword_pivot['Volatility'] = keyword_pivot[[c for c in keyword_pivot.columns if c in month_order]].std(axis=1).round(1)
+        keyword_pivot = keyword_pivot.sort_values('Annual Revenue', ascending=False)
+
+        keyword_file = f"{base_name}_seasonality_by_event_type.csv"
+        keyword_pivot.to_csv(keyword_file, float_format='%.1f')
+        print(f"  ✓ Event type seasonality saved to: {keyword_file}")
+    else:
+        keyword_file = None
+
+    return industry_file, keyword_file
+
+
+def generate_expansion_revenue_analysis_csv(booking_df, accounts_df, output_file):
+    """
+    Analyse revenue growth breakdown: new accounts vs existing account expansion.
+    Shows how much growth comes from acquisition vs growing existing customers.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Path to generated CSV file
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+
+    # Ensure we have dates
+    if 'TransactionDate' not in booking_df.columns or 'DateTimeCreated' not in accounts_df.columns:
+        print("  Warning: Missing date columns for expansion analysis")
+        return None
+
+    booking_df = booking_df.copy()
+    booking_df['YearMonth'] = pd.to_datetime(booking_df['TransactionDate']).dt.to_period('M')
+
+    accounts_df = accounts_df.copy()
+    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Id'
+    accounts_df['CreatedYearMonth'] = pd.to_datetime(accounts_df['DateTimeCreated']).dt.to_period('M')
+
+    # Create account lookup for creation month
+    account_created = accounts_df.set_index(account_id_col)['CreatedYearMonth'].to_dict()
+
+    # Classify each transaction
+    def classify_revenue(row):
+        account_id = row['AccountId']
+        txn_month = row['YearMonth']
+
+        created_month = account_created.get(account_id)
+        if created_month is None:
+            return 'Unknown'
+
+        months_since_creation = (txn_month.year - created_month.year) * 12 + (txn_month.month - created_month.month)
+
+        if months_since_creation <= 0:
+            return 'New Account (Month 0)'
+        elif months_since_creation <= 3:
+            return 'Ramping (Months 1-3)'
+        elif months_since_creation <= 12:
+            return 'First Year (Months 4-12)'
+        else:
+            return 'Mature (Year 2+)'
+
+    booking_df['Revenue Type'] = booking_df.apply(classify_revenue, axis=1)
+
+    # Aggregate by month and revenue type
+    monthly_breakdown = booking_df.groupby(['YearMonth', 'Revenue Type']).agg({
+        'PaymentReceived': 'sum',
+        'AccountId': 'nunique'
+    }).reset_index()
+    monthly_breakdown.columns = ['YearMonth', 'Revenue Type', 'Revenue', 'Accounts']
+
+    # Pivot for easier reading
+    revenue_pivot = monthly_breakdown.pivot(index='YearMonth', columns='Revenue Type', values='Revenue').fillna(0)
+
+    # Calculate totals and percentages
+    revenue_pivot['Total'] = revenue_pivot.sum(axis=1)
+
+    for col in revenue_pivot.columns:
+        if col != 'Total':
+            revenue_pivot[f'{col} %'] = round(revenue_pivot[col] / revenue_pivot['Total'] * 100, 1)
+
+    # Calculate YoY comparison
+    revenue_pivot = revenue_pivot.reset_index()
+    revenue_pivot['YearMonth'] = revenue_pivot['YearMonth'].astype(str)
+
+    # Also create accounts pivot
+    accounts_pivot = monthly_breakdown.pivot(index='YearMonth', columns='Revenue Type', values='Accounts').fillna(0)
+    accounts_pivot = accounts_pivot.reset_index()
+    accounts_pivot['YearMonth'] = accounts_pivot['YearMonth'].astype(str)
+
+    # Save revenue breakdown
+    revenue_file = f"{base_name}_expansion_revenue.csv"
+    revenue_pivot.to_csv(revenue_file, index=False, float_format='%.2f')
+    print(f"  ✓ Expansion revenue analysis saved to: {revenue_file}")
+
+    # Save accounts breakdown
+    accounts_file = f"{base_name}_expansion_accounts.csv"
+    accounts_pivot.to_csv(accounts_file, index=False, float_format='%.0f')
+    print(f"  ✓ Expansion accounts analysis saved to: {accounts_file}")
+
+    # Create summary showing growth composition
+    # Compare current year to previous year
+    revenue_pivot['Year'] = revenue_pivot['YearMonth'].str[:4]
+    yearly_summary = revenue_pivot.groupby('Year').agg({
+        col: 'sum' for col in revenue_pivot.columns if col not in ['YearMonth', 'Year'] and '%' not in col
+    }).reset_index()
+
+    # Recalculate percentages for yearly
+    for col in yearly_summary.columns:
+        if col not in ['Year', 'Total'] and '%' not in col:
+            yearly_summary[f'{col} %'] = round(yearly_summary[col] / yearly_summary['Total'] * 100, 1)
+
+    summary_file = f"{base_name}_expansion_yearly_summary.csv"
+    yearly_summary.to_csv(summary_file, index=False, float_format='%.2f')
+    print(f"  ✓ Expansion yearly summary saved to: {summary_file}")
+
+    return revenue_file
+
+
+def generate_cohort_revenue_curves_csv(booking_df, accounts_df, output_file):
+    """
+    Generate cohort revenue curves showing revenue trajectory by month-of-life.
+    Enables YoY cohort comparison to see if newer cohorts perform better/worse.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Path to generated CSV file
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+
+    # Ensure we have dates
+    if 'TransactionDate' not in booking_df.columns or 'DateTimeCreated' not in accounts_df.columns:
+        print("  Warning: Missing date columns for cohort analysis")
+        return None
+
+    booking_df = booking_df.copy()
+    accounts_df = accounts_df.copy()
+
+    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Id'
+
+    # Get account creation dates
+    accounts_df['CohortMonth'] = pd.to_datetime(accounts_df['DateTimeCreated']).dt.to_period('M')
+    account_cohorts = accounts_df.set_index(account_id_col)['CohortMonth'].to_dict()
+
+    # Add cohort info to bookings
+    booking_df['CohortMonth'] = booking_df['AccountId'].map(account_cohorts)
+    booking_df['TransactionMonth'] = pd.to_datetime(booking_df['TransactionDate']).dt.to_period('M')
+
+    # Filter out bookings without cohort info
+    booking_df = booking_df[booking_df['CohortMonth'].notna()]
+
+    # Calculate month-of-life for each transaction
+    def calc_month_of_life(row):
+        if pd.isna(row['CohortMonth']) or pd.isna(row['TransactionMonth']):
+            return None
+        cohort = row['CohortMonth']
+        txn = row['TransactionMonth']
+        return (txn.year - cohort.year) * 12 + (txn.month - cohort.month)
+
+    booking_df['MonthOfLife'] = booking_df.apply(calc_month_of_life, axis=1)
+    booking_df = booking_df[booking_df['MonthOfLife'].notna() & (booking_df['MonthOfLife'] >= 0)]
+    booking_df['MonthOfLife'] = booking_df['MonthOfLife'].astype(int)
+
+    # Cap at 24 months for cleaner analysis
+    booking_df = booking_df[booking_df['MonthOfLife'] <= 24]
+
+    # Aggregate by cohort and month-of-life
+    cohort_curves = booking_df.groupby(['CohortMonth', 'MonthOfLife']).agg({
+        'PaymentReceived': 'sum',
+        'TicketQuantity': 'sum',
+        'AccountId': 'nunique'
+    }).reset_index()
+    cohort_curves.columns = ['Cohort', 'Month of Life', 'Revenue', 'Tickets', 'Active Accounts']
+
+    # Get cohort sizes (total accounts in each cohort)
+    cohort_sizes = accounts_df.groupby('CohortMonth').size().reset_index()
+    cohort_sizes.columns = ['Cohort', 'Cohort Size']
+
+    cohort_curves = cohort_curves.merge(cohort_sizes, on='Cohort')
+    cohort_curves['Revenue per Account'] = round(cohort_curves['Revenue'] / cohort_curves['Cohort Size'], 2)
+    cohort_curves['Activation Rate %'] = round(cohort_curves['Active Accounts'] / cohort_curves['Cohort Size'] * 100, 1)
+
+    # Calculate cumulative revenue per account
+    cohort_curves = cohort_curves.sort_values(['Cohort', 'Month of Life'])
+    cohort_curves['Cumulative Revenue'] = cohort_curves.groupby('Cohort')['Revenue'].cumsum()
+    cohort_curves['Cumulative Revenue per Account'] = round(cohort_curves['Cumulative Revenue'] / cohort_curves['Cohort Size'], 2)
+
+    # Convert cohort to string for CSV
+    cohort_curves['Cohort'] = cohort_curves['Cohort'].astype(str)
+
+    # Save detailed curves
+    curves_file = f"{base_name}_cohort_curves.csv"
+    cohort_curves.to_csv(curves_file, index=False, float_format='%.2f')
+    print(f"  ✓ Cohort revenue curves saved to: {curves_file}")
+
+    # Create pivot table showing cumulative revenue per account at key milestones
+    milestones = [0, 1, 3, 6, 12, 24]
+    milestone_data = cohort_curves[cohort_curves['Month of Life'].isin(milestones)]
+    milestone_pivot = milestone_data.pivot(
+        index='Cohort',
+        columns='Month of Life',
+        values='Cumulative Revenue per Account'
+    )
+    milestone_pivot.columns = [f'Month {m}' for m in milestone_pivot.columns]
+
+    # Add cohort size
+    milestone_pivot = milestone_pivot.merge(
+        cohort_sizes.set_index(cohort_sizes['Cohort'].astype(str))['Cohort Size'],
+        left_index=True,
+        right_index=True
+    )
+
+    milestone_file = f"{base_name}_cohort_milestones.csv"
+    milestone_pivot.to_csv(milestone_file, float_format='%.2f')
+    print(f"  ✓ Cohort milestones saved to: {milestone_file}")
+
+    # Create YoY comparison (same month cohorts across years)
+    cohort_curves['Cohort Year'] = cohort_curves['Cohort'].str[:4]
+    cohort_curves['Cohort Month Num'] = cohort_curves['Cohort'].str[5:7]
+
+    # Compare cohorts by their month (e.g., all January cohorts)
+    yoy_comparison = cohort_curves.groupby(['Cohort Month Num', 'Cohort Year', 'Month of Life']).agg({
+        'Revenue per Account': 'mean',
+        'Cumulative Revenue per Account': 'mean',
+        'Activation Rate %': 'mean'
+    }).reset_index()
+
+    yoy_file = f"{base_name}_cohort_yoy_comparison.csv"
+    yoy_comparison.to_csv(yoy_file, index=False, float_format='%.2f')
+    print(f"  ✓ Cohort YoY comparison saved to: {yoy_file}")
+
+    return curves_file
+
+
 def calculate_account_tiers(accounts_df, booking_df, as_of_date=None):
     """
     Calculate tiers for ALL accounts based on percentile rankings across entire population.
@@ -2139,6 +2522,21 @@ def main():
         print(f"✓ Keyword analysis reports generated:")
         for report_type, filepath in keyword_files.items():
             print(f"    - {report_type}: {filepath}")
+
+    # Generate advanced analytics reports
+    print("\nGenerating advanced analytics...")
+
+    # Seasonality analysis (identify dips by industry and event type)
+    print("  Analysing seasonality patterns...")
+    generate_seasonality_analysis_csv(booking_df, accounts_df, output_file)
+
+    # Expansion revenue analysis (new vs existing account growth)
+    print("  Analysing expansion revenue...")
+    generate_expansion_revenue_analysis_csv(booking_df, accounts_df, output_file)
+
+    # Cohort revenue curves (YoY comparable)
+    print("  Generating cohort revenue curves...")
+    generate_cohort_revenue_curves_csv(booking_df, accounts_df, output_file)
 
     print(f"\n=== Report Complete ===")
 

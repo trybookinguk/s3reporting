@@ -63,7 +63,7 @@ def parse_args():
     )
     group.add_argument(
         '--rolling', action='store_true',
-        help='Rolling 12 months (Dec previous year to Nov current year)'
+        help='Rolling 12 months (previous 12 complete months)'
     )
     group.add_argument(
         '--start', type=str,
@@ -110,21 +110,13 @@ def get_month_range(args):
             months.append((year, month))
 
     elif args.rolling:
-        # Rolling 12 months: Dec previous year to Nov current year
-        # If we're in Dec, use Dec current year - 1 to Nov current year
-        if today.month == 12:
-            start_year = today.year - 1
-            start_month = 12
-        else:
-            start_year = today.year - 1
-            start_month = 12
+        # Rolling 12 months: previous 12 complete months
+        # e.g., in Jan 2026, this gives Jan 2025 - Dec 2025
+        end_date = datetime(today.year, today.month, 1) - relativedelta(months=1)  # Last complete month
+        start_date = end_date - relativedelta(months=11)  # 12 months total
 
-        current = datetime(start_year, start_month, 1)
-        end = datetime(today.year, today.month - 1 if today.month > 1 else 12, 1)
-        if today.month == 1:
-            end = datetime(today.year - 1, 12, 1)
-
-        while current <= end:
+        current = start_date
+        while current <= end_date:
             months.append((current.year, current.month))
             current += relativedelta(months=1)
 

@@ -1885,8 +1885,8 @@ def generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_fi
 
 def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
     """
-    Generate seasonality analysis showing monthly patterns by industry and event type.
-    Identifies dips and peaks to help plan contra-seasonal strategies.
+    Generate seasonality analysis showing monthly patterns by industry, sub-industry,
+    region, and event type. Identifies dips and peaks to help plan contra-seasonal strategies.
 
     Args:
         booking_df: Booking transactions DataFrame
@@ -1894,27 +1894,54 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
         output_file: Base output filename
 
     Returns:
-        Tuple of (industry_seasonality_file, keyword_seasonality_file)
+        Dict of output files generated
     """
     base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
 
-    # Get industry from accounts if not in bookings
+    # Get industry and sub-industry from accounts if not in bookings
     account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Id'
-    if 'Industry' not in booking_df.columns and 'Industry' in accounts_df.columns:
-        booking_df = booking_df.merge(
-            accounts_df[[account_id_col, 'Industry']].rename(columns={account_id_col: 'AccountId'}),
-            on='AccountId',
-            how='left'
-        )
+    merge_cols = [account_id_col]
+    if 'Industry' in accounts_df.columns:
+        merge_cols.append('Industry')
+    if 'SubIndustry' in accounts_df.columns:
+        merge_cols.append('SubIndustry')
+
+    if len(merge_cols) > 1:
+        accounts_subset = accounts_df[merge_cols].rename(columns={account_id_col: 'AccountId'})
+        # Only merge columns we don't already have
+        cols_to_merge = ['AccountId'] + [c for c in merge_cols[1:] if c not in booking_df.columns]
+        if len(cols_to_merge) > 1:
+            booking_df = booking_df.merge(
+                accounts_subset[cols_to_merge],
+                on='AccountId',
+                how='left'
+            )
 
     # Ensure we have TransactionDate as datetime
     if 'TransactionDate' not in booking_df.columns:
-        return None, None
+        return output_files
 
     booking_df = booking_df.copy()
     booking_df['Month'] = pd.to_datetime(booking_df['TransactionDate']).dt.month
     booking_df['Year'] = pd.to_datetime(booking_df['TransactionDate']).dt.year
     booking_df['YearMonth'] = booking_df['Year'].astype(str) + '-' + booking_df['Month'].astype(str).str.zfill(2)
+
+    # Add region data from postcodes
+    postcode_col = None
+    if 'EventPostcode' in booking_df.columns:
+        postcode_col = 'EventPostcode'
+    elif 'AccountPostcode' in booking_df.columns:
+        postcode_col = 'AccountPostcode'
+
+    if postcode_col:
+        booking_df['PostcodeArea'] = extract_postcode_areas_vectorized(booking_df[postcode_col])
+        booking_df['Region'] = get_regions_vectorized(booking_df['PostcodeArea'])
+        # Filter to valid UK postcodes only for region analysis
+        booking_df.loc[~booking_df['PostcodeArea'].isin(VALID_UK_POSTCODE_AREAS), 'Region'] = None
+
+    # Standard month order for all pivots
+    month_order = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
     # === INDUSTRY SEASONALITY ===
     if 'Industry' in booking_df.columns:
@@ -1950,9 +1977,8 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
         industry_pivot = industry_monthly.pivot(index='Industry', columns='Month Name', values='% of Annual')
 
         # Reorder columns to calendar order
-        month_order = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-        month_order = [m for m in month_order if m in industry_pivot.columns]
-        industry_pivot = industry_pivot[month_order]
+        available_months = [m for m in month_order if m in industry_pivot.columns]
+        industry_pivot = industry_pivot[available_months]
 
         # Add annual revenue for context
         industry_pivot = industry_pivot.merge(industry_annual.set_index('Industry'), left_index=True, right_index=True)
@@ -1967,6 +1993,7 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
         industry_file = get_output_path(base_name, 'seasonality', '_seasonality_by_industry.csv')
         industry_pivot.to_csv(industry_file, float_format='%.1f')
         print(f"  ✓ Industry seasonality saved to: {industry_file}")
+        output_files['industry'] = industry_file
 
         # Also save the detailed view with dip/peak flags
         detail_file = get_output_path(base_name, 'seasonality', '_seasonality_industry_detail.csv')
@@ -1975,8 +2002,199 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
         industry_monthly_out = industry_monthly_out.drop(columns=['Month'])  # Remove numeric month from output
         industry_monthly_out.to_csv(detail_file, index=False, float_format='%.1f')
         print(f"  ✓ Industry seasonality detail saved to: {detail_file}")
-    else:
-        industry_file = None
+        output_files['industry_detail'] = detail_file
+
+    # === SUB-INDUSTRY SEASONALITY ===
+    if 'SubIndustry' in booking_df.columns:
+        # Filter to rows with valid sub-industry
+        sub_df = booking_df[booking_df['SubIndustry'].notna() & (booking_df['SubIndustry'] != '')]
+
+        if len(sub_df) > 0:
+            # Calculate monthly revenue by sub-industry
+            subind_monthly = sub_df.groupby(['SubIndustry', 'Month']).agg({
+                'PaymentReceived': 'sum',
+                'TicketQuantity': 'sum',
+                'EventId': 'nunique'
+            }).reset_index()
+            subind_monthly.columns = ['SubIndustry', 'Month', 'Revenue', 'Tickets', 'Events']
+
+            # Calculate each sub-industry's annual total
+            subind_annual = subind_monthly.groupby('SubIndustry')['Revenue'].sum().reset_index()
+            subind_annual.columns = ['SubIndustry', 'Annual Revenue']
+
+            # Merge to get percentage
+            subind_monthly = subind_monthly.merge(subind_annual, on='SubIndustry')
+            subind_monthly['% of Annual'] = round(subind_monthly['Revenue'] / subind_monthly['Annual Revenue'] * 100, 1)
+            subind_monthly['Variance %'] = round(subind_monthly['% of Annual'] - 8.33, 1)
+            subind_monthly['Status'] = 'Normal'
+            subind_monthly.loc[subind_monthly['Variance %'] <= -2, 'Status'] = 'DIP'
+            subind_monthly.loc[subind_monthly['Variance %'] >= 2, 'Status'] = 'PEAK'
+            subind_monthly['Month Name'] = subind_monthly['Month'].apply(lambda m: calendar.month_abbr[m])
+
+            # Pivot for overview
+            subind_pivot = subind_monthly.pivot(index='SubIndustry', columns='Month Name', values='% of Annual')
+            available_months = [m for m in month_order if m in subind_pivot.columns]
+            subind_pivot = subind_pivot[available_months]
+            subind_pivot = subind_pivot.merge(subind_annual.set_index('SubIndustry'), left_index=True, right_index=True)
+            subind_pivot['Volatility'] = subind_pivot[[c for c in subind_pivot.columns if c in month_order]].std(axis=1).round(1)
+            subind_pivot = subind_pivot.sort_values('Annual Revenue', ascending=False)
+
+            subind_file = get_output_path(base_name, 'seasonality', '_seasonality_by_subindustry.csv')
+            subind_pivot.to_csv(subind_file, float_format='%.1f')
+            print(f"  ✓ Sub-industry seasonality saved to: {subind_file}")
+            output_files['subindustry'] = subind_file
+
+    # === INDUSTRY + SUB-INDUSTRY HIERARCHY ===
+    if 'Industry' in booking_df.columns and 'SubIndustry' in booking_df.columns:
+        # Group by both industry and sub-industry
+        hierarchy_df = booking_df.copy()
+        hierarchy_df['SubIndustry'] = hierarchy_df['SubIndustry'].fillna('(No Sub-Industry)')
+
+        hierarchy_monthly = hierarchy_df.groupby(['Industry', 'SubIndustry', 'Month']).agg({
+            'PaymentReceived': 'sum',
+            'TicketQuantity': 'sum',
+            'EventId': 'nunique'
+        }).reset_index()
+        hierarchy_monthly.columns = ['Industry', 'SubIndustry', 'Month', 'Revenue', 'Tickets', 'Events']
+
+        # Calculate annual totals per industry+subindustry combo
+        hierarchy_annual = hierarchy_monthly.groupby(['Industry', 'SubIndustry'])['Revenue'].sum().reset_index()
+        hierarchy_annual.columns = ['Industry', 'SubIndustry', 'Annual Revenue']
+
+        hierarchy_monthly = hierarchy_monthly.merge(hierarchy_annual, on=['Industry', 'SubIndustry'])
+        hierarchy_monthly['% of Annual'] = round(hierarchy_monthly['Revenue'] / hierarchy_monthly['Annual Revenue'] * 100, 1)
+        hierarchy_monthly['Variance %'] = round(hierarchy_monthly['% of Annual'] - 8.33, 1)
+        hierarchy_monthly['Month Name'] = hierarchy_monthly['Month'].apply(lambda m: calendar.month_abbr[m])
+
+        # Pivot with multi-index
+        hierarchy_pivot = hierarchy_monthly.pivot(
+            index=['Industry', 'SubIndustry'],
+            columns='Month Name',
+            values='% of Annual'
+        )
+        available_months = [m for m in month_order if m in hierarchy_pivot.columns]
+        hierarchy_pivot = hierarchy_pivot[available_months]
+        hierarchy_pivot = hierarchy_pivot.merge(
+            hierarchy_annual.set_index(['Industry', 'SubIndustry']),
+            left_index=True, right_index=True
+        )
+        hierarchy_pivot['Volatility'] = hierarchy_pivot[[c for c in hierarchy_pivot.columns if c in month_order]].std(axis=1).round(1)
+        hierarchy_pivot = hierarchy_pivot.sort_values(['Industry', 'Annual Revenue'], ascending=[True, False])
+
+        hierarchy_file = get_output_path(base_name, 'seasonality', '_seasonality_by_industry_subindustry.csv')
+        hierarchy_pivot.to_csv(hierarchy_file, float_format='%.1f')
+        print(f"  ✓ Industry/Sub-industry seasonality saved to: {hierarchy_file}")
+        output_files['industry_subindustry'] = hierarchy_file
+
+    # === REGION SEASONALITY ===
+    if 'Region' in booking_df.columns:
+        # Filter to rows with valid region
+        region_df = booking_df[booking_df['Region'].notna() & (booking_df['Region'] != 'Unknown')]
+
+        if len(region_df) > 0:
+            region_monthly = region_df.groupby(['Region', 'Month']).agg({
+                'PaymentReceived': 'sum',
+                'TicketQuantity': 'sum',
+                'EventId': 'nunique'
+            }).reset_index()
+            region_monthly.columns = ['Region', 'Month', 'Revenue', 'Tickets', 'Events']
+
+            # Calculate each region's annual total
+            region_annual = region_monthly.groupby('Region')['Revenue'].sum().reset_index()
+            region_annual.columns = ['Region', 'Annual Revenue']
+
+            region_monthly = region_monthly.merge(region_annual, on='Region')
+            region_monthly['% of Annual'] = round(region_monthly['Revenue'] / region_monthly['Annual Revenue'] * 100, 1)
+            region_monthly['Variance %'] = round(region_monthly['% of Annual'] - 8.33, 1)
+            region_monthly['Status'] = 'Normal'
+            region_monthly.loc[region_monthly['Variance %'] <= -2, 'Status'] = 'DIP'
+            region_monthly.loc[region_monthly['Variance %'] >= 2, 'Status'] = 'PEAK'
+            region_monthly['Month Name'] = region_monthly['Month'].apply(lambda m: calendar.month_abbr[m])
+
+            # Pivot for overview
+            region_pivot = region_monthly.pivot(index='Region', columns='Month Name', values='% of Annual')
+            available_months = [m for m in month_order if m in region_pivot.columns]
+            region_pivot = region_pivot[available_months]
+            region_pivot = region_pivot.merge(region_annual.set_index('Region'), left_index=True, right_index=True)
+            region_pivot['Volatility'] = region_pivot[[c for c in region_pivot.columns if c in month_order]].std(axis=1).round(1)
+            region_pivot = region_pivot.sort_values('Annual Revenue', ascending=False)
+
+            region_file = get_output_path(base_name, 'seasonality', '_seasonality_by_region.csv')
+            region_pivot.to_csv(region_file, float_format='%.1f')
+            print(f"  ✓ Region seasonality saved to: {region_file}")
+            output_files['region'] = region_file
+
+            # Detailed view
+            region_detail_file = get_output_path(base_name, 'seasonality', '_seasonality_region_detail.csv')
+            region_monthly_out = region_monthly[['Region', 'Month', 'Month Name', 'Revenue', 'Tickets', 'Events', '% of Annual', 'Variance %', 'Status']]
+            region_monthly_out = region_monthly_out.sort_values(['Region', 'Month'])
+            region_monthly_out = region_monthly_out.drop(columns=['Month'])
+            region_monthly_out.to_csv(region_detail_file, index=False, float_format='%.1f')
+            print(f"  ✓ Region seasonality detail saved to: {region_detail_file}")
+            output_files['region_detail'] = region_detail_file
+
+    # === INDUSTRY x REGION MATRIX ===
+    if 'Industry' in booking_df.columns and 'Region' in booking_df.columns:
+        # Filter to valid data
+        matrix_df = booking_df[
+            booking_df['Industry'].notna() &
+            booking_df['Region'].notna() &
+            (booking_df['Region'] != 'Unknown')
+        ]
+
+        if len(matrix_df) > 0:
+            # Aggregate by industry and region
+            ind_region = matrix_df.groupby(['Industry', 'Region']).agg({
+                'PaymentReceived': 'sum',
+                'TicketQuantity': 'sum',
+                'EventId': 'nunique',
+                'AccountId': 'nunique'
+            }).reset_index()
+            ind_region.columns = ['Industry', 'Region', 'Revenue', 'Tickets', 'Events', 'Accounts']
+
+            # Create revenue matrix (Industry rows, Region columns)
+            revenue_matrix = ind_region.pivot(index='Industry', columns='Region', values='Revenue').fillna(0)
+
+            # Add row totals
+            revenue_matrix['Total'] = revenue_matrix.sum(axis=1)
+
+            # Sort by total revenue
+            revenue_matrix = revenue_matrix.sort_values('Total', ascending=False)
+
+            # Add column totals as a row
+            col_totals = revenue_matrix.sum(axis=0)
+            col_totals.name = 'Total'
+            revenue_matrix = pd.concat([revenue_matrix, col_totals.to_frame().T])
+
+            matrix_file = get_output_path(base_name, 'industry', '_industry_region_revenue_matrix.csv')
+            revenue_matrix.to_csv(matrix_file, float_format='%.0f')
+            print(f"  ✓ Industry x Region revenue matrix saved to: {matrix_file}")
+            output_files['industry_region_revenue'] = matrix_file
+
+            # Also create a tickets matrix
+            tickets_matrix = ind_region.pivot(index='Industry', columns='Region', values='Tickets').fillna(0)
+            tickets_matrix['Total'] = tickets_matrix.sum(axis=1)
+            tickets_matrix = tickets_matrix.sort_values('Total', ascending=False)
+            col_totals = tickets_matrix.sum(axis=0)
+            col_totals.name = 'Total'
+            tickets_matrix = pd.concat([tickets_matrix, col_totals.to_frame().T])
+
+            tickets_file = get_output_path(base_name, 'industry', '_industry_region_tickets_matrix.csv')
+            tickets_matrix.to_csv(tickets_file, float_format='%.0f')
+            print(f"  ✓ Industry x Region tickets matrix saved to: {tickets_file}")
+            output_files['industry_region_tickets'] = tickets_file
+
+            # Percentage matrix - what % of each industry's revenue comes from each region
+            pct_matrix = ind_region.pivot(index='Industry', columns='Region', values='Revenue').fillna(0)
+            row_totals = pct_matrix.sum(axis=1)
+            pct_matrix = pct_matrix.div(row_totals, axis=0) * 100
+            pct_matrix['Total Revenue'] = row_totals
+            pct_matrix = pct_matrix.sort_values('Total Revenue', ascending=False)
+
+            pct_file = get_output_path(base_name, 'industry', '_industry_region_pct_matrix.csv')
+            pct_matrix.to_csv(pct_file, float_format='%.1f')
+            print(f"  ✓ Industry x Region percentage matrix saved to: {pct_file}")
+            output_files['industry_region_pct'] = pct_file
 
     # === EVENT TYPE (KEYWORD) SEASONALITY ===
     # Use keywords from event names to identify event types
@@ -2027,7 +2245,8 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
 
         # Pivot for overview
         keyword_pivot = keyword_monthly.pivot(index='Keyword', columns='Month Name', values='% of Annual')
-        keyword_pivot = keyword_pivot[[m for m in month_order if m in keyword_pivot.columns]]
+        available_months = [m for m in month_order if m in keyword_pivot.columns]
+        keyword_pivot = keyword_pivot[available_months]
         keyword_pivot = keyword_pivot.merge(keyword_totals.set_index('Keyword'), left_index=True, right_index=True)
         keyword_pivot['Volatility'] = keyword_pivot[[c for c in keyword_pivot.columns if c in month_order]].std(axis=1).round(1)
         keyword_pivot = keyword_pivot.sort_values('Annual Revenue', ascending=False)
@@ -2035,10 +2254,9 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
         keyword_file = get_output_path(base_name, 'seasonality', '_seasonality_by_event_type.csv')
         keyword_pivot.to_csv(keyword_file, float_format='%.1f')
         print(f"  ✓ Event type seasonality saved to: {keyword_file}")
-    else:
-        keyword_file = None
+        output_files['keyword'] = keyword_file
 
-    return industry_file, keyword_file
+    return output_files
 
 
 def generate_expansion_revenue_analysis_csv(booking_df, accounts_df, output_file):
@@ -2328,11 +2546,57 @@ def get_school_holiday_flags(year: int, month: int) -> dict:
     return flags
 
 
+def calculate_logarithmic_growth_projection(growth_rates: np.ndarray, years_forward: int = 1) -> float:
+    """
+    Project future growth using logarithmic decay model.
+
+    As businesses mature, YoY growth typically decreases proportionally (not linearly).
+    This models the pattern where big drops happen early, smaller drops as you mature.
+
+    Args:
+        growth_rates: Array of historical YoY growth rates (oldest to newest)
+        years_forward: How many years to project forward
+
+    Returns:
+        Projected growth rate for target year
+    """
+    if len(growth_rates) < 2:
+        return growth_rates[-1] if len(growth_rates) == 1 else 0
+
+    # Calculate the decay ratio between consecutive years
+    # e.g., if growth went 50% -> 35% -> 25%, ratios are 0.7, 0.71
+    decay_ratios = []
+    for i in range(1, len(growth_rates)):
+        if growth_rates[i-1] > 0:
+            ratio = growth_rates[i] / growth_rates[i-1]
+            # Clamp to reasonable range (0.5 to 1.1) to avoid outliers
+            ratio = max(0.5, min(1.1, ratio))
+            decay_ratios.append(ratio)
+
+    if not decay_ratios:
+        return growth_rates[-1]
+
+    # Weight recent decay ratios more heavily
+    weights = list(range(1, len(decay_ratios) + 1))
+    weighted_decay = sum(r * w for r, w in zip(decay_ratios, weights)) / sum(weights)
+
+    # Project forward using the decay ratio
+    projected = growth_rates[-1]
+    for _ in range(years_forward):
+        projected = projected * weighted_decay
+
+    # Floor at a minimum growth rate (businesses don't typically go to 0%)
+    projected = max(projected, 5.0)  # 5% minimum growth floor
+
+    return round(projected, 1)
+
+
 def calculate_trend_based_growth(yearly_data: pd.DataFrame) -> dict:
     """
     Calculate recommended growth targets based on historical trend momentum.
 
-    Uses weighted average of recent growth rates with more weight on recent years.
+    Uses logarithmic decay model to project growth, recognising that growth
+    typically slows proportionally as businesses scale.
 
     Returns:
         Dictionary with recommended growth rates for each metric
@@ -2350,32 +2614,82 @@ def calculate_trend_based_growth(yearly_data: pd.DataFrame) -> dict:
                 weights = list(range(1, len(growth_rates) + 1))
                 weighted_avg = sum(g * w for g, w in zip(growth_rates, weights)) / sum(weights)
 
-                # Also calculate trend direction (acceleration/deceleration)
-                if len(growth_rates) >= 2:
-                    trend = growth_rates[-1] - growth_rates[-2]  # Most recent change
-                else:
-                    trend = 0
+                # Calculate trend direction (acceleration/deceleration)
+                trend = growth_rates[-1] - growth_rates[-2]
 
-                # Recommended = weighted average + small trend adjustment
-                recommended = weighted_avg + (trend * 0.25)
+                # Use logarithmic decay projection for Base recommendation
+                projected = calculate_logarithmic_growth_projection(growth_rates, years_forward=1)
 
                 recommendations[metric] = {
                     'weighted_avg': round(weighted_avg, 1),
+                    'most_recent': round(growth_rates[-1], 1),
                     'trend': round(trend, 1),
-                    'recommended': round(recommended, 1),
-                    'conservative': round(recommended * 0.7, 1),  # 70% of recommended
-                    'stretch': round(recommended * 1.5, 1),  # 150% of recommended
+                    'projected': projected,  # Logarithmic projection
+                    'recommended': projected,  # Use projection as Base
+                    'growth_rates': [round(g, 1) for g in growth_rates],  # Store history
                 }
             elif len(growth_rates) == 1:
                 recommendations[metric] = {
                     'weighted_avg': round(growth_rates[0], 1),
+                    'most_recent': round(growth_rates[0], 1),
                     'trend': 0,
+                    'projected': round(growth_rates[0], 1),
                     'recommended': round(growth_rates[0], 1),
-                    'conservative': round(growth_rates[0] * 0.7, 1),
-                    'stretch': round(growth_rates[0] * 1.5, 1),
+                    'growth_rates': [round(growth_rates[0], 1)],
                 }
 
     return recommendations
+
+
+def calculate_monthly_yoy_patterns(planning_df: pd.DataFrame, complete_years: list) -> pd.DataFrame:
+    """
+    Calculate monthly YoY growth patterns with recency weighting.
+
+    Some months historically grow faster than others - this captures those patterns
+    to vary targets by month rather than applying uniform growth.
+
+    Args:
+        planning_df: DataFrame with monthly data including YoY columns
+        complete_years: List of years with complete data
+
+    Returns:
+        DataFrame with monthly growth patterns for each metric
+    """
+    if len(complete_years) < 2:
+        return None
+
+    # Get YoY data for complete years only
+    yoy_data = planning_df[planning_df['Year'].isin(complete_years)].copy()
+
+    results = {}
+    for month in range(1, 13):
+        month_data = yoy_data[yoy_data['Month'] == month]
+        results[month] = {}
+
+        for metric in ['Total New Accounts', 'Total Ticket Revenue', 'Total Fees']:
+            yoy_col = f'{metric} YoY %'
+            if yoy_col in month_data.columns:
+                # Get YoY values for this month across years
+                yoy_values = month_data[[yoy_col, 'Year']].dropna()
+
+                if len(yoy_values) >= 1:
+                    # Weight recent years more heavily (exponential weighting)
+                    years = yoy_values['Year'].values
+                    values = yoy_values[yoy_col].values
+
+                    # Create weights: most recent year gets highest weight
+                    max_year = max(years)
+                    weights = [2 ** (y - max_year + len(years)) for y in years]
+
+                    weighted_avg = sum(v * w for v, w in zip(values, weights)) / sum(weights)
+                    results[month][metric] = round(weighted_avg, 1)
+
+    return results
+
+
+def round_to_multiple(value: float, multiple: int = 50) -> int:
+    """Round a value to the nearest multiple (default 50 for accounts)."""
+    return int(round(value / multiple) * multiple)
 
 
 def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file, target_year=2026):
@@ -2610,6 +2924,10 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     scenarios = scenarios.merge(base_monthly, on='Month', how='left')
     scenarios = scenarios.fillna(0)
 
+    # === CALCULATE MONTHLY YOY PATTERNS ===
+    # Get historical monthly YoY patterns with recency weighting
+    monthly_yoy_patterns = calculate_monthly_yoy_patterns(planning_df, complete_years)
+
     # === BHAG CALCULATION ===
     # BHAG: 25,000 cumulative accounts by end of target year
     bhag_accounts_target = 25000
@@ -2632,7 +2950,8 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
 
     print(f"    Derived fees BHAG: £{bhag_fees_target:,.2f} ({bhag_fees_growth_required}% YoY)")
 
-    # Calculate scenario targets (Base + BHAG only)
+    # === CALCULATE SCENARIO TARGETS (BASE + BHAG) ===
+    # Each metric modelled independently with its own trend
     for metric, base_val, idx_col in [
         ('Accounts', base_accounts, 'Accounts Index %'),
         ('Revenue', base_revenue, 'Revenue Index %'),
@@ -2640,29 +2959,81 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     ]:
         metric_key = f'Total New {metric}' if metric == 'Accounts' else f'Total Ticket {metric}' if metric == 'Revenue' else f'Total {metric}'
 
-        # Base growth from trend analysis
+        # Get annual growth projection from logarithmic decay model
         if metric_key in recommendations:
             rec = recommendations[metric_key]
-            base_growth = rec['recommended'] / 100
+            annual_base_growth = rec['recommended'] / 100
+            print(f"    {metric}: projected {rec['recommended']}% (from {rec.get('growth_rates', [])})")
         else:
-            base_growth = 0.15  # Default
+            annual_base_growth = 0.15  # Default
 
         # BHAG growth - back-calculated for accounts, derived for fees
         if metric == 'Accounts':
-            bhag_growth = bhag_accounts_growth_required / 100
+            annual_bhag_growth = bhag_accounts_growth_required / 100
         elif metric == 'Fees':
-            bhag_growth = bhag_fees_growth_required / 100
+            annual_bhag_growth = bhag_fees_growth_required / 100
         else:
-            # Revenue scales with accounts (assume same growth as accounts BHAG)
-            bhag_growth = bhag_accounts_growth_required / 100
+            # Revenue uses its own trend-based projection
+            annual_bhag_growth = bhag_accounts_growth_required / 100
 
-        # Annual targets
-        base_annual = base_val * (1 + base_growth)
-        bhag_annual = base_val * (1 + bhag_growth)
+        # === ENSURE BASE HAS HEADROOM BELOW BHAG ===
+        # Base should always be below BHAG - recalculate if needed
+        if annual_base_growth >= annual_bhag_growth:
+            # Calculate a dynamic gap based on the BHAG stretch
+            # Minimum 10% gap, scaling with how ambitious BHAG is
+            min_gap_ratio = 0.85  # Base should be at most 85% of BHAG
+            annual_base_growth = annual_bhag_growth * min_gap_ratio
+            print(f"    {metric}: Base capped at {round(annual_base_growth * 100, 1)}% to maintain headroom below BHAG")
 
-        # Monthly targets using seasonality
-        scenarios[f'{target_year} {metric} Base'] = round(base_annual * scenarios[idx_col] / 100, 0 if metric == 'Accounts' else 2)
-        scenarios[f'{target_year} {metric} BHAG'] = round(bhag_annual * scenarios[idx_col] / 100, 0 if metric == 'Accounts' else 2)
+        # === CALCULATE MONTHLY TARGETS ===
+        # Use monthly YoY patterns if available, otherwise use uniform annual growth
+        base_targets = []
+        bhag_targets = []
+
+        for month in range(1, 13):
+            base_year_monthly = scenarios.loc[scenarios['Month'] == month, f'{base_year} {metric}'].values[0]
+            seasonality_idx = scenarios.loc[scenarios['Month'] == month, idx_col].values[0]
+
+            if monthly_yoy_patterns and month in monthly_yoy_patterns and metric_key in monthly_yoy_patterns[month]:
+                # Use historical monthly pattern with recency weighting
+                monthly_yoy = monthly_yoy_patterns[month][metric_key] / 100
+
+                # Scale the monthly pattern to match our annual projection
+                # This preserves relative month-to-month variation
+                base_monthly_target = base_year_monthly * (1 + monthly_yoy * (annual_base_growth / (sum(
+                    monthly_yoy_patterns[m].get(metric_key, 0) for m in range(1, 13)
+                ) / 1200) if monthly_yoy != 0 else 1))
+                bhag_monthly_target = base_year_monthly * (1 + monthly_yoy * (annual_bhag_growth / (sum(
+                    monthly_yoy_patterns[m].get(metric_key, 0) for m in range(1, 13)
+                ) / 1200) if monthly_yoy != 0 else 1))
+            else:
+                # Fallback: use seasonality distribution with uniform growth
+                annual_base_total = base_val * (1 + annual_base_growth)
+                annual_bhag_total = base_val * (1 + annual_bhag_growth)
+                base_monthly_target = annual_base_total * seasonality_idx / 100
+                bhag_monthly_target = annual_bhag_total * seasonality_idx / 100
+
+            base_targets.append(base_monthly_target)
+            bhag_targets.append(bhag_monthly_target)
+
+        # Apply rounding for accounts (to nearest 50)
+        if metric == 'Accounts':
+            scenarios[f'{target_year} {metric} Base'] = [round_to_multiple(t, 50) for t in base_targets]
+            scenarios[f'{target_year} {metric} BHAG'] = [round_to_multiple(t, 50) for t in bhag_targets]
+        else:
+            scenarios[f'{target_year} {metric} Base'] = [round(t, 2) for t in base_targets]
+            scenarios[f'{target_year} {metric} BHAG'] = [round(t, 2) for t in bhag_targets]
+
+        # === FINAL CHECK: Ensure Base <= BHAG for every month ===
+        for i in range(len(scenarios)):
+            base_val_month = scenarios.loc[i, f'{target_year} {metric} Base']
+            bhag_val_month = scenarios.loc[i, f'{target_year} {metric} BHAG']
+            if base_val_month > bhag_val_month:
+                # Cap Base at BHAG minus a small gap
+                if metric == 'Accounts':
+                    scenarios.loc[i, f'{target_year} {metric} Base'] = round_to_multiple(bhag_val_month * 0.9, 50)
+                else:
+                    scenarios.loc[i, f'{target_year} {metric} Base'] = round(bhag_val_month * 0.9, 2)
 
         # YoY variance vs base year
         scenarios[f'{metric} Base vs {base_year} %'] = round(
@@ -2696,7 +3067,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     scenarios[scenario_cols].to_csv(scenario_file, index=False, float_format='%.2f')
     print(f"  ✓ {target_year} targets saved to: {scenario_file}")
 
-    # 2. Growth recommendations summary (Base from trends, BHAG back-calculated)
+    # 2. Growth recommendations summary (Base from logarithmic decay, BHAG back-calculated)
     rec_rows = []
     for metric, rec in recommendations.items():
         # Determine BHAG growth for this metric
@@ -2709,8 +3080,10 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
 
         rec_rows.append({
             'Metric': metric,
-            'Historical Weighted Avg %': rec['weighted_avg'],
-            'Recent Trend': rec['trend'],
+            'Historical YoY Rates': ' → '.join(f"{g}%" for g in rec.get('growth_rates', [])),
+            'Most Recent YoY %': rec.get('most_recent', rec['weighted_avg']),
+            'Trend (acceleration)': rec['trend'],
+            'Projected (log decay) %': rec.get('projected', rec['recommended']),
             'Base (Recommended) %': rec['recommended'],
             'BHAG Required %': bhag_pct,
             'BHAG vs Base Gap': round(bhag_pct - rec['recommended'], 1),

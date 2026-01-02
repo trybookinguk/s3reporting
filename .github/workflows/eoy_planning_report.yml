@@ -93,12 +93,28 @@ jobs:
         if: always()
         run: |
           echo "=== Generated report files ==="
-          ls -la eoy_planning_report*.csv || echo "No report files found"
+          echo "Root level:"
+          ls -la eoy_planning_report*.csv 2>/dev/null || echo "  No root files found"
+          echo ""
+          for folder in planning seasonality industry cohorts geography keywords; do
+            if [ -d "$folder" ]; then
+              echo "$folder/:"
+              ls -la "$folder"/*.csv 2>/dev/null || echo "  No files in $folder"
+              echo ""
+            fi
+          done
 
       - name: Upload EOY Planning Report
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: eoy-planning-report-${{ steps.date.outputs.date }}
-          path: eoy_planning_report*.csv
+          path: |
+            eoy_planning_report*.csv
+            planning/
+            seasonality/
+            industry/
+            cohorts/
+            geography/
+            keywords/
           retention-days: 90

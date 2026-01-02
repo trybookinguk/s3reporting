@@ -19,11 +19,21 @@ Usage:
     # Full year 2025 (Jan-Dec or YTD)
     python3 eoy_planning_report.py --year 2025
 
-    # Rolling 12 months (Dec 2024 - Nov 2025)
+    # Rolling 12 months (previous 12 complete months)
     python3 eoy_planning_report.py --rolling
 
     # Custom date range
     python3 eoy_planning_report.py --start 2024-01 --end 2025-11
+
+Output Structure:
+    Reports are organised into folders by type:
+    - planning/     - Target models, growth recommendations, BHAG tracking
+    - seasonality/  - Industry and event type seasonality analysis
+    - industry/     - Industry breakdowns and cross-tabs
+    - cohorts/      - Expansion revenue and cohort curves
+    - geography/    - Regional analysis
+    - keywords/     - Event keyword analysis
+    - (root)        - Main monthly report and summary
 """
 import os
 import sys
@@ -48,6 +58,43 @@ from modules.uk_regional_segmentation import (
     VALID_UK_POSTCODE_AREAS
 )
 from modules.event_keyword_analysis import generate_keyword_analysis_csvs
+
+
+# Output folder structure
+OUTPUT_FOLDERS = {
+    'planning': 'planning',
+    'seasonality': 'seasonality',
+    'industry': 'industry',
+    'cohorts': 'cohorts',
+    'geography': 'geography',
+    'keywords': 'keywords',
+}
+
+
+def get_output_path(base_name: str, folder: str, filename: str) -> str:
+    """
+    Get the full output path for a file, creating the folder if needed.
+
+    Args:
+        base_name: Base path/name from output_file (e.g., 'eoy_planning_report_20260102')
+        folder: Folder category (e.g., 'planning', 'seasonality') or None for root
+        filename: The filename suffix (e.g., '_2026_targets.csv')
+
+    Returns:
+        Full path to the output file
+    """
+    # Extract directory and base filename
+    base_dir = os.path.dirname(base_name) or '.'
+    base_file = os.path.basename(base_name)
+
+    if folder and folder in OUTPUT_FOLDERS:
+        # Create subfolder
+        folder_path = os.path.join(base_dir, OUTPUT_FOLDERS[folder])
+        os.makedirs(folder_path, exist_ok=True)
+        return os.path.join(folder_path, f"{base_file}{filename}")
+    else:
+        # Root level
+        return f"{base_name}{filename}"
 
 
 def parse_args():
@@ -1157,9 +1204,9 @@ def generate_industry_breakdown_csv(accounts_df, booking_df, months, output_file
     industry_df = pd.DataFrame(industry_metrics)
     industry_df = industry_df.sort_values('Total Ticket Revenue', ascending=False)
 
-    # Generate filename
+    # Generate filename in industry folder
     base_name = output_file.rsplit('.', 1)[0]
-    industry_file = f"{base_name}_by_industry.csv"
+    industry_file = get_output_path(base_name, 'industry', '_by_industry.csv')
 
     industry_df.to_csv(industry_file, index=False, float_format='%.2f')
     return industry_file
@@ -1402,9 +1449,9 @@ def generate_industry_subindustry_breakdown_csv(accounts_df, booking_df, months,
         ascending=[True, False]
     )
 
-    # Generate filename
+    # Generate filename in industry folder
     base_name = output_file.rsplit('.', 1)[0]
-    industry_file = f"{base_name}_by_industry_subindustry.csv"
+    industry_file = get_output_path(base_name, 'industry', '_by_industry_subindustry.csv')
 
     industry_df.to_csv(industry_file, index=False, float_format='%.2f')
     return industry_file
@@ -1625,9 +1672,9 @@ def generate_industry_geography_crosstab_csv(accounts_df, booking_df, months, ou
         ascending=[True, False]
     )
 
-    # Generate filename
+    # Generate filename in industry folder
     base_name = output_file.rsplit('.', 1)[0]
-    cross_file = f"{base_name}_industry_x_geography.csv"
+    cross_file = get_output_path(base_name, 'industry', '_industry_x_geography.csv')
 
     cross_df.to_csv(cross_file, index=False, float_format='%.2f')
     return cross_file
@@ -1828,9 +1875,9 @@ def generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_fi
     geo_df = pd.DataFrame(geo_rows)
     geo_df = geo_df.sort_values('Total Ticket Revenue', ascending=False)
 
-    # Generate filename
+    # Generate filename in geography folder
     base_name = output_file.rsplit('.', 1)[0]
-    geo_file = f"{base_name}_by_geography.csv"
+    geo_file = get_output_path(base_name, 'geography', '_by_geography.csv')
 
     geo_df.to_csv(geo_file, index=False, float_format='%.2f')
     return geo_file
@@ -1917,12 +1964,12 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
         # Sort by annual revenue
         industry_pivot = industry_pivot.sort_values('Annual Revenue', ascending=False)
 
-        industry_file = f"{base_name}_seasonality_by_industry.csv"
+        industry_file = get_output_path(base_name, 'seasonality', '_seasonality_by_industry.csv')
         industry_pivot.to_csv(industry_file, float_format='%.1f')
         print(f"  ✓ Industry seasonality saved to: {industry_file}")
 
         # Also save the detailed view with dip/peak flags
-        detail_file = f"{base_name}_seasonality_industry_detail.csv"
+        detail_file = get_output_path(base_name, 'seasonality', '_seasonality_industry_detail.csv')
         industry_monthly_out = industry_monthly[['Industry', 'Month', 'Month Name', 'Revenue', 'Tickets', 'Events', '% of Annual', 'Variance %', 'Status']]
         industry_monthly_out = industry_monthly_out.sort_values(['Industry', 'Month'])
         industry_monthly_out = industry_monthly_out.drop(columns=['Month'])  # Remove numeric month from output
@@ -1985,7 +2032,7 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
         keyword_pivot['Volatility'] = keyword_pivot[[c for c in keyword_pivot.columns if c in month_order]].std(axis=1).round(1)
         keyword_pivot = keyword_pivot.sort_values('Annual Revenue', ascending=False)
 
-        keyword_file = f"{base_name}_seasonality_by_event_type.csv"
+        keyword_file = get_output_path(base_name, 'seasonality', '_seasonality_by_event_type.csv')
         keyword_pivot.to_csv(keyword_file, float_format='%.1f')
         print(f"  ✓ Event type seasonality saved to: {keyword_file}")
     else:
@@ -2073,12 +2120,12 @@ def generate_expansion_revenue_analysis_csv(booking_df, accounts_df, output_file
     accounts_pivot['YearMonth'] = accounts_pivot['YearMonth'].astype(str)
 
     # Save revenue breakdown
-    revenue_file = f"{base_name}_expansion_revenue.csv"
+    revenue_file = get_output_path(base_name, 'cohorts', '_expansion_revenue.csv')
     revenue_pivot.to_csv(revenue_file, index=False, float_format='%.2f')
     print(f"  ✓ Expansion revenue analysis saved to: {revenue_file}")
 
     # Save accounts breakdown
-    accounts_file = f"{base_name}_expansion_accounts.csv"
+    accounts_file = get_output_path(base_name, 'cohorts', '_expansion_accounts.csv')
     accounts_pivot.to_csv(accounts_file, index=False, float_format='%.0f')
     print(f"  ✓ Expansion accounts analysis saved to: {accounts_file}")
 
@@ -2094,7 +2141,7 @@ def generate_expansion_revenue_analysis_csv(booking_df, accounts_df, output_file
         if col not in ['Year', 'Total'] and '%' not in col:
             yearly_summary[f'{col} %'] = round(yearly_summary[col] / yearly_summary['Total'] * 100, 1)
 
-    summary_file = f"{base_name}_expansion_yearly_summary.csv"
+    summary_file = get_output_path(base_name, 'cohorts', '_expansion_yearly_summary.csv')
     yearly_summary.to_csv(summary_file, index=False, float_format='%.2f')
     print(f"  ✓ Expansion yearly summary saved to: {summary_file}")
 
@@ -2177,7 +2224,7 @@ def generate_cohort_revenue_curves_csv(booking_df, accounts_df, output_file):
     cohort_curves['Cohort'] = cohort_curves['Cohort'].astype(str)
 
     # Save detailed curves
-    curves_file = f"{base_name}_cohort_curves.csv"
+    curves_file = get_output_path(base_name, 'cohorts', '_cohort_curves.csv')
     cohort_curves.to_csv(curves_file, index=False, float_format='%.2f')
     print(f"  ✓ Cohort revenue curves saved to: {curves_file}")
 
@@ -2198,7 +2245,7 @@ def generate_cohort_revenue_curves_csv(booking_df, accounts_df, output_file):
         right_index=True
     )
 
-    milestone_file = f"{base_name}_cohort_milestones.csv"
+    milestone_file = get_output_path(base_name, 'cohorts', '_cohort_milestones.csv')
     milestone_pivot.to_csv(milestone_file, float_format='%.2f')
     print(f"  ✓ Cohort milestones saved to: {milestone_file}")
 
@@ -2213,7 +2260,7 @@ def generate_cohort_revenue_curves_csv(booking_df, accounts_df, output_file):
         'Activation Rate %': 'mean'
     }).reset_index()
 
-    yoy_file = f"{base_name}_cohort_yoy_comparison.csv"
+    yoy_file = get_output_path(base_name, 'cohorts', '_cohort_yoy_comparison.csv')
     yoy_comparison.to_csv(yoy_file, index=False, float_format='%.2f')
     print(f"  ✓ Cohort YoY comparison saved to: {yoy_file}")
 
@@ -2645,7 +2692,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     ]
     scenario_cols = [c for c in scenario_cols if c in scenarios.columns]
 
-    scenario_file = f"{base_name}_{target_year}_targets.csv"
+    scenario_file = get_output_path(base_name, 'planning', f'_{target_year}_targets.csv')
     scenarios[scenario_cols].to_csv(scenario_file, index=False, float_format='%.2f')
     print(f"  ✓ {target_year} targets saved to: {scenario_file}")
 
@@ -2671,7 +2718,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
 
     if rec_rows:
         rec_df = pd.DataFrame(rec_rows)
-        rec_file = f"{base_name}_growth_recommendations.csv"
+        rec_file = get_output_path(base_name, 'planning', '_growth_recommendations.csv')
         rec_df.to_csv(rec_file, index=False, float_format='%.1f')
         print(f"  ✓ Growth recommendations saved to: {rec_file}")
 
@@ -2705,7 +2752,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     ]
 
     annual_df = pd.DataFrame(annual_summary)
-    annual_file = f"{base_name}_{target_year}_annual_summary.csv"
+    annual_file = get_output_path(base_name, 'planning', f'_{target_year}_annual_summary.csv')
     annual_df.to_csv(annual_file, index=False, float_format='%.2f')
     print(f"  ✓ Annual summary saved to: {annual_file}")
 
@@ -2719,7 +2766,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     planning_output_cols = [c for c in planning_output_cols if c in planning_df.columns]
     planning_output = planning_df[planning_output_cols].sort_values(['Year', 'Month'])
 
-    model_file = f"{base_name}_planning_model.csv"
+    model_file = get_output_path(base_name, 'planning', '_planning_model.csv')
     planning_output.to_csv(model_file, index=False, float_format='%.2f')
     print(f"  ✓ Historical planning model saved to: {model_file}")
 
@@ -2785,7 +2832,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
             'Fees per Account', 'Tickets per Account', 'Value Index', 'Relative Growth Rate'
         ]]
 
-        industry_file = f"{base_name}_industry_segmentation.csv"
+        industry_file = get_output_path(base_name, 'planning', '_industry_segmentation.csv')
         industry_output.to_csv(industry_file, index=False, float_format='%.2f')
         print(f"  ✓ Industry segmentation saved to: {industry_file}")
 
@@ -3089,7 +3136,7 @@ def main():
         print(f"✓ Industry x Geography cross-tab saved to: {cross_file}")
 
     # Generate keyword analysis reports
-    keyword_files = generate_keyword_analysis_csvs(booking_df, output_file)
+    keyword_files = generate_keyword_analysis_csvs(booking_df, output_file, output_folder='keywords')
     if keyword_files:
         print(f"✓ Keyword analysis reports generated:")
         for report_type, filepath in keyword_files.items():

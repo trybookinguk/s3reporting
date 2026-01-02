@@ -488,18 +488,30 @@ def generate_keyword_summary(booking_df: pd.DataFrame, top_n: int = 50) -> pd.Da
     return summary
 
 
-def generate_keyword_analysis_csvs(booking_df: pd.DataFrame, output_file: str) -> Dict[str, str]:
+def generate_keyword_analysis_csvs(booking_df: pd.DataFrame, output_file: str, output_folder: str = None) -> Dict[str, str]:
     """
     Generate all keyword analysis CSV files.
 
     Args:
         booking_df: Booking DataFrame
         output_file: Base output filename
+        output_folder: Optional folder to save files in (will be created if needed)
 
     Returns:
         Dictionary mapping report name to file path
     """
+    import os
+
     base_name = output_file.rsplit('.', 1)[0]
+    base_dir = os.path.dirname(base_name) or '.'
+    base_file = os.path.basename(base_name)
+
+    # Use output folder if specified
+    if output_folder:
+        folder_path = os.path.join(base_dir, output_folder)
+        os.makedirs(folder_path, exist_ok=True)
+        base_name = os.path.join(folder_path, base_file)
+
     output_files = {}
 
     print("\nGenerating keyword analysis reports...")

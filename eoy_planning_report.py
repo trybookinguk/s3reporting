@@ -4927,6 +4927,721 @@ def generate_ppc_cohort_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.D
     return output_files
 
 
+def generate_gateway_by_geography_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                       output_file: str) -> dict:
+    """
+    Generate gateway usage analysis by geographic region.
+
+    Shows Default vs Stripe Connect adoption rates across UK regions.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating gateway by geography analysis...")
+
+    # Check for gateway column
+    gateway_col = None
+    for col in ['GatewayName', 'Gateway Group', 'GatewayGroup']:
+        if col in booking_df.columns:
+            gateway_col = col
+            break
+
+    if gateway_col is None:
+        print("    ⚠ No gateway column found - skipping")
+        return output_files
+
+    booking_df = booking_df.copy()
+
+    # Standardise gateway names
+    def standardise_gateway(gateway):
+        if pd.isna(gateway):
+            return 'Unknown'
+        gateway_upper = str(gateway).upper()
+        if 'STRIPE' in gateway_upper and 'CONNECT' in gateway_upper:
+            return 'Stripe Connect'
+        elif 'STRIPE' in gateway_upper:
+            return 'Stripe'
+        elif 'PAYPAL' in gateway_upper:
+            return 'PayPal'
+        elif 'DEFAULT' in gateway_upper or gateway_upper == 'TRYBOOKING':
+            return 'Default'
+        return str(gateway)
+
+    booking_df['Gateway'] = booking_df[gateway_col].apply(standardise_gateway)
+
+    # Add region from postcode
+    postcode_col = 'EventPostcode' if 'EventPostcode' in booking_df.columns else 'AccountPostcode'
+    if postcode_col in booking_df.columns:
+        booking_df['PostcodeArea'] = extract_postcode_areas_vectorized(booking_df[postcode_col])
+        booking_df['Region'] = get_regions_vectorized(booking_df['PostcodeArea'])
+        booking_df = booking_df[booking_df['Region'] != 'Unknown']
+
+        # Aggregate by region and gateway
+        region_gateway = booking_df.groupby(['Region', 'Gateway']).agg({
+            'TotalFees': 'sum' if 'TotalFees' in booking_df.columns else 'count',
+            'AccountId': 'nunique'
+        }).reset_index()
+
+        if 'TotalFees' in booking_df.columns:
+            region_gateway.columns = ['Region', 'Gateway', 'Fees', 'Accounts']
+        else:
+            region_gateway.columns = ['Region', 'Gateway', 'Transactions', 'Accounts']
+
+        # Pivot for side-by-side view
+        value_col = 'Fees' if 'Fees' in region_gateway.columns else 'Transactions'
+        pivot = region_gateway.pivot(index='Region', columns='Gateway', values=value_col).fillna(0)
+        pivot['Total'] = pivot.sum(axis=1)
+
+        # Calculate percentages
+        for col in pivot.columns:
+            if col != 'Total':
+                pivot[f'{col} %'] = round(pivot[col] / pivot['Total'] * 100, 1)
+
+        pivot = pivot.sort_values('Total', ascending=False)
+
+        geo_file = get_output_path(base_name, 'geography', '_gateway_by_region.csv')
+        pivot.to_csv(geo_file, float_format='%.2f')
+        output_files['gateway_by_region'] = geo_file
+        print(f"    ✓ Gateway by region: {geo_file}")
+
+    return output_files
+
+
+def generate_organiser_concentration_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                          output_file: str, account_tiers: dict = None) -> dict:
+    """
+    Generate organiser concentration analysis by tier.
+
+    Shows what percentage of fees come from each tier level.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        output_file: Base output filename
+        account_tiers: Optional dict mapping AccountId to tier
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating organiser concentration analysis...")
+
+    booking_df = booking_df.copy()
+
+    # Get account tiers if not provided
+    if account_tiers is None:
+        # Calculate tiers
+        account_tiers = calculate_account_tiers(accounts_df, booking_df)
+
+    # Map tiers to bookings
+    booking_df['Tier'] = booking_df['AccountId'].map(account_tiers).fillna('Untiered')
+
+    # Aggregate by tier
+    tier_summary = booking_df.groupby('Tier').agg({
+        'TotalFees': 'sum' if 'TotalFees' in booking_df.columns else 'count',
+        'PaymentReceived': 'sum' if 'PaymentReceived' in booking_df.columns else 'count',
+        'TicketQuantity': 'sum' if 'TicketQuantity' in booking_df.columns else 'count',
+        'AccountId': 'nunique',
+        'EventId': 'nunique'
+    }).reset_index()
+
+    tier_summary.columns = ['Tier', 'Total Fees', 'Total Revenue', 'Total Tickets', 'Accounts', 'Events']
+
+    # Calculate totals for percentages
+    total_fees = tier_summary['Total Fees'].sum()
+    total_revenue = tier_summary['Total Revenue'].sum()
+    total_accounts = tier_summary['Accounts'].sum()
+
+    tier_summary['Fees %'] = round(tier_summary['Total Fees'] / total_fees * 100, 1)
+    tier_summary['Revenue %'] = round(tier_summary['Total Revenue'] / total_revenue * 100, 1)
+    tier_summary['Accounts %'] = round(tier_summary['Accounts'] / total_accounts * 100, 1)
+    tier_summary['Avg Fees Per Account'] = round(tier_summary['Total Fees'] / tier_summary['Accounts'], 2)
+
+    # Order tiers logically
+    tier_order = ['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1', 'Untiered']
+    tier_summary['Order'] = tier_summary['Tier'].apply(
+        lambda x: tier_order.index(x) if x in tier_order else 99
+    )
+    tier_summary = tier_summary.sort_values('Order').drop('Order', axis=1)
+
+    # Calculate cumulative concentration
+    tier_summary['Cumulative Fees %'] = tier_summary['Fees %'].cumsum()
+    tier_summary['Cumulative Accounts %'] = tier_summary['Accounts %'].cumsum()
+
+    concentration_file = get_output_path(base_name, 'cohorts', '_tier_concentration.csv')
+    tier_summary.to_csv(concentration_file, index=False, float_format='%.2f')
+    output_files['tier_concentration'] = concentration_file
+    print(f"    ✓ Tier concentration: {concentration_file}")
+
+    return output_files
+
+
+def generate_cohort_quality_by_month_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                          output_file: str) -> dict:
+    """
+    Generate cohort quality analysis by signup month.
+
+    Shows activation rates, avg revenue, etc. by month of account creation.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating cohort quality by signup month...")
+
+    accounts_df = accounts_df.copy()
+    booking_df = booking_df.copy()
+
+    # Extract signup month
+    accounts_df['SignupMonth'] = pd.to_datetime(accounts_df['DateTimeCreated']).dt.month
+    accounts_df['SignupYear'] = pd.to_datetime(accounts_df['DateTimeCreated']).dt.year
+
+    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Account Id'
+
+    # Get accounts with events (activated)
+    accounts_with_events = accounts_df[accounts_df['FirstEventCreation'].notna()][account_id_col].unique()
+
+    # Get accounts with sales
+    accounts_with_sales = booking_df['AccountId'].unique()
+
+    # Calculate metrics per signup month
+    monthly_quality = []
+
+    for month in range(1, 13):
+        month_accounts = accounts_df[accounts_df['SignupMonth'] == month]
+        total_accounts = len(month_accounts)
+
+        if total_accounts == 0:
+            continue
+
+        month_account_ids = set(month_accounts[account_id_col].astype(float).dropna())
+
+        # Activation metrics
+        activated = len([a for a in month_account_ids if a in accounts_with_events])
+        with_sales = len([a for a in month_account_ids if a in accounts_with_sales])
+
+        # Revenue from these accounts
+        month_bookings = booking_df[booking_df['AccountId'].isin(month_account_ids)]
+        total_fees = month_bookings['TotalFees'].sum() if 'TotalFees' in month_bookings.columns else 0
+        total_revenue = month_bookings['PaymentReceived'].sum() if 'PaymentReceived' in month_bookings.columns else 0
+
+        monthly_quality.append({
+            'Signup Month': calendar.month_name[month],
+            'Month Num': month,
+            'Total Accounts': total_accounts,
+            'Activated (Events)': activated,
+            'With Sales': with_sales,
+            'Activation Rate %': round(activated / total_accounts * 100, 1),
+            'Sales Rate %': round(with_sales / total_accounts * 100, 1),
+            'Total Fees': round(total_fees, 2),
+            'Total Revenue': round(total_revenue, 2),
+            'Avg Fees Per Account': round(total_fees / total_accounts, 2),
+            'Avg Fees Per Active': round(total_fees / with_sales, 2) if with_sales > 0 else 0,
+        })
+
+    quality_df = pd.DataFrame(monthly_quality)
+    quality_df = quality_df.sort_values('Month Num')
+
+    quality_file = get_output_path(base_name, 'cohorts', '_cohort_quality_by_month.csv')
+    quality_df.to_csv(quality_file, index=False, float_format='%.2f')
+    output_files['cohort_quality_by_month'] = quality_file
+    print(f"    ✓ Cohort quality by month: {quality_file}")
+
+    return output_files
+
+
+def generate_outreach_calendar_csv(booking_df: pd.DataFrame, output_file: str) -> dict:
+    """
+    Generate outreach calendar based on keyword timing analysis.
+
+    Shows recommended outreach dates for different event types.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating outreach calendar...")
+
+    if 'EventName' not in booking_df.columns or 'EventDate' not in booking_df.columns:
+        print("    ⚠ Missing EventName or EventDate - skipping")
+        return output_files
+
+    booking_df = booking_df.copy()
+    booking_df['EventDate'] = pd.to_datetime(booking_df['EventDate'], errors='coerce')
+    booking_df['EventMonth'] = booking_df['EventDate'].dt.month
+
+    # Get top keywords by fees
+    from modules.event_keyword_analysis import extract_keywords
+
+    # Aggregate to event level
+    events = booking_df.groupby('EventId').agg({
+        'EventName': 'first',
+        'EventMonth': 'first',
+        'TotalFees': 'sum' if 'TotalFees' in booking_df.columns else 'count',
+        'TransactionDate': 'min'
+    }).reset_index()
+
+    events['TransactionDate'] = pd.to_datetime(events['TransactionDate'])
+    events['EventDate'] = pd.to_datetime(booking_df.groupby('EventId')['EventDate'].first())
+
+    # Calculate lead time
+    events['LeadDays'] = (events['EventDate'] - events['TransactionDate']).dt.days
+    events = events[events['LeadDays'] >= 0]
+
+    # Extract keywords
+    events['Keywords'] = events['EventName'].apply(extract_keywords)
+
+    # Build keyword calendar
+    calendar_data = []
+    keyword_stats = {}
+
+    for _, row in events.iterrows():
+        for keyword in row['Keywords']:
+            if keyword not in keyword_stats:
+                keyword_stats[keyword] = {
+                    'months': [],
+                    'lead_days': [],
+                    'fees': 0
+                }
+            keyword_stats[keyword]['months'].append(row['EventMonth'])
+            if pd.notna(row['LeadDays']):
+                keyword_stats[keyword]['lead_days'].append(row['LeadDays'])
+            keyword_stats[keyword]['fees'] += row['TotalFees'] if pd.notna(row['TotalFees']) else 0
+
+    # Build calendar entries for top 50 keywords
+    top_keywords = sorted(keyword_stats.keys(), key=lambda k: keyword_stats[k]['fees'], reverse=True)[:50]
+
+    for keyword in top_keywords:
+        stats = keyword_stats[keyword]
+        if not stats['months'] or not stats['lead_days']:
+            continue
+
+        # Find peak month(s)
+        month_counts = pd.Series(stats['months']).value_counts()
+        peak_month = month_counts.index[0]
+
+        # Calculate recommended lead time (75th percentile)
+        lead_days = sorted(stats['lead_days'])
+        recommended_lead = int(np.percentile(lead_days, 75)) if lead_days else 30
+
+        # Calculate outreach month
+        outreach_month = peak_month - (recommended_lead // 30)
+        if outreach_month <= 0:
+            outreach_month += 12
+
+        calendar_data.append({
+            'Keyword': keyword,
+            'Peak Event Month': calendar.month_name[peak_month],
+            'Peak Month Num': peak_month,
+            'Recommended Lead (days)': recommended_lead,
+            'Recommended Lead (weeks)': round(recommended_lead / 7),
+            'Start Outreach Month': calendar.month_name[outreach_month],
+            'Outreach Month Num': outreach_month,
+            'Total Fees': round(stats['fees'], 2),
+            'Event Count': len(stats['months'])
+        })
+
+    calendar_df = pd.DataFrame(calendar_data)
+    calendar_df = calendar_df.sort_values('Outreach Month Num')
+
+    calendar_file = get_output_path(base_name, 'planning', '_outreach_calendar.csv')
+    calendar_df.to_csv(calendar_file, index=False, float_format='%.2f')
+    output_files['outreach_calendar'] = calendar_file
+    print(f"    ✓ Outreach calendar: {calendar_file}")
+
+    # Also create monthly summary
+    monthly_outreach = calendar_df.groupby('Outreach Month Num').agg({
+        'Keyword': lambda x: ', '.join(x[:5]),  # Top 5 keywords
+        'Total Fees': 'sum'
+    }).reset_index()
+    monthly_outreach['Month'] = monthly_outreach['Outreach Month Num'].apply(lambda m: calendar.month_name[m])
+    monthly_outreach = monthly_outreach[['Month', 'Keyword', 'Total Fees']]
+    monthly_outreach.columns = ['Month', 'Top Keywords to Target', 'Potential Fees']
+
+    monthly_file = get_output_path(base_name, 'planning', '_monthly_outreach_focus.csv')
+    monthly_outreach.to_csv(monthly_file, index=False, float_format='%.2f')
+    output_files['monthly_outreach'] = monthly_file
+    print(f"    ✓ Monthly outreach focus: {monthly_file}")
+
+    return output_files
+
+
+def generate_price_band_analysis_csv(booking_df: pd.DataFrame, output_file: str) -> dict:
+    """
+    Generate price band analysis.
+
+    Price bands: Free, <£10, £10-25, £25-50, £50+
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating price band analysis...")
+
+    if 'PaymentReceived' not in booking_df.columns or 'TicketQuantity' not in booking_df.columns:
+        print("    ⚠ Missing price data - skipping")
+        return output_files
+
+    booking_df = booking_df.copy()
+
+    # Calculate price per ticket at event level
+    events = booking_df.groupby('EventId').agg({
+        'PaymentReceived': 'sum',
+        'TicketQuantity': 'sum',
+        'TotalFees': 'sum' if 'TotalFees' in booking_df.columns else 'count',
+        'Industry': 'first' if 'Industry' in booking_df.columns else 'count',
+        'AccountId': 'first'
+    }).reset_index()
+
+    events['AvgTicketPrice'] = events['PaymentReceived'] / events['TicketQuantity'].replace(0, 1)
+
+    # Classify into price bands
+    def classify_price_band(price):
+        if price == 0:
+            return 'Free'
+        elif price < 10:
+            return '£1-£9.99'
+        elif price < 25:
+            return '£10-£24.99'
+        elif price < 50:
+            return '£25-£49.99'
+        else:
+            return '£50+'
+
+    events['Price Band'] = events['AvgTicketPrice'].apply(classify_price_band)
+
+    # Summary by price band
+    band_summary = events.groupby('Price Band').agg({
+        'EventId': 'count',
+        'TicketQuantity': 'sum',
+        'PaymentReceived': 'sum',
+        'TotalFees': 'sum',
+        'AccountId': 'nunique'
+    }).reset_index()
+
+    band_summary.columns = ['Price Band', 'Events', 'Tickets', 'Revenue', 'Fees', 'Accounts']
+
+    # Order bands logically
+    band_order = ['Free', '£1-£9.99', '£10-£24.99', '£25-£49.99', '£50+']
+    band_summary['Order'] = band_summary['Price Band'].apply(
+        lambda x: band_order.index(x) if x in band_order else 99
+    )
+    band_summary = band_summary.sort_values('Order').drop('Order', axis=1)
+
+    # Calculate percentages
+    total_events = band_summary['Events'].sum()
+    total_fees = band_summary['Fees'].sum()
+    band_summary['Events %'] = round(band_summary['Events'] / total_events * 100, 1)
+    band_summary['Fees %'] = round(band_summary['Fees'] / total_fees * 100, 1)
+    band_summary['Avg Fees Per Event'] = round(band_summary['Fees'] / band_summary['Events'], 2)
+
+    band_file = get_output_path(base_name, 'industry', '_price_band_summary.csv')
+    band_summary.to_csv(band_file, index=False, float_format='%.2f')
+    output_files['price_band_summary'] = band_file
+    print(f"    ✓ Price band summary: {band_file}")
+
+    # Price band by industry
+    if 'Industry' in events.columns and events['Industry'].dtype == 'object':
+        industry_band = events.groupby(['Industry', 'Price Band']).agg({
+            'EventId': 'count',
+            'TotalFees': 'sum'
+        }).reset_index()
+        industry_band.columns = ['Industry', 'Price Band', 'Events', 'Fees']
+
+        # Pivot
+        pivot = industry_band.pivot(index='Industry', columns='Price Band', values='Fees').fillna(0)
+        pivot = pivot[[c for c in band_order if c in pivot.columns]]
+        pivot['Total'] = pivot.sum(axis=1)
+        pivot = pivot.sort_values('Total', ascending=False)
+
+        industry_file = get_output_path(base_name, 'industry', '_price_band_by_industry.csv')
+        pivot.to_csv(industry_file, float_format='%.2f')
+        output_files['price_band_by_industry'] = industry_file
+        print(f"    ✓ Price band by industry: {industry_file}")
+
+    return output_files
+
+
+def generate_fee_structure_analysis_csv(booking_df: pd.DataFrame, output_file: str) -> dict:
+    """
+    Generate fee structure analysis (free vs paid events) by industry.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating fee structure analysis...")
+
+    if 'PaymentReceived' not in booking_df.columns:
+        print("    ⚠ Missing PaymentReceived - skipping")
+        return output_files
+
+    booking_df = booking_df.copy()
+
+    # Aggregate to event level
+    events = booking_df.groupby('EventId').agg({
+        'PaymentReceived': 'sum',
+        'TicketQuantity': 'sum',
+        'TotalFees': 'sum' if 'TotalFees' in booking_df.columns else 'count',
+        'Industry': 'first' if 'Industry' in booking_df.columns else 'count',
+        'AccountId': 'first'
+    }).reset_index()
+
+    # Classify as free or paid
+    events['Event Type'] = events['PaymentReceived'].apply(lambda x: 'Free' if x == 0 else 'Paid')
+
+    # Summary by industry
+    if 'Industry' in events.columns and events['Industry'].dtype == 'object':
+        industry_fee = events.groupby(['Industry', 'Event Type']).agg({
+            'EventId': 'count',
+            'TicketQuantity': 'sum',
+            'TotalFees': 'sum'
+        }).reset_index()
+        industry_fee.columns = ['Industry', 'Event Type', 'Events', 'Tickets', 'Fees']
+
+        # Pivot for side-by-side
+        events_pivot = industry_fee.pivot(index='Industry', columns='Event Type', values='Events').fillna(0)
+        fees_pivot = industry_fee.pivot(index='Industry', columns='Event Type', values='Fees').fillna(0)
+
+        # Combine
+        result = pd.DataFrame(index=events_pivot.index)
+        result['Free Events'] = events_pivot.get('Free', 0)
+        result['Paid Events'] = events_pivot.get('Paid', 0)
+        result['Total Events'] = result['Free Events'] + result['Paid Events']
+        result['Free %'] = round(result['Free Events'] / result['Total Events'] * 100, 1)
+        result['Paid %'] = round(result['Paid Events'] / result['Total Events'] * 100, 1)
+        result['Free Fees'] = fees_pivot.get('Free', 0)
+        result['Paid Fees'] = fees_pivot.get('Paid', 0)
+        result['Total Fees'] = result['Free Fees'] + result['Paid Fees']
+
+        result = result.sort_values('Total Fees', ascending=False)
+
+        fee_file = get_output_path(base_name, 'industry', '_free_vs_paid_by_industry.csv')
+        result.to_csv(fee_file, float_format='%.2f')
+        output_files['free_vs_paid_by_industry'] = fee_file
+        print(f"    ✓ Free vs paid by industry: {fee_file}")
+
+    return output_files
+
+
+def generate_activation_by_month_csv(accounts_df: pd.DataFrame, booking_df: pd.DataFrame,
+                                      output_file: str) -> dict:
+    """
+    Generate activation rate analysis by signup month.
+
+    Shows how quickly accounts activate based on signup month.
+
+    Args:
+        accounts_df: Accounts DataFrame
+        booking_df: Booking transactions DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating activation by signup month...")
+
+    accounts_df = accounts_df.copy()
+
+    accounts_df['SignupMonth'] = pd.to_datetime(accounts_df['DateTimeCreated']).dt.month
+    accounts_df['SignupDate'] = pd.to_datetime(accounts_df['DateTimeCreated'])
+
+    # Calculate days to first event
+    if 'FirstEventCreation' in accounts_df.columns:
+        accounts_df['FirstEventDate'] = pd.to_datetime(accounts_df['FirstEventCreation'], errors='coerce')
+        accounts_df['DaysToFirstEvent'] = (accounts_df['FirstEventDate'] - accounts_df['SignupDate']).dt.days
+        accounts_df.loc[accounts_df['DaysToFirstEvent'] < 0, 'DaysToFirstEvent'] = None
+
+    # Aggregate by signup month
+    monthly_activation = []
+
+    for month in range(1, 13):
+        month_accounts = accounts_df[accounts_df['SignupMonth'] == month]
+        total = len(month_accounts)
+
+        if total == 0:
+            continue
+
+        activated = month_accounts['FirstEventCreation'].notna().sum()
+        within_7 = (month_accounts['DaysToFirstEvent'] <= 7).sum() if 'DaysToFirstEvent' in month_accounts.columns else 0
+        within_30 = (month_accounts['DaysToFirstEvent'] <= 30).sum() if 'DaysToFirstEvent' in month_accounts.columns else 0
+        within_90 = (month_accounts['DaysToFirstEvent'] <= 90).sum() if 'DaysToFirstEvent' in month_accounts.columns else 0
+
+        avg_days = month_accounts['DaysToFirstEvent'].mean() if 'DaysToFirstEvent' in month_accounts.columns else None
+
+        monthly_activation.append({
+            'Signup Month': calendar.month_name[month],
+            'Month Num': month,
+            'Total Accounts': total,
+            'Activated': activated,
+            'Activation Rate %': round(activated / total * 100, 1),
+            'Within 7 Days': within_7,
+            'Within 7 Days %': round(within_7 / total * 100, 1),
+            'Within 30 Days': within_30,
+            'Within 30 Days %': round(within_30 / total * 100, 1),
+            'Within 90 Days': within_90,
+            'Within 90 Days %': round(within_90 / total * 100, 1),
+            'Avg Days to Activate': round(avg_days, 1) if avg_days else None
+        })
+
+    activation_df = pd.DataFrame(monthly_activation)
+    activation_df = activation_df.sort_values('Month Num')
+
+    activation_file = get_output_path(base_name, 'cohorts', '_activation_by_signup_month.csv')
+    activation_df.to_csv(activation_file, index=False, float_format='%.1f')
+    output_files['activation_by_signup_month'] = activation_file
+    print(f"    ✓ Activation by signup month: {activation_file}")
+
+    return output_files
+
+
+def generate_gateway_migration_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                    output_file: str) -> dict:
+    """
+    Generate gateway migration analysis (Default to Stripe Connect).
+
+    Shows:
+    - Which gateway new accounts choose by cohort year
+    - Migration patterns over time
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating gateway migration analysis...")
+
+    # Check for gateway column
+    gateway_col = None
+    for col in ['GatewayName', 'Gateway Group', 'GatewayGroup']:
+        if col in booking_df.columns:
+            gateway_col = col
+            break
+
+    if gateway_col is None:
+        print("    ⚠ No gateway column found - skipping")
+        return output_files
+
+    booking_df = booking_df.copy()
+    accounts_df = accounts_df.copy()
+
+    # Standardise gateway names
+    def standardise_gateway(gateway):
+        if pd.isna(gateway):
+            return 'Unknown'
+        gateway_upper = str(gateway).upper()
+        if 'STRIPE' in gateway_upper and 'CONNECT' in gateway_upper:
+            return 'Stripe Connect'
+        elif 'STRIPE' in gateway_upper:
+            return 'Stripe'
+        elif 'DEFAULT' in gateway_upper or gateway_upper == 'TRYBOOKING':
+            return 'Default'
+        return 'Other'
+
+    booking_df['Gateway'] = booking_df[gateway_col].apply(standardise_gateway)
+
+    # Add cohort year to accounts
+    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Account Id'
+    accounts_df['CohortYear'] = pd.to_datetime(accounts_df['DateTimeCreated']).dt.year
+    cohort_map = accounts_df.set_index(account_id_col)['CohortYear'].to_dict()
+
+    booking_df['CohortYear'] = booking_df['AccountId'].map(cohort_map)
+
+    # First gateway choice by cohort year
+    first_gateway = booking_df.sort_values('TransactionDate').groupby('AccountId').first()[['Gateway', 'CohortYear']]
+
+    cohort_gateway = first_gateway.groupby(['CohortYear', 'Gateway']).size().unstack(fill_value=0)
+    cohort_gateway['Total'] = cohort_gateway.sum(axis=1)
+
+    for col in cohort_gateway.columns:
+        if col != 'Total':
+            cohort_gateway[f'{col} %'] = round(cohort_gateway[col] / cohort_gateway['Total'] * 100, 1)
+
+    cohort_gateway = cohort_gateway.sort_index()
+
+    cohort_file = get_output_path(base_name, 'cohorts', '_gateway_choice_by_cohort.csv')
+    cohort_gateway.to_csv(cohort_file, float_format='%.1f')
+    output_files['gateway_choice_by_cohort'] = cohort_file
+    print(f"    ✓ Gateway choice by cohort: {cohort_file}")
+
+    # Migration analysis - accounts that switched
+    account_gateways = booking_df.groupby('AccountId').agg({
+        'Gateway': lambda x: list(x.unique()),
+        'TransactionDate': ['min', 'max']
+    })
+    account_gateways.columns = ['Gateways', 'First Transaction', 'Last Transaction']
+
+    # Find accounts that used both Default and Stripe Connect
+    def detect_migration(gateways):
+        if 'Default' in gateways and 'Stripe Connect' in gateways:
+            return 'Default → Stripe Connect'
+        elif 'Default' in gateways and 'Stripe' in gateways:
+            return 'Default → Stripe'
+        elif len(gateways) == 1:
+            return f'{gateways[0]} Only'
+        return 'Other'
+
+    account_gateways['Migration'] = account_gateways['Gateways'].apply(detect_migration)
+
+    migration_summary = account_gateways['Migration'].value_counts()
+    migration_df = pd.DataFrame({
+        'Migration Pattern': migration_summary.index,
+        'Accounts': migration_summary.values,
+        'Percentage': round(migration_summary.values / len(account_gateways) * 100, 1)
+    })
+
+    migration_file = get_output_path(base_name, 'cohorts', '_gateway_migration_patterns.csv')
+    migration_df.to_csv(migration_file, index=False)
+    output_files['gateway_migration_patterns'] = migration_file
+    print(f"    ✓ Gateway migration patterns: {migration_file}")
+
+    return output_files
+
+
 def main():
     """Main execution function."""
     args = parse_args()
@@ -5105,6 +5820,49 @@ def main():
     boxoffice_files = generate_boxoffice_analysis_csv(booking_df, accounts_df, output_file)
     if boxoffice_files:
         print(f"  ✓ Box Office analysis: {len(boxoffice_files)} reports generated")
+
+    # === ADDITIONAL ANALYTICS ===
+    print("\nGenerating additional analytics...")
+
+    # Gateway by geography analysis
+    gateway_geo_files = generate_gateway_by_geography_csv(booking_df, accounts_df, output_file)
+    if gateway_geo_files:
+        print(f"  ✓ Gateway by geography: {len(gateway_geo_files)} reports generated")
+
+    # Organiser concentration by tier
+    concentration_files = generate_organiser_concentration_csv(booking_df, accounts_df, output_file)
+    if concentration_files:
+        print(f"  ✓ Organiser concentration: {len(concentration_files)} reports generated")
+
+    # Cohort quality by signup month
+    cohort_quality_files = generate_cohort_quality_by_month_csv(booking_df, accounts_df, output_file)
+    if cohort_quality_files:
+        print(f"  ✓ Cohort quality by month: {len(cohort_quality_files)} reports generated")
+
+    # Outreach calendar (campaign calendar synthesis)
+    outreach_files = generate_outreach_calendar_csv(booking_df, output_file)
+    if outreach_files:
+        print(f"  ✓ Outreach calendar: {len(outreach_files)} reports generated")
+
+    # Price band analysis
+    price_band_files = generate_price_band_analysis_csv(booking_df, output_file)
+    if price_band_files:
+        print(f"  ✓ Price band analysis: {len(price_band_files)} reports generated")
+
+    # Fee structure analysis (free vs paid by industry)
+    fee_structure_files = generate_fee_structure_analysis_csv(booking_df, output_file)
+    if fee_structure_files:
+        print(f"  ✓ Fee structure analysis: {len(fee_structure_files)} reports generated")
+
+    # Activation by signup month
+    activation_files = generate_activation_by_month_csv(accounts_df, booking_df, output_file)
+    if activation_files:
+        print(f"  ✓ Activation by month: {len(activation_files)} reports generated")
+
+    # Gateway migration trends
+    migration_files = generate_gateway_migration_csv(booking_df, accounts_df, output_file)
+    if migration_files:
+        print(f"  ✓ Gateway migration: {len(migration_files)} reports generated")
 
     print(f"\n=== Report Complete ===")
 

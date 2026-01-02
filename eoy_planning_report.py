@@ -2346,13 +2346,17 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     Features:
     - Year-aware seasonality (adjusts for Easter timing)
     - School holiday period flags
-    - Scenario modelling (Conservative / Base / Stretch)
+    - Scenario modelling (Base + BHAG)
     - Trend-based growth recommendations
     - BHAG cumulative tracking
     - Side-by-side comparison (previous year actuals vs targets)
 
+    Note: This function builds its own complete historical data from booking_df
+    rather than relying on results_df, to ensure all years are available
+    regardless of the report mode (rolling, year, custom range).
+
     Args:
-        results_df: DataFrame with monthly metrics
+        results_df: DataFrame with monthly metrics (used for fallback only)
         accounts_df: Accounts DataFrame
         booking_df: Booking transactions DataFrame
         output_file: Base output filename
@@ -2363,15 +2367,60 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     """
     base_name = output_file.rsplit('.', 1)[0]
 
-    if len(results_df) == 0:
-        print("  Warning: No results data for planning model")
+    # Build complete historical data from booking_df (2022 onwards)
+    # This ensures we have all years regardless of the report mode
+    print("  Building complete historical data for planning model...")
+
+    booking_df = booking_df.copy()
+    booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'])
+    booking_df['Year'] = booking_df['TransactionDate'].dt.year
+    booking_df['Month'] = booking_df['TransactionDate'].dt.month
+
+    # Filter to 2022 onwards - earlier data not representative (COVID impact)
+    booking_df = booking_df[booking_df['Year'] >= 2022]
+
+    # Also need account creation dates for new accounts
+    accounts_df = accounts_df.copy()
+    accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'])
+    accounts_df['Created_Year'] = accounts_df['DateTimeCreated'].dt.year
+    accounts_df['Created_Month'] = accounts_df['DateTimeCreated'].dt.month
+
+    # Build monthly metrics from scratch
+    monthly_data = []
+
+    # Get all year-month combinations from 2022 to target_year - 1
+    years = sorted(booking_df['Year'].unique())
+    years = [y for y in years if y < target_year]  # Exclude target year
+
+    for year in years:
+        for month in range(1, 13):
+            # Filter data for this month
+            month_bookings = booking_df[(booking_df['Year'] == year) & (booking_df['Month'] == month)]
+            month_accounts = accounts_df[(accounts_df['Created_Year'] == year) & (accounts_df['Created_Month'] == month)]
+
+            if len(month_bookings) == 0 and len(month_accounts) == 0:
+                continue  # Skip months with no data
+
+            # Calculate metrics
+            fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+            total_fees = sum(month_bookings[col].fillna(0).sum() for col in fee_cols if col in month_bookings.columns)
+
+            monthly_data.append({
+                'Year': year,
+                'Month': month,
+                'Month Name': calendar.month_name[month],
+                'Total New Accounts': len(month_accounts),
+                'Total Ticket Revenue': month_bookings['PaymentReceived'].sum() if 'PaymentReceived' in month_bookings.columns else 0,
+                'Total Fees': total_fees,
+                'Total Tickets Sold': month_bookings['TicketQuantity'].sum() if 'TicketQuantity' in month_bookings.columns else 0,
+            })
+
+    if len(monthly_data) == 0:
+        print("  Warning: No historical data available for planning model")
         return None
 
-    planning_df = results_df.copy()
-
-    # Filter to 2022 onwards - earlier data not representative
-    planning_df = planning_df[planning_df['Year'] >= 2022].copy()
-    print(f"  Using data from 2022 onwards ({planning_df['Year'].min()}-{planning_df['Year'].max()})")
+    planning_df = pd.DataFrame(monthly_data)
+    print(f"  Using data from {planning_df['Year'].min()}-{planning_df['Year'].max()} ({len(planning_df)} months)")
 
     # === CALCULATE YEARLY TOTALS AND SEASONALITY ===
     planning_df['YearMonth'] = planning_df['Year'].astype(str) + '-' + planning_df['Month'].astype(str).str.zfill(2)

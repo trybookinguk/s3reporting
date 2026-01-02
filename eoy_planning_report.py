@@ -4256,7 +4256,7 @@ def generate_event_metrics_analysis_csv(booking_df: pd.DataFrame, accounts_df: p
     freq_summary_df = pd.DataFrame({
         'Frequency_Category': freq_summary.index,
         'Account_Count': freq_summary.values,
-        'Percentage': round(freq_summary.values / len(account_event_freq) * 100, 1)
+        'Percentage': np.round(freq_summary.values / len(account_event_freq) * 100, 1)
     })
 
     freq_file = get_output_path(base_name, 'cohorts', '_account_event_frequency.csv')
@@ -5631,7 +5631,7 @@ def generate_gateway_migration_csv(booking_df: pd.DataFrame, accounts_df: pd.Dat
     migration_df = pd.DataFrame({
         'Migration Pattern': migration_summary.index,
         'Accounts': migration_summary.values,
-        'Percentage': round(migration_summary.values / len(account_gateways) * 100, 1)
+        'Percentage': np.round(migration_summary.values / len(account_gateways) * 100, 1)
     })
 
     migration_file = get_output_path(base_name, 'cohorts', '_gateway_migration_patterns.csv')

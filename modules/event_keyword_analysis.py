@@ -79,6 +79,18 @@ STEM_RULES = [
     (re.compile(r's$'), ''),         # runs -> run (must be last)
 ]
 
+# Words that should NOT be stemmed (false positives from suffix rules)
+STEM_EXCEPTIONS = frozenset([
+    'summer', 'winter', 'spring', 'october', 'november', 'december', 'september',
+    'easter', 'christmas', 'halloween', 'festival', 'carnival', 'concert',
+    'theater', 'theatre', 'dinner', 'supper', 'master', 'sister', 'brother',
+    'mother', 'father', 'daughter', 'member', 'corner', 'river', 'water',
+    'order', 'border', 'murder', 'wonder', 'number', 'rubber', 'butter',
+    'letter', 'matter', 'better', 'bitter', 'litter', 'glitter', 'twitter',
+    'silver', 'copper', 'super', 'clever', 'never', 'ever', 'over', 'under',
+    'proper', 'paper', 'power', 'tower', 'flower', 'shower', 'lower',
+])
+
 # Pre-compiled regex for cleaning
 YEAR_PATTERN = re.compile(r'^(19|20)\d{2}$')
 NON_ALPHA_PATTERN = re.compile(r'[^a-z\s]')
@@ -90,6 +102,10 @@ def simple_stem(word: str) -> str:
     This is a lightweight alternative to NLTK's Porter Stemmer.
     """
     if len(word) <= 3:
+        return word
+
+    # Don't stem words in the exceptions list
+    if word in STEM_EXCEPTIONS:
         return word
 
     for pattern, replacement in STEM_RULES:

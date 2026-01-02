@@ -3049,7 +3049,7 @@ def calculate_trend_based_growth(yearly_data: pd.DataFrame) -> dict:
     return recommendations
 
 
-def calculate_monthly_yoy_patterns(planning_df: pd.DataFrame, complete_years: list) -> pd.DataFrame:
+def calculate_monthly_yoy_patterns(planning_df: pd.DataFrame, complete_years: list) -> dict:
     """
     Calculate monthly YoY growth patterns with recency weighting.
 
@@ -3061,7 +3061,7 @@ def calculate_monthly_yoy_patterns(planning_df: pd.DataFrame, complete_years: li
         complete_years: List of years with complete data
 
     Returns:
-        DataFrame with monthly growth patterns for each metric
+        Dictionary with monthly growth patterns for each metric
     """
     if len(complete_years) < 2:
         return None
@@ -3093,6 +3093,40 @@ def calculate_monthly_yoy_patterns(planning_df: pd.DataFrame, complete_years: li
                     results[month][metric] = round(weighted_avg, 1)
 
     return results
+
+
+def calculate_trailing_momentum(planning_df: pd.DataFrame, base_year: int, window_months: int = 6) -> dict:
+    """
+    Calculate trailing momentum from H2 of base year to influence early target year months.
+
+    This captures recent trends like SEO relaunches that should carry forward.
+
+    Args:
+        planning_df: DataFrame with monthly data
+        base_year: The year before target year (e.g., 2025)
+        window_months: Number of months to look back (default 6 = H2)
+
+    Returns:
+        Dictionary with momentum multipliers for each metric
+    """
+    # Get H2 data from base year (Jul-Dec)
+    h2_months = list(range(13 - window_months, 13))  # [7, 8, 9, 10, 11, 12] for 6-month window
+    h2_data = planning_df[(planning_df['Year'] == base_year) & (planning_df['Month'].isin(h2_months))]
+
+    if len(h2_data) == 0:
+        return None
+
+    momentum = {}
+    for metric in ['Total New Accounts', 'Total Ticket Revenue', 'Total Fees']:
+        yoy_col = f'{metric} YoY %'
+        if yoy_col in h2_data.columns:
+            # Calculate average YoY growth in the trailing window
+            avg_yoy = h2_data[yoy_col].dropna().mean()
+            momentum[metric] = round(avg_yoy, 1) if not pd.isna(avg_yoy) else 0
+        else:
+            momentum[metric] = 0
+
+    return momentum
 
 
 def round_to_multiple(value: float, multiple: int = 50) -> int:
@@ -3336,6 +3370,18 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     # Get historical monthly YoY patterns with recency weighting
     monthly_yoy_patterns = calculate_monthly_yoy_patterns(planning_df, complete_years)
 
+    # === CALCULATE TRAILING MOMENTUM ===
+    # H2 of base year influences early target year months
+    trailing_momentum = calculate_trailing_momentum(planning_df, base_year, window_months=6)
+    if trailing_momentum:
+        print(f"  Trailing momentum (H2 {base_year}):")
+        for metric, growth in trailing_momentum.items():
+            print(f"    {metric}: {growth}% avg YoY")
+
+    # === GROWTH CAP ===
+    # No single month should exceed this YoY growth vs base year
+    MAX_MONTHLY_GROWTH = 0.30  # 30% cap
+
     # === BHAG CALCULATION ===
     # BHAG: 25,000 cumulative accounts by end of target year
     bhag_accounts_target = 25000
@@ -3394,32 +3440,52 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
             print(f"    {metric}: Base capped at {round(annual_base_growth * 100, 1)}% to maintain headroom below BHAG")
 
         # === CALCULATE MONTHLY TARGETS ===
-        # Use monthly YoY patterns if available, otherwise use uniform annual growth
+        # Hybrid approach: combine monthly YoY patterns with trailing momentum
         base_targets = []
         bhag_targets = []
 
         for month in range(1, 13):
             base_year_monthly = scenarios.loc[scenarios['Month'] == month, f'{base_year} {metric}'].values[0]
-            seasonality_idx = scenarios.loc[scenarios['Month'] == month, idx_col].values[0]
 
+            # Skip if no base year data
+            if base_year_monthly == 0:
+                base_targets.append(0)
+                bhag_targets.append(0)
+                continue
+
+            # Step 1: Get historical monthly YoY pattern
+            historical_yoy = 0
             if monthly_yoy_patterns and month in monthly_yoy_patterns and metric_key in monthly_yoy_patterns[month]:
-                # Use historical monthly pattern with recency weighting
-                monthly_yoy = monthly_yoy_patterns[month][metric_key] / 100
+                historical_yoy = monthly_yoy_patterns[month][metric_key] / 100
 
-                # Scale the monthly pattern to match our annual projection
-                # This preserves relative month-to-month variation
-                base_monthly_target = base_year_monthly * (1 + monthly_yoy * (annual_base_growth / (sum(
-                    monthly_yoy_patterns[m].get(metric_key, 0) for m in range(1, 13)
-                ) / 1200) if monthly_yoy != 0 else 1))
-                bhag_monthly_target = base_year_monthly * (1 + monthly_yoy * (annual_bhag_growth / (sum(
-                    monthly_yoy_patterns[m].get(metric_key, 0) for m in range(1, 13)
-                ) / 1200) if monthly_yoy != 0 else 1))
+            # Step 2: Get trailing momentum (for Q1, weight H2 momentum more heavily)
+            momentum_yoy = 0
+            if trailing_momentum and metric_key in trailing_momentum:
+                momentum_yoy = trailing_momentum[metric_key] / 100
+                # Q1 months (Jan-Mar) get stronger momentum influence
+                if month <= 3:
+                    momentum_weight = 0.6  # 60% momentum, 40% historical
+                elif month <= 6:
+                    momentum_weight = 0.4  # 40% momentum, 60% historical
+                else:
+                    momentum_weight = 0.2  # 20% momentum, 80% historical (H2 reverts to patterns)
             else:
-                # Fallback: use seasonality distribution with uniform growth
-                annual_base_total = base_val * (1 + annual_base_growth)
-                annual_bhag_total = base_val * (1 + annual_bhag_growth)
-                base_monthly_target = annual_base_total * seasonality_idx / 100
-                bhag_monthly_target = annual_bhag_total * seasonality_idx / 100
+                momentum_weight = 0
+
+            # Step 3: Blend historical pattern with momentum
+            blended_yoy = (historical_yoy * (1 - momentum_weight)) + (momentum_yoy * momentum_weight)
+
+            # Step 4: Apply 30% cap to Base targets
+            capped_base_yoy = min(blended_yoy, MAX_MONTHLY_GROWTH)
+
+            # Step 5: Calculate Base target with cap applied
+            base_monthly_target = base_year_monthly * (1 + capped_base_yoy)
+
+            # Step 6: Calculate BHAG target (can exceed cap, but still bounded)
+            # BHAG uses full blended YoY scaled towards BHAG requirement
+            bhag_scale = annual_bhag_growth / max(annual_base_growth, 0.01) if annual_base_growth > 0 else 1.25
+            bhag_yoy = min(blended_yoy * bhag_scale, MAX_MONTHLY_GROWTH * 1.5)  # BHAG can go 50% above cap
+            bhag_monthly_target = base_year_monthly * (1 + bhag_yoy)
 
             base_targets.append(base_monthly_target)
             bhag_targets.append(bhag_monthly_target)

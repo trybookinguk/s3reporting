@@ -5241,7 +5241,7 @@ def generate_outreach_calendar_csv(booking_df: pd.DataFrame, output_file: str) -
 
         # Find peak month(s)
         month_counts = pd.Series(stats['months']).value_counts()
-        peak_month = month_counts.index[0]
+        peak_month = int(month_counts.index[0])
 
         # Calculate recommended lead time (75th percentile)
         lead_days = sorted(stats['lead_days'])
@@ -5277,7 +5277,7 @@ def generate_outreach_calendar_csv(booking_df: pd.DataFrame, output_file: str) -
         'Keyword': lambda x: ', '.join(x[:5]),  # Top 5 keywords
         'Total Fees': 'sum'
     }).reset_index()
-    monthly_outreach['Month'] = monthly_outreach['Outreach Month Num'].apply(lambda m: calendar.month_name[m])
+    monthly_outreach['Month'] = monthly_outreach['Outreach Month Num'].apply(lambda m: calendar.month_name[int(m)])
     monthly_outreach = monthly_outreach[['Month', 'Keyword', 'Total Fees']]
     monthly_outreach.columns = ['Month', 'Top Keywords to Target', 'Potential Fees']
 

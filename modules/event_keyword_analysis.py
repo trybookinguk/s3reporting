@@ -81,15 +81,191 @@ STEM_RULES = [
 
 # Words that should NOT be stemmed (false positives from suffix rules)
 STEM_EXCEPTIONS = frozenset([
-    'summer', 'winter', 'spring', 'october', 'november', 'december', 'september',
+    # Seasons and months
+    'summer', 'winter', 'spring', 'autumn', 'october', 'november', 'december',
+    'september', 'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+    # Holidays and events
     'easter', 'christmas', 'halloween', 'festival', 'carnival', 'concert',
-    'theater', 'theatre', 'dinner', 'supper', 'master', 'sister', 'brother',
-    'mother', 'father', 'daughter', 'member', 'corner', 'river', 'water',
-    'order', 'border', 'murder', 'wonder', 'number', 'rubber', 'butter',
-    'letter', 'matter', 'better', 'bitter', 'litter', 'glitter', 'twitter',
-    'silver', 'copper', 'super', 'clever', 'never', 'ever', 'over', 'under',
-    'proper', 'paper', 'power', 'tower', 'flower', 'shower', 'lower',
+    'theater', 'theatre', 'dinner', 'supper', 'brunch', 'lunch', 'breakfast',
+    # Family/people words
+    'master', 'sister', 'brother', 'mother', 'father', 'daughter', 'member',
+    'singer', 'dancer', 'performer', 'player', 'speaker', 'teacher', 'leader',
+    'runner', 'walker', 'swimmer', 'rider', 'driver', 'trainer', 'instructor',
+    # Common nouns that shouldn't be stemmed
+    'corner', 'river', 'water', 'order', 'border', 'wonder', 'number',
+    'rubber', 'butter', 'letter', 'matter', 'better', 'bitter', 'litter',
+    'glitter', 'twitter', 'silver', 'copper', 'super', 'clever', 'never',
+    'ever', 'over', 'under', 'proper', 'paper', 'power', 'tower', 'flower',
+    'shower', 'lower', 'murder', 'thunder', 'gender', 'tender', 'slender',
+    # Event-specific words
+    'beer', 'cider', 'wine', 'jazz', 'blues', 'rock', 'folk', 'opera',
+    'choir', 'chorus', 'orchestra', 'band', 'disco', 'karaoke', 'bingo',
+    'poker', 'snooker', 'darts', 'cricket', 'football', 'rugby', 'tennis',
+    'netball', 'hockey', 'roller', 'skater', 'yoga', 'pilates', 'zumba',
+    'boxing', 'wrestling', 'fencing', 'archery', 'pottery', 'painting',
+    'knitting', 'sewing', 'quilting', 'crafts', 'maker', 'farmer', 'gardener',
+    'murder', 'mystery', 'thriller', 'horror', 'comedy', 'drama', 'pantomime',
+    'puppet', 'magic', 'circus', 'acrobat', 'juggler', 'clown', 'storyteller',
+    'whisky', 'whiskey', 'gin', 'cocktail', 'prosecco', 'champagne',
+    # Time-related words
+    'morning', 'afternoon', 'evening', 'midnight', 'sunrise', 'sunset',
+    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+    'weekly', 'monthly', 'daily', 'nightly', 'yearly', 'annual',
 ])
+
+# Synonym groups - map variations to canonical form
+# Keys are the canonical form, values are variations that should map to it
+SYNONYMS = {
+    'christmas': ['xmas', 'x-mas', 'festive'],
+    'children': ['kids', 'kidz', 'child', 'junior', 'juniors'],
+    'barbecue': ['bbq', 'barbeque'],
+    'versus': ['vs', 'v'],
+    'and': ['&'],
+    'quiz': ['quizz', 'quizes'],
+    '5k': ['5km', 'five k', 'fivek'],
+    '10k': ['10km', 'ten k', 'tenk'],
+    'half marathon': ['half-marathon', 'halfmarathon'],
+    'parkrun': ['park run', 'park-run'],
+    'open mic': ['open-mic', 'openmic'],
+    'st': ['saint'],
+    'dj': ['deejay', 'd.j.'],
+    'acoustic': ['unplugged'],
+    'tribute': ['tribute band', 'tribute act'],
+    'family': ['families'],
+    'parent': ['parents', 'mum', 'mums', 'dad', 'dads'],
+    'senior': ['seniors', 'oap', 'oaps', 'pensioner', 'pensioners', 'over 60', 'over 65'],
+    'beginners': ['beginner', 'beginers', 'newbie', 'newbies', 'intro', 'introduction'],
+    'advanced': ['intermediate', 'improvers'],
+    'workshop': ['masterclass', 'master class', 'class'],
+    'fair': ['fayre', 'fete', 'fête'],
+    'market': ['markets'],
+    'ball': ['gala', 'prom'],
+    'race': ['racing'],
+    'walk': ['walking', 'hike', 'hiking', 'ramble', 'rambling'],
+    'run': ['running', 'jog', 'jogging'],
+    'swim': ['swimming'],
+    'cycle': ['cycling', 'bike', 'biking'],
+    'dance': ['dancing'],
+    'sing': ['singing'],
+    'paint': ['painting'],
+    'craft': ['crafts', 'crafting'],
+    'cook': ['cooking', 'cookery'],
+    'bake': ['baking'],
+    'taste': ['tasting'],
+    'tour': ['tours', 'touring'],
+    'talk': ['talks', 'lecture', 'lectures'],
+    'screening': ['film', 'movie', 'cinema'],
+    'exhibition': ['exhibit', 'expo'],
+}
+
+# Build reverse lookup for synonyms
+_SYNONYM_LOOKUP = {}
+for canonical, variations in SYNONYMS.items():
+    for var in variations:
+        _SYNONYM_LOOKUP[var.lower()] = canonical.lower()
+
+# Multi-word phrases to detect (in order of specificity - longer phrases first)
+# These will be extracted as single keywords
+MULTI_WORD_PHRASES = [
+    # 3+ word phrases
+    'car boot sale', 'nearly new sale', 'table top sale', 'jumble sale',
+    'craft and design', 'arts and crafts', 'food and drink',
+    'murder mystery dinner', 'murder mystery evening', 'murder mystery night',
+    'wine and cheese', 'cheese and wine', 'gin and tonic',
+    'mums and babies', 'parent and child', 'parent and toddler',
+    'mother and baby', 'father and son', 'mother and daughter',
+    'live music night', 'open mic night', 'quiz night', 'curry night',
+    'fish and chips', 'pie and mash', 'sunday roast', 'afternoon tea',
+    'new years eve', 'bonfire night', 'guy fawkes', 'burns night',
+    'st patricks day', 'st valentines', 'mothers day', 'fathers day',
+    'easter egg hunt', 'easter bunny', 'santa grotto', 'meet santa',
+    'spring fair', 'summer fair', 'autumn fair', 'winter fair',
+    'christmas fair', 'christmas market', 'christmas party',
+    'halloween party', 'fancy dress', 'black tie',
+    'fun run', 'charity run', 'santa run', 'colour run', 'color run',
+    'park run', 'mud run', 'obstacle course', 'tough mudder',
+    'half marathon', 'full marathon',
+    'pub quiz', 'table quiz', 'charity quiz',
+    'speed dating', 'singles night',
+    'drag queen', 'drag brunch', 'drag bingo',
+    'silent disco', 'silent walk',
+    'coffee morning', 'coffee and cake',
+    'book club', 'film club', 'supper club', 'lunch club',
+    'baby sensory', 'baby massage', 'baby yoga', 'toddler group',
+    'play group', 'stay and play',
+    'nature walk', 'woodland walk', 'coast path',
+    'ghost walk', 'ghost tour', 'ghost hunt',
+    'escape room', 'treasure hunt',
+    'dog show', 'dog walk', 'cat show',
+    'vintage fair', 'antiques fair', 'record fair', 'book fair',
+    'jobs fair', 'careers fair', 'wedding fair', 'bridal fair',
+    'beer festival', 'cider festival', 'wine festival', 'gin festival',
+    'food festival', 'music festival', 'comedy festival', 'arts festival',
+    'folk festival', 'jazz festival', 'blues festival',
+    'village fete', 'church fete', 'school fete', 'summer fete',
+    'street party', 'garden party', 'tea party', 'pool party',
+    'hen party', 'stag party', 'birthday party', 'kids party',
+    'leaving party', 'retirement party', 'office party',
+    'prize draw', 'prize giving', 'awards ceremony',
+    'annual general meeting', 'agm',
+    'open day', 'open evening', 'open house', 'open garden',
+    'taster session', 'taster day', 'trial class',
+    'drop in', 'pop up',
+    'boot camp', 'fitness class', 'exercise class',
+    'spin class', 'yoga class', 'pilates class', 'zumba class',
+    'art class', 'painting class', 'drawing class', 'pottery class',
+    'dance class', 'ballet class', 'tap class', 'salsa class',
+    'language class', 'french class', 'spanish class',
+    'first aid', 'life saving',
+    'driving test', 'theory test',
+    'blood donor', 'blood donation',
+    # 2 word phrases
+    'craft fair', 'christmas fayre', 'summer fayre', 'winter fayre',
+    'car boot', 'boot sale', 'table top', 'jumble sale',
+    'farmers market', 'artisan market', 'night market', 'street market',
+    'flea market', 'vintage market', 'makers market',
+    'open mic', 'live music', 'tribute night', 'karaoke night',
+    'quiz night', 'curry night', 'steak night', 'pizza night',
+    'comedy night', 'casino night', 'race night', 'bingo night',
+    'murder mystery', 'escape room', 'treasure hunt',
+    'ghost tour', 'ghost walk', 'walking tour', 'bus tour',
+    'wine tasting', 'beer tasting', 'gin tasting', 'whisky tasting',
+    'food tour', 'pub crawl',
+    'speed dating', 'singles event',
+    'networking event', 'business breakfast',
+    'coffee morning', 'afternoon tea', 'high tea', 'cream tea',
+    'sunday lunch', 'sunday roast', 'sunday brunch',
+    'drag show', 'cabaret show', 'variety show', 'magic show',
+    'puppet show', 'circus skills', 'face painting',
+    'craft workshop', 'art workshop', 'writing workshop',
+    'yoga retreat', 'wellness retreat', 'spa day',
+    'hen do', 'stag do', 'baby shower', 'gender reveal',
+    'fun day', 'family day', 'sports day', 'activity day',
+    'charity event', 'fundraising event', 'charity ball',
+    'awards night', 'gala dinner', 'black tie',
+    'fancy dress', 'costume party',
+    'new year', 'nye', 'hogmanay',
+    'bonfire', 'fireworks', 'firework display',
+    'easter egg', 'egg hunt',
+    'half term', 'school holidays', 'bank holiday',
+    'teddy bear', 'teddy bears',
+    'car show', 'bike show', 'motor show',
+    'dog walk', 'dog training', 'puppy class',
+    'nature reserve', 'bird watching', 'star gazing',
+    'beach clean', 'litter pick',
+    'park run', 'fun run', 'colour run',
+    'swimming gala', 'sports tournament',
+    'football tournament', 'cricket match', 'rugby match',
+    'golf day', 'tennis tournament',
+    'panto', 'pantomime',
+    'nativity', 'carol service', 'carols', 'christingle',
+    'remembrance', 'memorial',
+    'wedding fayre', 'bridal show',
+]
+
+# Pre-compile phrase patterns for efficiency
+_PHRASE_PATTERNS = [(phrase, re.compile(r'\b' + re.escape(phrase) + r'\b', re.IGNORECASE))
+                    for phrase in sorted(MULTI_WORD_PHRASES, key=len, reverse=True)]
 
 # Pre-compiled regex for cleaning
 YEAR_PATTERN = re.compile(r'^(19|20)\d{2}$')
@@ -116,25 +292,72 @@ def simple_stem(word: str) -> str:
     return word
 
 
+def normalise_synonym(word: str) -> str:
+    """
+    Normalise a word to its canonical form if it's a known synonym.
+
+    Args:
+        word: The word to normalise
+
+    Returns:
+        Canonical form if synonym found, otherwise original word
+    """
+    return _SYNONYM_LOOKUP.get(word.lower(), word)
+
+
+def extract_phrases(text: str) -> Tuple[List[str], str]:
+    """
+    Extract multi-word phrases from text, returning phrases found and remaining text.
+
+    Args:
+        text: The text to extract phrases from
+
+    Returns:
+        Tuple of (list of phrases found, remaining text with phrases removed)
+    """
+    phrases_found = []
+    remaining = text.lower()
+
+    for phrase, pattern in _PHRASE_PATTERNS:
+        match = pattern.search(remaining)
+        if match:
+            # Use underscore-joined version as the keyword
+            phrase_keyword = phrase.replace(' ', '_')
+            phrases_found.append(phrase_keyword)
+            # Remove the phrase from remaining text to avoid double-counting
+            remaining = pattern.sub(' ', remaining)
+
+    return phrases_found, remaining
+
+
 def extract_keywords(event_name: str, min_length: int = 3) -> List[str]:
     """
     Extract meaningful keywords from an event name.
+
+    Includes:
+    - Multi-word phrase detection (e.g., "craft fair" → "craft_fair")
+    - Synonym normalisation (e.g., "xmas" → "christmas")
+    - Simple stemming with exceptions
 
     Args:
         event_name: The event name string
         min_length: Minimum keyword length
 
     Returns:
-        List of cleaned, stemmed keywords
+        List of cleaned, normalised keywords
     """
     if not event_name or not isinstance(event_name, str):
         return []
 
-    # Lowercase and remove special characters
-    text = NON_ALPHA_PATTERN.sub(' ', event_name.lower())
+    # Step 1: Extract multi-word phrases first
+    phrases, remaining_text = extract_phrases(event_name)
 
-    # Split and filter
-    keywords = []
+    # Step 2: Clean remaining text
+    text = NON_ALPHA_PATTERN.sub(' ', remaining_text.lower())
+
+    # Step 3: Process individual words
+    keywords = list(phrases)  # Start with phrases found
+
     for word in text.split():
         # Skip short words, stopwords, venue words, years
         if (len(word) >= min_length and
@@ -142,7 +365,12 @@ def extract_keywords(event_name: str, min_length: int = 3) -> List[str]:
             word not in VENUE_WORDS and
             not YEAR_PATTERN.match(word)):
 
-            stemmed = simple_stem(word)
+            # Apply synonym normalisation
+            normalised = normalise_synonym(word)
+
+            # Apply stemming
+            stemmed = simple_stem(normalised)
+
             if len(stemmed) >= min_length:
                 keywords.append(stemmed)
 

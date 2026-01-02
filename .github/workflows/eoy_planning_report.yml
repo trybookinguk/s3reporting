@@ -69,13 +69,13 @@ jobs:
 
           if [ "$REPORT_TYPE" = "rolling" ]; then
             echo "Running rolling 12-month report..."
-            python eoy_planning_report.py --rolling --output "$OUTPUT_FILE"
+            python3 eoy_planning_report.py --rolling --output "$OUTPUT_FILE"
           elif [ "$REPORT_TYPE" = "year_2025" ]; then
             echo "Running full year 2025 report..."
-            python eoy_planning_report.py --year 2025 --output "$OUTPUT_FILE"
+            python3 eoy_planning_report.py --year 2025 --output "$OUTPUT_FILE"
           elif [ "$REPORT_TYPE" = "year_2024" ]; then
             echo "Running full year 2024 report..."
-            python eoy_planning_report.py --year 2024 --output "$OUTPUT_FILE"
+            python3 eoy_planning_report.py --year 2024 --output "$OUTPUT_FILE"
           elif [ "$REPORT_TYPE" = "custom" ]; then
             CUSTOM_START="${{ github.event.inputs.custom_start }}"
             CUSTOM_END="${{ github.event.inputs.custom_end }}"
@@ -86,7 +86,7 @@ jobs:
             fi
 
             echo "Running custom report from $CUSTOM_START to $CUSTOM_END..."
-            python eoy_planning_report.py --start "$CUSTOM_START" --end "$CUSTOM_END" --output "$OUTPUT_FILE"
+            python3 eoy_planning_report.py --start "$CUSTOM_START" --end "$CUSTOM_END" --output "$OUTPUT_FILE"
           fi
 
           # Store output filename for artifact upload

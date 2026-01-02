@@ -2227,208 +2227,403 @@ def generate_cohort_revenue_curves_csv(booking_df, accounts_df, output_file):
     return curves_file
 
 
-def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file):
+def calculate_easter_date(year: int) -> tuple:
     """
-    Generate a planning model CSV that combines seasonality with account growth
-    for target setting and forecasting.
+    Calculate Easter Sunday date using the Anonymous Gregorian algorithm.
 
-    Outputs:
-    - Monthly seasonality indices (% of annual)
-    - Historical growth rates (YoY)
-    - Account funnel conversion rates
-    - Revenue per account metrics
-    - Multi-year history for trend analysis
+    Returns:
+        Tuple of (month, day) for Easter Sunday
+    """
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return (month, day)
+
+
+def get_school_holiday_flags(year: int, month: int) -> dict:
+    """
+    Get school holiday flags for a given month.
+
+    Returns:
+        Dictionary with holiday flags
+    """
+    easter_month, easter_day = calculate_easter_date(year)
+
+    # Easter affects 2 weeks around Easter Sunday
+    easter_start_month = 3 if (easter_month == 3 and easter_day > 14) or easter_month == 4 else easter_month
+    easter_end_month = 4 if easter_month == 4 or (easter_month == 3 and easter_day > 20) else 3
+
+    flags = {
+        'Is Easter Month': month in [easter_start_month, easter_end_month] and easter_month in [3, 4],
+        'Easter Position': 'Early' if easter_month == 3 else 'Late' if easter_month == 4 and easter_day > 15 else 'Mid',
+        'Is Summer Holiday': month in [7, 8],
+        'Is Half Term': month in [2, 5, 10],  # Feb, May, Oct half terms
+        'Is Christmas Period': month in [12, 1],
+        'Holiday Type': ''
+    }
+
+    # Set holiday type
+    if flags['Is Easter Month']:
+        flags['Holiday Type'] = 'Easter'
+    elif flags['Is Summer Holiday']:
+        flags['Holiday Type'] = 'Summer'
+    elif flags['Is Half Term']:
+        flags['Holiday Type'] = 'Half Term'
+    elif flags['Is Christmas Period']:
+        flags['Holiday Type'] = 'Christmas'
+    else:
+        flags['Holiday Type'] = 'Term Time'
+
+    return flags
+
+
+def calculate_trend_based_growth(yearly_data: pd.DataFrame) -> dict:
+    """
+    Calculate recommended growth targets based on historical trend momentum.
+
+    Uses weighted average of recent growth rates with more weight on recent years.
+
+    Returns:
+        Dictionary with recommended growth rates for each metric
+    """
+    recommendations = {}
+
+    for metric in ['Total New Accounts', 'Total Ticket Revenue', 'Total Fees']:
+        yoy_col = f'{metric} YoY %'
+        if yoy_col in yearly_data.columns:
+            # Get non-null growth rates
+            growth_rates = yearly_data[yoy_col].dropna().values
+
+            if len(growth_rates) >= 2:
+                # Weighted average - more recent years get higher weight
+                weights = list(range(1, len(growth_rates) + 1))
+                weighted_avg = sum(g * w for g, w in zip(growth_rates, weights)) / sum(weights)
+
+                # Also calculate trend direction (acceleration/deceleration)
+                if len(growth_rates) >= 2:
+                    trend = growth_rates[-1] - growth_rates[-2]  # Most recent change
+                else:
+                    trend = 0
+
+                # Recommended = weighted average + small trend adjustment
+                recommended = weighted_avg + (trend * 0.25)
+
+                recommendations[metric] = {
+                    'weighted_avg': round(weighted_avg, 1),
+                    'trend': round(trend, 1),
+                    'recommended': round(recommended, 1),
+                    'conservative': round(recommended * 0.7, 1),  # 70% of recommended
+                    'stretch': round(recommended * 1.5, 1),  # 150% of recommended
+                }
+            elif len(growth_rates) == 1:
+                recommendations[metric] = {
+                    'weighted_avg': round(growth_rates[0], 1),
+                    'trend': 0,
+                    'recommended': round(growth_rates[0], 1),
+                    'conservative': round(growth_rates[0] * 0.7, 1),
+                    'stretch': round(growth_rates[0] * 1.5, 1),
+                }
+
+    return recommendations
+
+
+def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file, target_year=2026):
+    """
+    Generate comprehensive planning model for target setting.
+
+    Features:
+    - Year-aware seasonality (adjusts for Easter timing)
+    - School holiday period flags
+    - Scenario modelling (Conservative / Base / Stretch)
+    - Trend-based growth recommendations
+    - BHAG cumulative tracking
+    - Side-by-side comparison (previous year actuals vs targets)
 
     Args:
-        results_df: DataFrame with monthly metrics from calculate_monthly_metrics
+        results_df: DataFrame with monthly metrics
         accounts_df: Accounts DataFrame
         booking_df: Booking transactions DataFrame
         output_file: Base output filename
+        target_year: Year to generate targets for (default 2026)
 
     Returns:
         Path to generated CSV file
     """
     base_name = output_file.rsplit('.', 1)[0]
 
-    # Ensure we have the data we need
     if len(results_df) == 0:
         print("  Warning: No results data for planning model")
         return None
 
     planning_df = results_df.copy()
 
-    # === SEASONALITY INDICES ===
-    # Calculate what % of annual total each month represents (averaged across years)
+    # === CALCULATE YEARLY TOTALS AND SEASONALITY ===
     planning_df['YearMonth'] = planning_df['Year'].astype(str) + '-' + planning_df['Month'].astype(str).str.zfill(2)
 
-    # Group by year to get annual totals
     yearly_totals = planning_df.groupby('Year').agg({
         'Total New Accounts': 'sum',
         'Total Ticket Revenue': 'sum',
         'Total Fees': 'sum',
         'Total Tickets Sold': 'sum',
-        'Accounts Selling In Month': 'sum',
-        'Events With Sales': 'sum',
     }).reset_index()
-    yearly_totals.columns = ['Year', 'Year_New_Accounts', 'Year_Revenue', 'Year_Fees',
-                             'Year_Tickets', 'Year_Accounts_Selling', 'Year_Events']
+    yearly_totals.columns = ['Year', 'Year_Accounts', 'Year_Revenue', 'Year_Fees', 'Year_Tickets']
 
-    # Merge yearly totals back
     planning_df = planning_df.merge(yearly_totals, on='Year')
 
-    # Calculate seasonality index for each metric (% of annual)
-    planning_df['Accounts Seasonality %'] = round(
-        planning_df['Total New Accounts'] / planning_df['Year_New_Accounts'] * 100, 2
-    )
-    planning_df['Revenue Seasonality %'] = round(
-        planning_df['Total Ticket Revenue'] / planning_df['Year_Revenue'] * 100, 2
-    )
-    planning_df['Fees Seasonality %'] = round(
-        planning_df['Total Fees'] / planning_df['Year_Fees'] * 100, 2
-    )
-    planning_df['Tickets Seasonality %'] = round(
-        planning_df['Total Tickets Sold'] / planning_df['Year_Tickets'] * 100, 2
+    # Seasonality indices
+    planning_df['Accounts Index %'] = round(planning_df['Total New Accounts'] / planning_df['Year_Accounts'] * 100, 2)
+    planning_df['Revenue Index %'] = round(planning_df['Total Ticket Revenue'] / planning_df['Year_Revenue'] * 100, 2)
+    planning_df['Fees Index %'] = round(planning_df['Total Fees'] / planning_df['Year_Fees'] * 100, 2)
+
+    # === ADD EASTER AND HOLIDAY FLAGS ===
+    planning_df['Easter Month'] = planning_df['Year'].apply(lambda y: calculate_easter_date(y)[0])
+    planning_df['Easter Day'] = planning_df['Year'].apply(lambda y: calculate_easter_date(y)[1])
+    planning_df['Easter Position'] = planning_df.apply(
+        lambda r: 'Early (Mar)' if r['Easter Month'] == 3 else 'Late (Apr)' if r['Easter Day'] > 15 else 'Mid (Apr)',
+        axis=1
     )
 
-    # === AVERAGE SEASONALITY INDEX (across all years) ===
-    # This gives you the "typical" seasonality pattern
-    avg_seasonality = planning_df.groupby('Month').agg({
-        'Accounts Seasonality %': 'mean',
-        'Revenue Seasonality %': 'mean',
-        'Fees Seasonality %': 'mean',
-        'Tickets Seasonality %': 'mean',
+    # Add holiday flags
+    for _, row in planning_df.iterrows():
+        flags = get_school_holiday_flags(row['Year'], row['Month'])
+        for flag, value in flags.items():
+            if flag not in planning_df.columns:
+                planning_df[flag] = None
+            planning_df.loc[(planning_df['Year'] == row['Year']) & (planning_df['Month'] == row['Month']), flag] = value
+
+    # === CALCULATE EASTER-ADJUSTED SEASONALITY ===
+    # Group by Easter position to get adjusted indices
+    easter_adjusted = planning_df.groupby(['Month', 'Easter Position']).agg({
+        'Accounts Index %': 'mean',
+        'Revenue Index %': 'mean',
+        'Fees Index %': 'mean',
     }).reset_index()
-    avg_seasonality.columns = ['Month', 'Avg Accounts Index', 'Avg Revenue Index',
-                               'Avg Fees Index', 'Avg Tickets Index']
+    easter_adjusted.columns = ['Month', 'Easter Position', 'Easter Adj Accounts %', 'Easter Adj Revenue %', 'Easter Adj Fees %']
 
-    # Merge average indices back
-    planning_df = planning_df.merge(avg_seasonality, on='Month', suffixes=('', '_avg'))
+    # Get target year's Easter position
+    target_easter_month, target_easter_day = calculate_easter_date(target_year)
+    target_easter_pos = 'Early (Mar)' if target_easter_month == 3 else 'Late (Apr)' if target_easter_day > 15 else 'Mid (Apr)'
 
-    # === YOY GROWTH RATES ===
-    # Calculate YoY growth for each month
+    print(f"  Target year {target_year}: Easter is {target_easter_pos} (April {target_easter_day})" if target_easter_month == 4 else f"  Target year {target_year}: Easter is {target_easter_pos} (March {target_easter_day})")
+
+    # === CALCULATE YOY GROWTH AND TRENDS ===
     planning_df = planning_df.sort_values(['Month', 'Year'])
 
-    for metric in ['Total New Accounts', 'Total Ticket Revenue', 'Total Fees', 'Total Tickets Sold']:
+    for metric in ['Total New Accounts', 'Total Ticket Revenue', 'Total Fees']:
         col_name = f'{metric} YoY %'
         planning_df[col_name] = planning_df.groupby('Month')[metric].pct_change() * 100
         planning_df[col_name] = planning_df[col_name].round(1)
 
-    # === CONVERSION RATES ===
-    # Account funnel: New → Activated → Tier Qualified
-    planning_df['Activation Rate %'] = round(
-        planning_df['Activated (Created Events)'] / planning_df['Total New Accounts'] * 100, 1
-    )
-    planning_df['Tier Qualification Rate %'] = round(
-        planning_df['New Accounts Tier Qualified'] / planning_df['Total New Accounts'] * 100, 1
-    )
-
-    # === EFFICIENCY METRICS ===
-    # Revenue per new account (shows account quality)
-    planning_df['Revenue Per New Account'] = round(
-        planning_df['Total Ticket Revenue'] / planning_df['Total New Accounts'], 2
-    )
-    # Fees per new account
-    planning_df['Fees Per New Account'] = round(
-        planning_df['Total Fees'] / planning_df['Total New Accounts'], 2
-    )
-    # Revenue per active account
-    planning_df['Revenue Per Active Account'] = round(
-        planning_df['Total Ticket Revenue'] / planning_df['Accounts Selling In Month'], 2
-    )
-
-    # === SELECT AND ORDER COLUMNS FOR OUTPUT ===
-    output_cols = [
-        'Year', 'Month', 'Month Name',
-        # Absolute numbers
-        'Total New Accounts', 'Activated (Created Events)', 'New Accounts Tier Qualified',
-        'Accounts Selling In Month', 'Events With Sales',
-        'Total Tickets Sold', 'Total Ticket Revenue', 'Total Fees',
-        # Seasonality indices (this year)
-        'Accounts Seasonality %', 'Revenue Seasonality %', 'Fees Seasonality %',
-        # Average seasonality indices (historical)
-        'Avg Accounts Index', 'Avg Revenue Index', 'Avg Fees Index',
-        # YoY growth rates
-        'Total New Accounts YoY %', 'Total Ticket Revenue YoY %', 'Total Fees YoY %',
-        # Conversion rates
-        'Activation Rate %', 'Tier Qualification Rate %',
-        # Efficiency metrics
-        'Revenue Per New Account', 'Fees Per New Account', 'Revenue Per Active Account',
-    ]
-
-    # Only include columns that exist
-    output_cols = [c for c in output_cols if c in planning_df.columns]
-    planning_output = planning_df[output_cols].sort_values(['Year', 'Month'])
-
-    # Save main planning model
-    model_file = f"{base_name}_planning_model.csv"
-    planning_output.to_csv(model_file, index=False, float_format='%.2f')
-    print(f"  ✓ Planning model saved to: {model_file}")
-
-    # === CREATE SUMMARY SEASONALITY TABLE ===
-    # One row per month showing average indices and typical values
-    seasonality_summary = planning_df.groupby(['Month', 'Month Name']).agg({
-        'Total New Accounts': 'mean',
-        'Total Ticket Revenue': 'mean',
-        'Total Fees': 'mean',
-        'Total Tickets Sold': 'mean',
-        'Avg Accounts Index': 'first',
-        'Avg Revenue Index': 'first',
-        'Avg Fees Index': 'first',
-        'Activation Rate %': 'mean',
-        'Tier Qualification Rate %': 'mean',
-        'Revenue Per New Account': 'mean',
-    }).reset_index()
-
-    seasonality_summary.columns = [
-        'Month', 'Month Name',
-        'Avg New Accounts', 'Avg Revenue', 'Avg Fees', 'Avg Tickets',
-        'Accounts Index %', 'Revenue Index %', 'Fees Index %',
-        'Avg Activation Rate %', 'Avg Tier Qual Rate %', 'Avg Rev Per New Acct'
-    ]
-
-    seasonality_file = f"{base_name}_seasonality_summary.csv"
-    seasonality_summary.to_csv(seasonality_file, index=False, float_format='%.2f')
-    print(f"  ✓ Seasonality summary saved to: {seasonality_file}")
-
-    # === CREATE GROWTH TRENDS TABLE ===
-    # Year-over-year summary to show growth trajectory
+    # === GROWTH TRENDS AND RECOMMENDATIONS ===
     yearly_growth = planning_df.groupby('Year').agg({
         'Total New Accounts': 'sum',
         'Total Ticket Revenue': 'sum',
         'Total Fees': 'sum',
-        'Total Tickets Sold': 'sum',
-        'Accounts Selling In Month': 'mean',  # Average monthly active
-        'Activation Rate %': 'mean',
-        'Revenue Per New Account': 'mean',
     }).reset_index()
 
-    # Calculate YoY growth
     for col in ['Total New Accounts', 'Total Ticket Revenue', 'Total Fees']:
         yearly_growth[f'{col} YoY %'] = round(yearly_growth[col].pct_change() * 100, 1)
 
-    growth_file = f"{base_name}_growth_trends.csv"
-    yearly_growth.to_csv(growth_file, index=False, float_format='%.2f')
-    print(f"  ✓ Growth trends saved to: {growth_file}")
+    recommendations = calculate_trend_based_growth(yearly_growth)
 
-    # === CREATE 2026 PROJECTION TEMPLATE ===
-    # Use seasonality indices to create a template for 2026 targets
-    projection_template = seasonality_summary[['Month', 'Month Name', 'Accounts Index %', 'Revenue Index %', 'Fees Index %']].copy()
+    # === GET BASE YEAR (previous year) ACTUALS ===
+    base_year = target_year - 1
+    base_year_data = planning_df[planning_df['Year'] == base_year].copy()
 
-    # Add columns for manual target entry
-    projection_template['2026 Target Accounts'] = ''
-    projection_template['2026 Target Revenue'] = ''
-    projection_template['2026 Target Fees'] = ''
+    if len(base_year_data) == 0:
+        # Try to use most recent complete year
+        available_years = planning_df['Year'].unique()
+        base_year = max(available_years)
+        base_year_data = planning_df[planning_df['Year'] == base_year].copy()
+        print(f"  Note: Using {base_year} as base year (most recent available)")
 
-    # Add helper: if you set annual target, what each month should be
-    projection_template['Notes'] = projection_template.apply(
-        lambda r: f"If annual target is X, this month = X × {r['Revenue Index %']/100:.3f}", axis=1
-    )
+    # === BUILD SCENARIO TARGETS ===
+    # Get average seasonality indices (use Easter-adjusted where available)
+    avg_indices = planning_df.groupby('Month').agg({
+        'Accounts Index %': 'mean',
+        'Revenue Index %': 'mean',
+        'Fees Index %': 'mean',
+        'Month Name': 'first',
+    }).reset_index()
 
-    projection_file = f"{base_name}_2026_projection_template.csv"
-    projection_template.to_csv(projection_file, index=False)
-    print(f"  ✓ 2026 projection template saved to: {projection_file}")
+    # Try to use Easter-adjusted indices for the target year's Easter position
+    for month in [3, 4]:  # March and April
+        easter_match = easter_adjusted[
+            (easter_adjusted['Month'] == month) &
+            (easter_adjusted['Easter Position'] == target_easter_pos)
+        ]
+        if len(easter_match) > 0:
+            avg_indices.loc[avg_indices['Month'] == month, 'Accounts Index %'] = easter_match['Easter Adj Accounts %'].values[0]
+            avg_indices.loc[avg_indices['Month'] == month, 'Revenue Index %'] = easter_match['Easter Adj Revenue %'].values[0]
+            avg_indices.loc[avg_indices['Month'] == month, 'Fees Index %'] = easter_match['Easter Adj Fees %'].values[0]
 
-    return model_file
+    # Base year totals
+    base_accounts = base_year_data['Total New Accounts'].sum()
+    base_revenue = base_year_data['Total Ticket Revenue'].sum()
+    base_fees = base_year_data['Total Fees'].sum()
+
+    # === CREATE TARGET SCENARIOS ===
+    scenarios = pd.DataFrame()
+    scenarios['Month'] = range(1, 13)
+    scenarios['Month Name'] = scenarios['Month'].apply(lambda m: calendar.month_name[m])
+
+    # Add holiday flags for target year
+    for month in range(1, 13):
+        flags = get_school_holiday_flags(target_year, month)
+        for flag, value in flags.items():
+            if flag not in scenarios.columns:
+                scenarios[flag] = None
+            scenarios.loc[scenarios['Month'] == month, flag] = value
+
+    # Merge indices
+    scenarios = scenarios.merge(avg_indices[['Month', 'Accounts Index %', 'Revenue Index %', 'Fees Index %']], on='Month')
+
+    # Add base year actuals
+    base_monthly = base_year_data[['Month', 'Total New Accounts', 'Total Ticket Revenue', 'Total Fees']].copy()
+    base_monthly.columns = ['Month', f'{base_year} Accounts', f'{base_year} Revenue', f'{base_year} Fees']
+    scenarios = scenarios.merge(base_monthly, on='Month', how='left')
+    scenarios = scenarios.fillna(0)
+
+    # Calculate scenario targets
+    for metric, base_val, idx_col in [
+        ('Accounts', base_accounts, 'Accounts Index %'),
+        ('Revenue', base_revenue, 'Revenue Index %'),
+        ('Fees', base_fees, 'Fees Index %')
+    ]:
+        metric_key = f'Total New {metric}' if metric == 'Accounts' else f'Total Ticket {metric}' if metric == 'Revenue' else f'Total {metric}'
+
+        if metric_key in recommendations:
+            rec = recommendations[metric_key]
+            conservative_growth = rec['conservative'] / 100
+            base_growth = rec['recommended'] / 100
+            stretch_growth = rec['stretch'] / 100
+        else:
+            # Default growth rates if no historical data
+            conservative_growth = 0.10
+            base_growth = 0.15
+            stretch_growth = 0.25
+
+        # Annual targets
+        conservative_annual = base_val * (1 + conservative_growth)
+        base_annual = base_val * (1 + base_growth)
+        stretch_annual = base_val * (1 + stretch_growth)
+
+        # Monthly targets using seasonality
+        scenarios[f'{target_year} {metric} Conservative'] = round(conservative_annual * scenarios[idx_col] / 100, 0 if metric == 'Accounts' else 2)
+        scenarios[f'{target_year} {metric} Base'] = round(base_annual * scenarios[idx_col] / 100, 0 if metric == 'Accounts' else 2)
+        scenarios[f'{target_year} {metric} Stretch'] = round(stretch_annual * scenarios[idx_col] / 100, 0 if metric == 'Accounts' else 2)
+
+        # YoY variance vs base year
+        scenarios[f'{metric} Base vs {base_year} %'] = round(
+            (scenarios[f'{target_year} {metric} Base'] - scenarios[f'{base_year} {metric}']) / scenarios[f'{base_year} {metric}'].replace(0, 1) * 100, 1
+        )
+
+    # === ADD CUMULATIVE TOTALS FOR BHAG TRACKING ===
+    # Get total accounts ever created up to base year end
+    total_accounts_to_date = len(accounts_df)  # Current total
+
+    # Add cumulative columns
+    scenarios[f'Cumulative Accounts (Base)'] = scenarios[f'{target_year} Accounts Base'].cumsum() + total_accounts_to_date
+    scenarios[f'Cumulative Accounts (Stretch)'] = scenarios[f'{target_year} Accounts Stretch'].cumsum() + total_accounts_to_date
+
+    # BHAG milestone tracking (25,000 accounts)
+    bhag_target = 25000
+    scenarios['BHAG Progress %'] = round(scenarios['Cumulative Accounts (Stretch)'] / bhag_target * 100, 1)
+    scenarios['BHAG Gap'] = bhag_target - scenarios['Cumulative Accounts (Stretch)']
+
+    # === SAVE OUTPUTS ===
+
+    # 1. Main scenario model
+    scenario_cols = [
+        'Month', 'Month Name', 'Holiday Type',
+        f'{base_year} Accounts', f'{target_year} Accounts Conservative', f'{target_year} Accounts Base', f'{target_year} Accounts Stretch', f'Accounts Base vs {base_year} %',
+        f'{base_year} Revenue', f'{target_year} Revenue Conservative', f'{target_year} Revenue Base', f'{target_year} Revenue Stretch', f'Revenue Base vs {base_year} %',
+        f'{base_year} Fees', f'{target_year} Fees Conservative', f'{target_year} Fees Base', f'{target_year} Fees Stretch', f'Fees Base vs {base_year} %',
+        'Cumulative Accounts (Base)', 'Cumulative Accounts (Stretch)', 'BHAG Progress %', 'BHAG Gap',
+    ]
+    scenario_cols = [c for c in scenario_cols if c in scenarios.columns]
+
+    scenario_file = f"{base_name}_{target_year}_targets.csv"
+    scenarios[scenario_cols].to_csv(scenario_file, index=False, float_format='%.2f')
+    print(f"  ✓ {target_year} targets saved to: {scenario_file}")
+
+    # 2. Growth recommendations summary
+    rec_rows = []
+    for metric, rec in recommendations.items():
+        rec_rows.append({
+            'Metric': metric,
+            'Historical Weighted Avg %': rec['weighted_avg'],
+            'Recent Trend': rec['trend'],
+            'Recommended Growth %': rec['recommended'],
+            'Conservative %': rec['conservative'],
+            'Stretch %': rec['stretch'],
+        })
+
+    if rec_rows:
+        rec_df = pd.DataFrame(rec_rows)
+        rec_file = f"{base_name}_growth_recommendations.csv"
+        rec_df.to_csv(rec_file, index=False, float_format='%.1f')
+        print(f"  ✓ Growth recommendations saved to: {rec_file}")
+
+    # 3. Annual summary
+    annual_summary = {
+        'Metric': ['New Accounts', 'Ticket Revenue', 'Fees'],
+        f'{base_year} Actual': [int(base_accounts), round(base_revenue, 2), round(base_fees, 2)],
+        f'{target_year} Conservative': [
+            int(scenarios[f'{target_year} Accounts Conservative'].sum()),
+            round(scenarios[f'{target_year} Revenue Conservative'].sum(), 2),
+            round(scenarios[f'{target_year} Fees Conservative'].sum(), 2),
+        ],
+        f'{target_year} Base': [
+            int(scenarios[f'{target_year} Accounts Base'].sum()),
+            round(scenarios[f'{target_year} Revenue Base'].sum(), 2),
+            round(scenarios[f'{target_year} Fees Base'].sum(), 2),
+        ],
+        f'{target_year} Stretch': [
+            int(scenarios[f'{target_year} Accounts Stretch'].sum()),
+            round(scenarios[f'{target_year} Revenue Stretch'].sum(), 2),
+            round(scenarios[f'{target_year} Fees Stretch'].sum(), 2),
+        ],
+    }
+
+    # Add growth percentages
+    for scenario in ['Conservative', 'Base', 'Stretch']:
+        annual_summary[f'{scenario} Growth %'] = [
+            round((annual_summary[f'{target_year} {scenario}'][i] - annual_summary[f'{base_year} Actual'][i]) / annual_summary[f'{base_year} Actual'][i] * 100, 1)
+            for i in range(3)
+        ]
+
+    annual_df = pd.DataFrame(annual_summary)
+    annual_file = f"{base_name}_{target_year}_annual_summary.csv"
+    annual_df.to_csv(annual_file, index=False, float_format='%.2f')
+    print(f"  ✓ Annual summary saved to: {annual_file}")
+
+    # 4. Historical planning model (unchanged from before)
+    planning_output_cols = [
+        'Year', 'Month', 'Month Name', 'Holiday Type', 'Easter Position',
+        'Total New Accounts', 'Total Ticket Revenue', 'Total Fees',
+        'Accounts Index %', 'Revenue Index %', 'Fees Index %',
+        'Total New Accounts YoY %', 'Total Ticket Revenue YoY %', 'Total Fees YoY %',
+    ]
+    planning_output_cols = [c for c in planning_output_cols if c in planning_df.columns]
+    planning_output = planning_df[planning_output_cols].sort_values(['Year', 'Month'])
+
+    model_file = f"{base_name}_planning_model.csv"
+    planning_output.to_csv(model_file, index=False, float_format='%.2f')
+    print(f"  ✓ Historical planning model saved to: {model_file}")
+
+    return scenario_file
 
 
 def calculate_account_tiers(accounts_df, booking_df, as_of_date=None):

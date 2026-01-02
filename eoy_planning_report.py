@@ -4120,7 +4120,7 @@ def generate_dormancy_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.Dat
     summary_df = pd.DataFrame({
         'Status': summary.index,
         'Count': summary.values,
-        'Percentage': round(summary.values / len(dormancy_df) * 100, 1)
+        'Percentage': np.round(summary.values / len(dormancy_df) * 100, 1)
     })
 
     summary_file = get_output_path(base_name, 'cohorts', '_dormancy_summary.csv')

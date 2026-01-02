@@ -1931,8 +1931,9 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
 
         # Also save the detailed view with dip/peak flags
         detail_file = f"{base_name}_seasonality_industry_detail.csv"
-        industry_monthly_out = industry_monthly[['Industry', 'Month Name', 'Revenue', 'Tickets', 'Events', '% of Annual', 'Variance %', 'Status']]
+        industry_monthly_out = industry_monthly[['Industry', 'Month', 'Month Name', 'Revenue', 'Tickets', 'Events', '% of Annual', 'Variance %', 'Status']]
         industry_monthly_out = industry_monthly_out.sort_values(['Industry', 'Month'])
+        industry_monthly_out = industry_monthly_out.drop(columns=['Month'])  # Remove numeric month from output
         industry_monthly_out.to_csv(detail_file, index=False, float_format='%.1f')
         print(f"  ✓ Industry seasonality detail saved to: {detail_file}")
     else:

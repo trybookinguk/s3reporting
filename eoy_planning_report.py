@@ -2227,6 +2227,210 @@ def generate_cohort_revenue_curves_csv(booking_df, accounts_df, output_file):
     return curves_file
 
 
+def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file):
+    """
+    Generate a planning model CSV that combines seasonality with account growth
+    for target setting and forecasting.
+
+    Outputs:
+    - Monthly seasonality indices (% of annual)
+    - Historical growth rates (YoY)
+    - Account funnel conversion rates
+    - Revenue per account metrics
+    - Multi-year history for trend analysis
+
+    Args:
+        results_df: DataFrame with monthly metrics from calculate_monthly_metrics
+        accounts_df: Accounts DataFrame
+        booking_df: Booking transactions DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Path to generated CSV file
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+
+    # Ensure we have the data we need
+    if len(results_df) == 0:
+        print("  Warning: No results data for planning model")
+        return None
+
+    planning_df = results_df.copy()
+
+    # === SEASONALITY INDICES ===
+    # Calculate what % of annual total each month represents (averaged across years)
+    planning_df['YearMonth'] = planning_df['Year'].astype(str) + '-' + planning_df['Month'].astype(str).str.zfill(2)
+
+    # Group by year to get annual totals
+    yearly_totals = planning_df.groupby('Year').agg({
+        'Total New Accounts': 'sum',
+        'Total Ticket Revenue': 'sum',
+        'Total Fees': 'sum',
+        'Total Tickets Sold': 'sum',
+        'Accounts Selling In Month': 'sum',
+        'Events With Sales': 'sum',
+    }).reset_index()
+    yearly_totals.columns = ['Year', 'Year_New_Accounts', 'Year_Revenue', 'Year_Fees',
+                             'Year_Tickets', 'Year_Accounts_Selling', 'Year_Events']
+
+    # Merge yearly totals back
+    planning_df = planning_df.merge(yearly_totals, on='Year')
+
+    # Calculate seasonality index for each metric (% of annual)
+    planning_df['Accounts Seasonality %'] = round(
+        planning_df['Total New Accounts'] / planning_df['Year_New_Accounts'] * 100, 2
+    )
+    planning_df['Revenue Seasonality %'] = round(
+        planning_df['Total Ticket Revenue'] / planning_df['Year_Revenue'] * 100, 2
+    )
+    planning_df['Fees Seasonality %'] = round(
+        planning_df['Total Fees'] / planning_df['Year_Fees'] * 100, 2
+    )
+    planning_df['Tickets Seasonality %'] = round(
+        planning_df['Total Tickets Sold'] / planning_df['Year_Tickets'] * 100, 2
+    )
+
+    # === AVERAGE SEASONALITY INDEX (across all years) ===
+    # This gives you the "typical" seasonality pattern
+    avg_seasonality = planning_df.groupby('Month').agg({
+        'Accounts Seasonality %': 'mean',
+        'Revenue Seasonality %': 'mean',
+        'Fees Seasonality %': 'mean',
+        'Tickets Seasonality %': 'mean',
+    }).reset_index()
+    avg_seasonality.columns = ['Month', 'Avg Accounts Index', 'Avg Revenue Index',
+                               'Avg Fees Index', 'Avg Tickets Index']
+
+    # Merge average indices back
+    planning_df = planning_df.merge(avg_seasonality, on='Month', suffixes=('', '_avg'))
+
+    # === YOY GROWTH RATES ===
+    # Calculate YoY growth for each month
+    planning_df = planning_df.sort_values(['Month', 'Year'])
+
+    for metric in ['Total New Accounts', 'Total Ticket Revenue', 'Total Fees', 'Total Tickets Sold']:
+        col_name = f'{metric} YoY %'
+        planning_df[col_name] = planning_df.groupby('Month')[metric].pct_change() * 100
+        planning_df[col_name] = planning_df[col_name].round(1)
+
+    # === CONVERSION RATES ===
+    # Account funnel: New → Activated → Tier Qualified
+    planning_df['Activation Rate %'] = round(
+        planning_df['Activated (Created Events)'] / planning_df['Total New Accounts'] * 100, 1
+    )
+    planning_df['Tier Qualification Rate %'] = round(
+        planning_df['New Accounts Tier Qualified'] / planning_df['Total New Accounts'] * 100, 1
+    )
+
+    # === EFFICIENCY METRICS ===
+    # Revenue per new account (shows account quality)
+    planning_df['Revenue Per New Account'] = round(
+        planning_df['Total Ticket Revenue'] / planning_df['Total New Accounts'], 2
+    )
+    # Fees per new account
+    planning_df['Fees Per New Account'] = round(
+        planning_df['Total Fees'] / planning_df['Total New Accounts'], 2
+    )
+    # Revenue per active account
+    planning_df['Revenue Per Active Account'] = round(
+        planning_df['Total Ticket Revenue'] / planning_df['Accounts Selling In Month'], 2
+    )
+
+    # === SELECT AND ORDER COLUMNS FOR OUTPUT ===
+    output_cols = [
+        'Year', 'Month', 'Month Name',
+        # Absolute numbers
+        'Total New Accounts', 'Activated (Created Events)', 'New Accounts Tier Qualified',
+        'Accounts Selling In Month', 'Events With Sales',
+        'Total Tickets Sold', 'Total Ticket Revenue', 'Total Fees',
+        # Seasonality indices (this year)
+        'Accounts Seasonality %', 'Revenue Seasonality %', 'Fees Seasonality %',
+        # Average seasonality indices (historical)
+        'Avg Accounts Index', 'Avg Revenue Index', 'Avg Fees Index',
+        # YoY growth rates
+        'Total New Accounts YoY %', 'Total Ticket Revenue YoY %', 'Total Fees YoY %',
+        # Conversion rates
+        'Activation Rate %', 'Tier Qualification Rate %',
+        # Efficiency metrics
+        'Revenue Per New Account', 'Fees Per New Account', 'Revenue Per Active Account',
+    ]
+
+    # Only include columns that exist
+    output_cols = [c for c in output_cols if c in planning_df.columns]
+    planning_output = planning_df[output_cols].sort_values(['Year', 'Month'])
+
+    # Save main planning model
+    model_file = f"{base_name}_planning_model.csv"
+    planning_output.to_csv(model_file, index=False, float_format='%.2f')
+    print(f"  ✓ Planning model saved to: {model_file}")
+
+    # === CREATE SUMMARY SEASONALITY TABLE ===
+    # One row per month showing average indices and typical values
+    seasonality_summary = planning_df.groupby(['Month', 'Month Name']).agg({
+        'Total New Accounts': 'mean',
+        'Total Ticket Revenue': 'mean',
+        'Total Fees': 'mean',
+        'Total Tickets Sold': 'mean',
+        'Avg Accounts Index': 'first',
+        'Avg Revenue Index': 'first',
+        'Avg Fees Index': 'first',
+        'Activation Rate %': 'mean',
+        'Tier Qualification Rate %': 'mean',
+        'Revenue Per New Account': 'mean',
+    }).reset_index()
+
+    seasonality_summary.columns = [
+        'Month', 'Month Name',
+        'Avg New Accounts', 'Avg Revenue', 'Avg Fees', 'Avg Tickets',
+        'Accounts Index %', 'Revenue Index %', 'Fees Index %',
+        'Avg Activation Rate %', 'Avg Tier Qual Rate %', 'Avg Rev Per New Acct'
+    ]
+
+    seasonality_file = f"{base_name}_seasonality_summary.csv"
+    seasonality_summary.to_csv(seasonality_file, index=False, float_format='%.2f')
+    print(f"  ✓ Seasonality summary saved to: {seasonality_file}")
+
+    # === CREATE GROWTH TRENDS TABLE ===
+    # Year-over-year summary to show growth trajectory
+    yearly_growth = planning_df.groupby('Year').agg({
+        'Total New Accounts': 'sum',
+        'Total Ticket Revenue': 'sum',
+        'Total Fees': 'sum',
+        'Total Tickets Sold': 'sum',
+        'Accounts Selling In Month': 'mean',  # Average monthly active
+        'Activation Rate %': 'mean',
+        'Revenue Per New Account': 'mean',
+    }).reset_index()
+
+    # Calculate YoY growth
+    for col in ['Total New Accounts', 'Total Ticket Revenue', 'Total Fees']:
+        yearly_growth[f'{col} YoY %'] = round(yearly_growth[col].pct_change() * 100, 1)
+
+    growth_file = f"{base_name}_growth_trends.csv"
+    yearly_growth.to_csv(growth_file, index=False, float_format='%.2f')
+    print(f"  ✓ Growth trends saved to: {growth_file}")
+
+    # === CREATE 2026 PROJECTION TEMPLATE ===
+    # Use seasonality indices to create a template for 2026 targets
+    projection_template = seasonality_summary[['Month', 'Month Name', 'Accounts Index %', 'Revenue Index %', 'Fees Index %']].copy()
+
+    # Add columns for manual target entry
+    projection_template['2026 Target Accounts'] = ''
+    projection_template['2026 Target Revenue'] = ''
+    projection_template['2026 Target Fees'] = ''
+
+    # Add helper: if you set annual target, what each month should be
+    projection_template['Notes'] = projection_template.apply(
+        lambda r: f"If annual target is X, this month = X × {r['Revenue Index %']/100:.3f}", axis=1
+    )
+
+    projection_file = f"{base_name}_2026_projection_template.csv"
+    projection_template.to_csv(projection_file, index=False)
+    print(f"  ✓ 2026 projection template saved to: {projection_file}")
+
+    return model_file
+
+
 def calculate_account_tiers(accounts_df, booking_df, as_of_date=None):
     """
     Calculate tiers for ALL accounts based on percentile rankings across entire population.
@@ -2537,6 +2741,10 @@ def main():
     # Cohort revenue curves (YoY comparable)
     print("  Generating cohort revenue curves...")
     generate_cohort_revenue_curves_csv(booking_df, accounts_df, output_file)
+
+    # Planning model for 2026 target setting
+    print("  Generating planning model...")
+    generate_planning_model_csv(results_df, accounts_df, booking_df, output_file)
 
     print(f"\n=== Report Complete ===")
 

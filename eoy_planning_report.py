@@ -3475,8 +3475,9 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
             # Step 3: Blend historical pattern with momentum
             blended_yoy = (historical_yoy * (1 - momentum_weight)) + (momentum_yoy * momentum_weight)
 
-            # Step 4: Apply 30% cap to Base targets
-            capped_base_yoy = min(blended_yoy, MAX_MONTHLY_GROWTH)
+            # Step 4: Apply 30% cap and 0% floor to Base targets
+            # Floor ensures no negative growth (targets never below previous year)
+            capped_base_yoy = max(min(blended_yoy, MAX_MONTHLY_GROWTH), 0.0)
 
             # Step 5: Calculate Base target with cap applied
             base_monthly_target = base_year_monthly * (1 + capped_base_yoy)
@@ -3493,9 +3494,13 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
         # Apply rounding for accounts (to nearest 50)
         if metric == 'Accounts':
             scenarios[f'{target_year} {metric} Base'] = [round_to_multiple(t, 50) for t in base_targets]
+            scenarios[f'{target_year} {metric} Base Low'] = [round_to_multiple(t * 0.9, 50) for t in base_targets]
+            scenarios[f'{target_year} {metric} Base High'] = [round_to_multiple(t * 1.1, 50) for t in base_targets]
             scenarios[f'{target_year} {metric} BHAG'] = [round_to_multiple(t, 50) for t in bhag_targets]
         else:
             scenarios[f'{target_year} {metric} Base'] = [round(t, 2) for t in base_targets]
+            scenarios[f'{target_year} {metric} Base Low'] = [round(t * 0.9, 2) for t in base_targets]
+            scenarios[f'{target_year} {metric} Base High'] = [round(t * 1.1, 2) for t in base_targets]
             scenarios[f'{target_year} {metric} BHAG'] = [round(t, 2) for t in bhag_targets]
 
         # === FINAL CHECK: Ensure Base <= BHAG for every month ===
@@ -3527,12 +3532,12 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
 
     # === SAVE OUTPUTS ===
 
-    # 1. Main scenario model (Base + BHAG only)
+    # 1. Main scenario model (Base with ±10% confidence range + BHAG)
     scenario_cols = [
         'Month', 'Month Name', 'Holiday Type',
-        f'{base_year} Accounts', f'{target_year} Accounts Base', f'{target_year} Accounts BHAG', f'Accounts Base vs {base_year} %', f'Accounts BHAG vs {base_year} %',
-        f'{base_year} Revenue', f'{target_year} Revenue Base', f'{target_year} Revenue BHAG', f'Revenue Base vs {base_year} %', f'Revenue BHAG vs {base_year} %',
-        f'{base_year} Fees', f'{target_year} Fees Base', f'{target_year} Fees BHAG', f'Fees Base vs {base_year} %', f'Fees BHAG vs {base_year} %',
+        f'{base_year} Accounts', f'{target_year} Accounts Base Low', f'{target_year} Accounts Base', f'{target_year} Accounts Base High', f'{target_year} Accounts BHAG', f'Accounts Base vs {base_year} %', f'Accounts BHAG vs {base_year} %',
+        f'{base_year} Revenue', f'{target_year} Revenue Base Low', f'{target_year} Revenue Base', f'{target_year} Revenue Base High', f'{target_year} Revenue BHAG', f'Revenue Base vs {base_year} %', f'Revenue BHAG vs {base_year} %',
+        f'{base_year} Fees', f'{target_year} Fees Base Low', f'{target_year} Fees Base', f'{target_year} Fees Base High', f'{target_year} Fees BHAG', f'Fees Base vs {base_year} %', f'Fees BHAG vs {base_year} %',
         'Cumulative Accounts (Base)', 'Cumulative Accounts (BHAG)', 'BHAG Progress %', 'BHAG Gap',
     ]
     scenario_cols = [c for c in scenario_cols if c in scenarios.columns]

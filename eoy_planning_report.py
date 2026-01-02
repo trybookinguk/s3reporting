@@ -2407,9 +2407,22 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
                 planning_df[flag] = None
             planning_df.loc[(planning_df['Year'] == row['Year']) & (planning_df['Month'] == row['Month']), flag] = value
 
+    # === IDENTIFY COMPLETE YEARS FOR SEASONALITY ===
+    # Complete years (all 12 months) are needed for accurate seasonality indices
+    months_per_year = planning_df.groupby('Year')['Month'].nunique()
+    complete_years = months_per_year[months_per_year == 12].index.tolist()
+    print(f"  Complete years available: {complete_years}")
+
+    # Use complete years for seasonality calculations
+    if len(complete_years) > 0:
+        complete_year_data = planning_df[planning_df['Year'].isin(complete_years)]
+    else:
+        complete_year_data = planning_df
+        print("  Warning: No complete years - seasonality indices may be skewed")
+
     # === CALCULATE EASTER-ADJUSTED SEASONALITY ===
-    # Group by Easter position to get adjusted indices
-    easter_adjusted = planning_df.groupby(['Month', 'Easter Position']).agg({
+    # Group by Easter position to get adjusted indices (using complete years only)
+    easter_adjusted = complete_year_data.groupby(['Month', 'Easter Position']).agg({
         'Accounts Index %': 'mean',
         'Revenue Index %': 'mean',
         'Fees Index %': 'mean',
@@ -2443,19 +2456,28 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     recommendations = calculate_trend_based_growth(yearly_growth)
 
     # === GET BASE YEAR (previous year) ACTUALS ===
+    # For targets, we need a COMPLETE year of data (complete_years calculated above)
     base_year = target_year - 1
-    base_year_data = planning_df[planning_df['Year'] == base_year].copy()
 
-    if len(base_year_data) == 0:
-        # Try to use most recent complete year
+    if base_year in complete_years:
+        base_year_data = planning_df[planning_df['Year'] == base_year].copy()
+    elif len(complete_years) > 0:
+        # Use most recent complete year
+        base_year = max(complete_years)
+        base_year_data = planning_df[planning_df['Year'] == base_year].copy()
+        print(f"  Note: Using {base_year} as base year (most recent complete year)")
+    else:
+        # No complete years - use most recent year but warn
         available_years = planning_df['Year'].unique()
         base_year = max(available_years)
         base_year_data = planning_df[planning_df['Year'] == base_year].copy()
-        print(f"  Note: Using {base_year} as base year (most recent available)")
+        months_available = len(base_year_data)
+        print(f"  Warning: No complete year data. Using {base_year} with {months_available} months.")
+        print(f"           Targets may be inaccurate. Run with --year for full year data.")
 
     # === BUILD SCENARIO TARGETS ===
-    # Get average seasonality indices (use Easter-adjusted where available)
-    avg_indices = planning_df.groupby('Month').agg({
+    # Get average seasonality indices from complete years (already computed above)
+    avg_indices = complete_year_data.groupby('Month').agg({
         'Accounts Index %': 'mean',
         'Revenue Index %': 'mean',
         'Fees Index %': 'mean',

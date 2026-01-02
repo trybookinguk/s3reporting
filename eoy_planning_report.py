@@ -2368,6 +2368,10 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
 
     planning_df = results_df.copy()
 
+    # Filter to 2022 onwards - earlier data not representative
+    planning_df = planning_df[planning_df['Year'] >= 2022].copy()
+    print(f"  Using data from 2022 onwards ({planning_df['Year'].min()}-{planning_df['Year'].max()})")
+
     # === CALCULATE YEARLY TOTALS AND SEASONALITY ===
     planning_df['YearMonth'] = planning_df['Year'].astype(str) + '-' + planning_df['Month'].astype(str).str.zfill(2)
 

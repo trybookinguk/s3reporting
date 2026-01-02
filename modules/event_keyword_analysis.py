@@ -138,12 +138,25 @@ def _aggregate_events(booking_df: pd.DataFrame) -> pd.DataFrame:
     Aggregate booking data to event level for efficient processing.
 
     Returns DataFrame with one row per event containing:
-    - EventId, EventName, total_revenue, total_tickets, event_date, first_sale
+    - EventId, EventName, total_revenue, total_tickets, total_fees, event_date, first_sale
     """
     # Ensure required columns exist
     required_cols = ['EventId', 'EventName']
     if not all(col in booking_df.columns for col in required_cols):
         return pd.DataFrame()
+
+    # Calculate fees if fee columns exist
+    fee_columns = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+    has_fees = all(col in booking_df.columns for col in fee_columns)
+
+    if has_fees:
+        booking_df = booking_df.copy()
+        booking_df['_total_fees'] = (
+            booking_df['BookingFee'].fillna(0) +
+            booking_df['CardFee'].fillna(0) +
+            booking_df['ProcessingFee'].fillna(0) +
+            booking_df['TicketFee'].fillna(0)
+        )
 
     # Aggregate to event level
     agg_dict = {
@@ -151,6 +164,9 @@ def _aggregate_events(booking_df: pd.DataFrame) -> pd.DataFrame:
         'PaymentReceived': 'sum',
         'TicketQuantity': 'sum',
     }
+
+    if has_fees:
+        agg_dict['_total_fees'] = 'sum'
 
     if 'EventDate' in booking_df.columns:
         agg_dict['EventDate'] = 'first'
@@ -160,25 +176,29 @@ def _aggregate_events(booking_df: pd.DataFrame) -> pd.DataFrame:
     events_df = booking_df.groupby('EventId').agg(agg_dict).reset_index()
 
     # Rename columns
-    events_df = events_df.rename(columns={
+    rename_dict = {
         'PaymentReceived': 'total_revenue',
         'TicketQuantity': 'total_tickets',
         'TransactionDate': 'first_sale'
-    })
+    }
+    if has_fees:
+        rename_dict['_total_fees'] = 'total_fees'
+
+    events_df = events_df.rename(columns=rename_dict)
 
     return events_df
 
 
 def build_keyword_frequency_table(booking_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Build a frequency table of keywords weighted by count, revenue, and tickets.
+    Build a frequency table of keywords weighted by count, revenue, fees, and tickets.
     Optimised to aggregate at event level first.
 
     Args:
-        booking_df: Booking DataFrame with EventName, PaymentReceived, TicketQuantity
+        booking_df: Booking DataFrame with EventName, PaymentReceived, TicketQuantity, fee columns
 
     Returns:
-        DataFrame with keyword metrics
+        DataFrame with keyword metrics including fees
     """
     # Aggregate to event level first
     events_df = _aggregate_events(booking_df)
@@ -190,42 +210,48 @@ def build_keyword_frequency_table(booking_df: pd.DataFrame) -> pd.DataFrame:
     events_df['keywords'] = events_df['EventName'].apply(extract_keywords)
 
     # Build keyword stats
-    keyword_stats = defaultdict(lambda: {'event_count': 0, 'total_revenue': 0.0, 'total_tickets': 0})
+    keyword_stats = defaultdict(lambda: {'event_count': 0, 'total_revenue': 0.0, 'total_tickets': 0, 'total_fees': 0.0})
 
     for _, row in events_df.iterrows():
         keywords = row['keywords']
         revenue = row.get('total_revenue', 0) or 0
         tickets = row.get('total_tickets', 0) or 0
+        fees = row.get('total_fees', 0) or 0
 
         for keyword in keywords:
             stats = keyword_stats[keyword]
             stats['event_count'] += 1
             stats['total_revenue'] += revenue
             stats['total_tickets'] += tickets
+            stats['total_fees'] += fees
 
     # Convert to DataFrame
     rows = []
     for keyword, stats in keyword_stats.items():
         event_count = stats['event_count']
-        rows.append({
+        row_data = {
             'Keyword': keyword,
             'Event Count': event_count,
+            'Total Fees': round(stats['total_fees'], 2),
             'Total Revenue': round(stats['total_revenue'], 2),
             'Total Tickets': stats['total_tickets'],
+            'Avg Fees Per Event': round(stats['total_fees'] / event_count, 2) if event_count > 0 else 0,
             'Avg Revenue Per Event': round(stats['total_revenue'] / event_count, 2) if event_count > 0 else 0,
             'Avg Tickets Per Event': round(stats['total_tickets'] / event_count, 1) if event_count > 0 else 0,
-        })
+        }
+        rows.append(row_data)
 
     df = pd.DataFrame(rows)
     if len(df) > 0:
-        df = df.sort_values('Total Revenue', ascending=False)
+        # Sort by fees (TryBooking's revenue) by default
+        df = df.sort_values('Total Fees', ascending=False)
 
     return df
 
 
 def analyse_temporal_patterns(booking_df: pd.DataFrame, top_n: int = 100) -> pd.DataFrame:
     """
-    Analyse temporal patterns for top keywords by revenue.
+    Analyse temporal patterns for top keywords by fees.
     Optimised to work at event level.
 
     Args:
@@ -241,19 +267,25 @@ def analyse_temporal_patterns(booking_df: pd.DataFrame, top_n: int = 100) -> pd.
     if len(events_df) == 0:
         return pd.DataFrame()
 
+    # Check if fees are available
+    has_fees = 'total_fees' in events_df.columns
+
     # Extract keywords
     events_df['keywords'] = events_df['EventName'].apply(extract_keywords)
 
-    # Build keyword revenue totals first
+    # Build keyword fee and revenue totals first
+    keyword_fees = defaultdict(float)
     keyword_revenue = defaultdict(float)
     for _, row in events_df.iterrows():
+        fees = row.get('total_fees', 0) or 0
         revenue = row.get('total_revenue', 0) or 0
         for keyword in row['keywords']:
+            keyword_fees[keyword] += fees
             keyword_revenue[keyword] += revenue
 
-    # Get top N keywords
-    top_keywords = sorted(keyword_revenue.keys(), key=lambda k: keyword_revenue[k], reverse=True)[:top_n]
-    top_keywords_set = set(top_keywords)
+    # Get top N keywords by fees (or revenue if fees not available)
+    sort_dict = keyword_fees if has_fees else keyword_revenue
+    top_keywords = sorted(sort_dict.keys(), key=lambda k: sort_dict[k], reverse=True)[:top_n]
 
     # Prepare event date and first sale columns
     has_event_date = 'EventDate' in events_df.columns
@@ -315,6 +347,7 @@ def analyse_temporal_patterns(booking_df: pd.DataFrame, top_n: int = 100) -> pd.
         results.append({
             'Keyword': keyword,
             'Event Count': event_count,
+            'Total Fees': round(keyword_fees[keyword], 2),
             'Total Revenue': round(keyword_revenue[keyword], 2),
             'Primary Months': primary_months,
             'Peak Month': peak_month,
@@ -330,10 +363,10 @@ def analyse_temporal_patterns(booking_df: pd.DataFrame, top_n: int = 100) -> pd.
 def find_keyword_associations(booking_df: pd.DataFrame, min_cooccurrence: int = 5) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Find keyword pairs and triplets that frequently appear together.
-    Weighted by revenue. Optimised for performance.
+    Weighted by fees. Optimised for performance.
 
     Args:
-        booking_df: Booking DataFrame with EventName, PaymentReceived
+        booking_df: Booking DataFrame with EventName, fee columns
         min_cooccurrence: Minimum number of events for a pair/triplet to be included
 
     Returns:
@@ -349,21 +382,24 @@ def find_keyword_associations(booking_df: pd.DataFrame, min_cooccurrence: int = 
     events_df['keywords'] = events_df['EventName'].apply(lambda x: tuple(sorted(set(extract_keywords(x)))))
 
     # Count pairs and triplets
-    pair_stats = defaultdict(lambda: {'count': 0, 'revenue': 0.0})
-    triplet_stats = defaultdict(lambda: {'count': 0, 'revenue': 0.0})
+    pair_stats = defaultdict(lambda: {'count': 0, 'fees': 0.0, 'revenue': 0.0})
+    triplet_stats = defaultdict(lambda: {'count': 0, 'fees': 0.0, 'revenue': 0.0})
 
     for _, row in events_df.iterrows():
         keywords = row['keywords']
+        fees = row.get('total_fees', 0) or 0
         revenue = row.get('total_revenue', 0) or 0
 
         if len(keywords) >= 2:
             for pair in combinations(keywords, 2):
                 pair_stats[pair]['count'] += 1
+                pair_stats[pair]['fees'] += fees
                 pair_stats[pair]['revenue'] += revenue
 
         if len(keywords) >= 3:
             for triplet in combinations(keywords, 3):
                 triplet_stats[triplet]['count'] += 1
+                triplet_stats[triplet]['fees'] += fees
                 triplet_stats[triplet]['revenue'] += revenue
 
     # Filter and sort pairs
@@ -374,13 +410,14 @@ def find_keyword_associations(booking_df: pd.DataFrame, min_cooccurrence: int = 
                 'Keyword 1': pair[0],
                 'Keyword 2': pair[1],
                 'Event Count': stats['count'],
+                'Total Fees': round(stats['fees'], 2),
                 'Total Revenue': round(stats['revenue'], 2),
-                'Avg Revenue': round(stats['revenue'] / stats['count'], 2) if stats['count'] > 0 else 0,
+                'Avg Fees': round(stats['fees'] / stats['count'], 2) if stats['count'] > 0 else 0,
             })
 
     pairs_df = pd.DataFrame(pair_rows)
     if len(pairs_df) > 0:
-        pairs_df = pairs_df.sort_values('Total Revenue', ascending=False)
+        pairs_df = pairs_df.sort_values('Total Fees', ascending=False)
 
     # Filter and sort triplets
     triplet_rows = []
@@ -391,13 +428,14 @@ def find_keyword_associations(booking_df: pd.DataFrame, min_cooccurrence: int = 
                 'Keyword 2': triplet[1],
                 'Keyword 3': triplet[2],
                 'Event Count': stats['count'],
+                'Total Fees': round(stats['fees'], 2),
                 'Total Revenue': round(stats['revenue'], 2),
-                'Avg Revenue': round(stats['revenue'] / stats['count'], 2) if stats['count'] > 0 else 0,
+                'Avg Fees': round(stats['fees'] / stats['count'], 2) if stats['count'] > 0 else 0,
             })
 
     triplets_df = pd.DataFrame(triplet_rows)
     if len(triplets_df) > 0:
-        triplets_df = triplets_df.sort_values('Total Revenue', ascending=False)
+        triplets_df = triplets_df.sort_values('Total Fees', ascending=False)
 
     return pairs_df, triplets_df
 
@@ -467,16 +505,18 @@ def generate_keyword_summary(booking_df: pd.DataFrame, top_n: int = 50) -> pd.Da
         lambda k: get_top_associations_for_keyword(k, pairs_df, top_n=3)
     )
 
-    # Reorder columns
+    # Reorder columns - fees first as that's TryBooking's revenue
     column_order = [
         'Keyword',
         'Event Count',
+        'Total Fees',
         'Total Revenue',
         'Total Tickets',
         'Peak Month',
         'Primary Months',
         'Recommended Lead (weeks)',
         'Top Associations',
+        'Avg Fees Per Event',
         'Avg Revenue Per Event',
         'Avg Tickets Per Event',
     ]

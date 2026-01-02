@@ -66,6 +66,7 @@ OUTPUT_FOLDERS = {
     'seasonality': 'seasonality',
     'industry': 'industry',
     'ppc': 'ppc',
+    'boxoffice': 'boxoffice',
     'cohorts': 'cohorts',
     'geography': 'geography',
     'keywords': 'keywords',
@@ -96,6 +97,43 @@ def get_output_path(base_name: str, folder: str, filename: str) -> str:
     else:
         # Root level
         return f"{base_name}{filename}"
+
+
+def classify_sales_channel(payment_type) -> str:
+    """
+    Classify a payment type as Box Office or Online.
+
+    Box Office = Card Present (any variant) or Cash
+    Online = Everything else (including null for free tickets)
+
+    Args:
+        payment_type: The PaymentType value from booking data
+
+    Returns:
+        'Box Office' or 'Online'
+    """
+    if pd.isna(payment_type):
+        return 'Online'
+    payment_type_upper = str(payment_type).upper().strip()
+    if 'CARD PRESENT' in payment_type_upper or payment_type_upper == 'CASH':
+        return 'Box Office'
+    return 'Online'
+
+
+def add_sales_channel_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add Sales_Channel column to a DataFrame if PaymentType exists.
+
+    Args:
+        df: DataFrame with PaymentType column
+
+    Returns:
+        DataFrame with Sales_Channel column added
+    """
+    if 'PaymentType' in df.columns:
+        df = df.copy()
+        df['Sales_Channel'] = df['PaymentType'].apply(classify_sales_channel)
+    return df
 
 
 def parse_args():
@@ -1145,6 +1183,9 @@ def generate_industry_breakdown_csv(accounts_df, booking_df, months, output_file
         (booking_df['TransactionDate'] <= period_end)
     ].copy()
 
+    # Add sales channel classification
+    period_bookings = add_sales_channel_column(period_bookings)
+
     # Filter new accounts created in period
     account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Account Id'
     new_accounts = accounts_df[
@@ -1168,6 +1209,9 @@ def generate_industry_breakdown_csv(accounts_df, booking_df, months, output_file
         print("  Warning: No industry data available")
         return None
 
+    # Check if sales channel is available
+    has_sales_channel = 'Sales_Channel' in period_bookings.columns
+
     # Aggregate by industry
     industry_metrics = []
 
@@ -1175,15 +1219,18 @@ def generate_industry_breakdown_csv(accounts_df, booking_df, months, output_file
         ind_bookings = period_bookings[period_bookings[industry_col] == industry]
         ind_new_accounts = new_accounts[new_accounts['Industry'] == industry] if 'Industry' in new_accounts.columns else pd.DataFrame()
 
+        total_fees = ind_bookings['TotalFees'].sum() if 'TotalFees' in ind_bookings.columns else 0
+        total_tickets = int(ind_bookings['TicketQuantity'].sum()) if 'TicketQuantity' in ind_bookings.columns else 0
+
         metrics = {
             'Industry': industry,
             'New Accounts': len(ind_new_accounts),
             'Active Accounts': ind_bookings['AccountId'].nunique(),
             'Events With Sales': ind_bookings['EventId'].nunique() if 'EventId' in ind_bookings.columns else 0,
-            'Total Tickets': int(ind_bookings['TicketQuantity'].sum()) if 'TicketQuantity' in ind_bookings.columns else 0,
+            'Total Tickets': total_tickets,
             'Total Transactions': len(ind_bookings),
             'Total Ticket Revenue': round(ind_bookings['PaymentReceived'].sum(), 2) if 'PaymentReceived' in ind_bookings.columns else 0,
-            'Total Fees': round(ind_bookings['TotalFees'].sum(), 2) if 'TotalFees' in ind_bookings.columns else 0,
+            'Total Fees': round(total_fees, 2),
         }
 
         # Calculate averages
@@ -1198,6 +1245,17 @@ def generate_industry_breakdown_csv(accounts_df, booking_df, months, output_file
             metrics['Avg Revenue Per Event'] = round(metrics['Total Ticket Revenue'] / metrics['Events With Sales'], 2)
         else:
             metrics['Avg Revenue Per Event'] = 0
+
+        # Add Box Office metrics
+        if has_sales_channel:
+            bo_bookings = ind_bookings[ind_bookings['Sales_Channel'] == 'Box Office']
+            bo_fees = bo_bookings['TotalFees'].sum() if 'TotalFees' in bo_bookings.columns else 0
+            bo_tickets = int(bo_bookings['TicketQuantity'].sum()) if 'TicketQuantity' in bo_bookings.columns else 0
+
+            metrics['Box Office Tickets'] = bo_tickets
+            metrics['Box Office Fees'] = round(bo_fees, 2)
+            metrics['Box Office Pct Tickets'] = round(bo_tickets / total_tickets * 100, 1) if total_tickets > 0 else 0
+            metrics['Box Office Pct Fees'] = round(bo_fees / total_fees * 100, 1) if total_fees > 0 else 0
 
         industry_metrics.append(metrics)
 
@@ -1704,6 +1762,10 @@ def _calculate_geo_metrics_for_period(booking_df, accounts_df, period_start, per
     if len(period_bookings) == 0:
         return {}
 
+    # Add sales channel classification
+    period_bookings = add_sales_channel_column(period_bookings)
+    has_sales_channel = 'Sales_Channel' in period_bookings.columns
+
     # Extract postcode areas and regions using shared module
     period_bookings['PostcodeArea'] = extract_postcode_areas_vectorized(period_bookings[postcode_col])
     period_bookings['Region'] = get_regions_vectorized(period_bookings['PostcodeArea'])
@@ -1734,16 +1796,30 @@ def _calculate_geo_metrics_for_period(booking_df, accounts_df, period_start, per
         # Get the region for this postcode area
         region = area_bookings['Region'].iloc[0] if len(area_bookings) > 0 else 'Unknown'
 
+        total_tickets = int(area_bookings['TicketQuantity'].sum()) if 'TicketQuantity' in area_bookings.columns else 0
+        total_fees = area_bookings['TotalFees'].sum() if 'TotalFees' in area_bookings.columns else 0
+
         metrics = {
             'Region': region,
             'New Accounts': len(area_new_accounts),
             'Active Accounts': area_bookings['AccountId'].nunique(),
             'Events With Sales': area_bookings['EventId'].nunique() if 'EventId' in area_bookings.columns else 0,
-            'Total Tickets': int(area_bookings['TicketQuantity'].sum()) if 'TicketQuantity' in area_bookings.columns else 0,
+            'Total Tickets': total_tickets,
             'Total Transactions': len(area_bookings),
             'Total Ticket Revenue': round(area_bookings['PaymentReceived'].sum(), 2) if 'PaymentReceived' in area_bookings.columns else 0,
-            'Total Fees': round(area_bookings['TotalFees'].sum(), 2) if 'TotalFees' in area_bookings.columns else 0,
+            'Total Fees': round(total_fees, 2),
         }
+
+        # Add Box Office metrics
+        if has_sales_channel:
+            bo_bookings = area_bookings[area_bookings['Sales_Channel'] == 'Box Office']
+            bo_fees = bo_bookings['TotalFees'].sum() if 'TotalFees' in bo_bookings.columns else 0
+            bo_tickets = int(bo_bookings['TicketQuantity'].sum()) if 'TicketQuantity' in bo_bookings.columns else 0
+
+            metrics['Box Office Tickets'] = bo_tickets
+            metrics['Box Office Fees'] = round(bo_fees, 2)
+            metrics['Box Office Pct Tickets'] = round(bo_tickets / total_tickets * 100, 1) if total_tickets > 0 else 0
+            metrics['Box Office Pct Fees'] = round(bo_fees / total_fees * 100, 1) if total_fees > 0 else 0
 
         geo_metrics[area] = metrics
 
@@ -1869,6 +1945,13 @@ def generate_geographic_breakdown_csv(accounts_df, booking_df, months, output_fi
             row['Avg Revenue Per Event'] = round(row['Total Ticket Revenue'] / row['Events With Sales'], 2)
         else:
             row['Avg Revenue Per Event'] = 0
+
+        # Add Box Office metrics (if available in current period)
+        if 'Box Office Tickets' in curr:
+            row['Box Office Tickets'] = curr.get('Box Office Tickets', 0)
+            row['Box Office Fees'] = curr.get('Box Office Fees', 0)
+            row['Box Office Pct Tickets'] = curr.get('Box Office Pct Tickets', 0)
+            row['Box Office Pct Fees'] = curr.get('Box Office Pct Fees', 0)
 
         geo_rows.append(row)
 
@@ -2290,6 +2373,258 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
     return output_files
 
 
+def generate_gateway_split_analysis_csv(booking_df, accounts_df, output_file):
+    """
+    Generate gateway split analysis showing payment gateway usage by region, industry, and cohort.
+    Helps understand Stripe Connect vs TryBooking Gateway adoption patterns.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dict of output files generated
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    # Check for required columns
+    gateway_col = None
+    if 'GatewayGroup' in booking_df.columns:
+        gateway_col = 'GatewayGroup'
+    elif 'Gateway Group' in booking_df.columns:
+        gateway_col = 'Gateway Group'
+
+    if gateway_col is None:
+        print("  Warning: No gateway column found, skipping gateway analysis")
+        return output_files
+
+    # Prepare data
+    booking_df = booking_df.copy()
+
+    # Normalise gateway names
+    booking_df['Gateway'] = booking_df[gateway_col].fillna('Unknown')
+    booking_df.loc[booking_df['Gateway'].str.contains('Default', case=False, na=False), 'Gateway'] = 'TryBooking Gateway'
+    booking_df.loc[booking_df['Gateway'].str.contains('Stripe Connect', case=False, na=False), 'Gateway'] = 'Stripe Connect'
+
+    # Calculate total fees
+    fee_columns = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+    if all(col in booking_df.columns for col in fee_columns):
+        booking_df['TotalFees'] = (
+            booking_df['BookingFee'].fillna(0) +
+            booking_df['CardFee'].fillna(0) +
+            booking_df['ProcessingFee'].fillna(0) +
+            booking_df['TicketFee'].fillna(0)
+        )
+    else:
+        booking_df['TotalFees'] = 0
+
+    # Get industry from accounts if not in bookings
+    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Id'
+    if 'Industry' not in booking_df.columns and 'Industry' in accounts_df.columns:
+        booking_df = booking_df.merge(
+            accounts_df[[account_id_col, 'Industry']].rename(columns={account_id_col: 'AccountId'}),
+            on='AccountId',
+            how='left'
+        )
+
+    # Add region data from postcodes
+    postcode_col = None
+    if 'EventPostcode' in booking_df.columns:
+        postcode_col = 'EventPostcode'
+    elif 'AccountPostcode' in booking_df.columns:
+        postcode_col = 'AccountPostcode'
+
+    if postcode_col:
+        booking_df['PostcodeArea'] = extract_postcode_areas_vectorized(booking_df[postcode_col])
+        booking_df['Region'] = get_regions_vectorized(booking_df['PostcodeArea'])
+        booking_df.loc[~booking_df['PostcodeArea'].isin(VALID_UK_POSTCODE_AREAS), 'Region'] = None
+
+    # Add account creation year for cohort analysis
+    if 'DateTimeCreated' in accounts_df.columns:
+        accounts_df = accounts_df.copy()
+        accounts_df['CohortYear'] = pd.to_datetime(accounts_df['DateTimeCreated']).dt.year
+        booking_df = booking_df.merge(
+            accounts_df[[account_id_col, 'CohortYear']].rename(columns={account_id_col: 'AccountId'}),
+            on='AccountId',
+            how='left'
+        )
+
+    # === GATEWAY BY REGION ===
+    if 'Region' in booking_df.columns:
+        region_df = booking_df[booking_df['Region'].notna() & (booking_df['Region'] != 'Unknown')]
+
+        if len(region_df) > 0:
+            # Aggregate by region and gateway
+            region_gateway = region_df.groupby(['Region', 'Gateway']).agg({
+                'TotalFees': 'sum',
+                'PaymentReceived': 'sum',
+                'TicketQuantity': 'sum',
+                'AccountId': 'nunique'
+            }).reset_index()
+            region_gateway.columns = ['Region', 'Gateway', 'Fees', 'Revenue', 'Tickets', 'Accounts']
+
+            # Create pivot table - fees by gateway per region
+            fees_pivot = region_gateway.pivot(index='Region', columns='Gateway', values='Fees').fillna(0)
+            fees_pivot['Total'] = fees_pivot.sum(axis=1)
+
+            # Calculate percentages
+            for col in fees_pivot.columns:
+                if col != 'Total':
+                    fees_pivot[f'{col} %'] = (fees_pivot[col] / fees_pivot['Total'] * 100).round(1)
+
+            fees_pivot = fees_pivot.sort_values('Total', ascending=False)
+
+            region_file = get_output_path(base_name, 'geography', '_gateway_by_region.csv')
+            fees_pivot.to_csv(region_file, float_format='%.2f')
+            print(f"  ✓ Gateway by region saved to: {region_file}")
+            output_files['region'] = region_file
+
+    # === GATEWAY BY INDUSTRY ===
+    if 'Industry' in booking_df.columns:
+        industry_df = booking_df[booking_df['Industry'].notna()]
+
+        if len(industry_df) > 0:
+            # Aggregate by industry and gateway
+            industry_gateway = industry_df.groupby(['Industry', 'Gateway']).agg({
+                'TotalFees': 'sum',
+                'PaymentReceived': 'sum',
+                'TicketQuantity': 'sum',
+                'AccountId': 'nunique'
+            }).reset_index()
+            industry_gateway.columns = ['Industry', 'Gateway', 'Fees', 'Revenue', 'Tickets', 'Accounts']
+
+            # Create pivot table - fees by gateway per industry
+            fees_pivot = industry_gateway.pivot(index='Industry', columns='Gateway', values='Fees').fillna(0)
+            fees_pivot['Total'] = fees_pivot.sum(axis=1)
+
+            # Calculate percentages
+            for col in fees_pivot.columns:
+                if col != 'Total':
+                    fees_pivot[f'{col} %'] = (fees_pivot[col] / fees_pivot['Total'] * 100).round(1)
+
+            fees_pivot = fees_pivot.sort_values('Total', ascending=False)
+
+            industry_file = get_output_path(base_name, 'industry', '_gateway_by_industry.csv')
+            fees_pivot.to_csv(industry_file, float_format='%.2f')
+            print(f"  ✓ Gateway by industry saved to: {industry_file}")
+            output_files['industry'] = industry_file
+
+            # Also create accounts pivot - shows adoption rate
+            accounts_pivot = industry_gateway.pivot(index='Industry', columns='Gateway', values='Accounts').fillna(0)
+            accounts_pivot['Total'] = accounts_pivot.sum(axis=1)
+
+            for col in accounts_pivot.columns:
+                if col != 'Total':
+                    accounts_pivot[f'{col} %'] = (accounts_pivot[col] / accounts_pivot['Total'] * 100).round(1)
+
+            accounts_pivot = accounts_pivot.sort_values('Total', ascending=False)
+
+            accounts_file = get_output_path(base_name, 'industry', '_gateway_accounts_by_industry.csv')
+            accounts_pivot.to_csv(accounts_file, float_format='%.0f')
+            print(f"  ✓ Gateway accounts by industry saved to: {accounts_file}")
+            output_files['industry_accounts'] = accounts_file
+
+    # === GATEWAY BY COHORT YEAR ===
+    if 'CohortYear' in booking_df.columns:
+        cohort_df = booking_df[booking_df['CohortYear'].notna()]
+
+        if len(cohort_df) > 0:
+            # Aggregate by cohort year and gateway
+            cohort_gateway = cohort_df.groupby(['CohortYear', 'Gateway']).agg({
+                'TotalFees': 'sum',
+                'PaymentReceived': 'sum',
+                'TicketQuantity': 'sum',
+                'AccountId': 'nunique'
+            }).reset_index()
+            cohort_gateway.columns = ['Cohort Year', 'Gateway', 'Fees', 'Revenue', 'Tickets', 'Accounts']
+            cohort_gateway['Cohort Year'] = cohort_gateway['Cohort Year'].astype(int)
+
+            # Create pivot table - fees by gateway per cohort
+            fees_pivot = cohort_gateway.pivot(index='Cohort Year', columns='Gateway', values='Fees').fillna(0)
+            fees_pivot['Total'] = fees_pivot.sum(axis=1)
+
+            # Calculate percentages
+            for col in fees_pivot.columns:
+                if col != 'Total':
+                    fees_pivot[f'{col} %'] = (fees_pivot[col] / fees_pivot['Total'] * 100).round(1)
+
+            fees_pivot = fees_pivot.sort_index(ascending=False)
+
+            cohort_file = get_output_path(base_name, 'cohorts', '_gateway_by_cohort.csv')
+            fees_pivot.to_csv(cohort_file, float_format='%.2f')
+            print(f"  ✓ Gateway by cohort saved to: {cohort_file}")
+            output_files['cohort'] = cohort_file
+
+            # Accounts pivot for cohort - shows when Stripe adoption increased
+            accounts_pivot = cohort_gateway.pivot(index='Cohort Year', columns='Gateway', values='Accounts').fillna(0)
+            accounts_pivot['Total'] = accounts_pivot.sum(axis=1)
+
+            for col in accounts_pivot.columns:
+                if col != 'Total':
+                    accounts_pivot[f'{col} %'] = (accounts_pivot[col] / accounts_pivot['Total'] * 100).round(1)
+
+            accounts_pivot = accounts_pivot.sort_index(ascending=False)
+
+            cohort_accounts_file = get_output_path(base_name, 'cohorts', '_gateway_accounts_by_cohort.csv')
+            accounts_pivot.to_csv(cohort_accounts_file, float_format='%.0f')
+            print(f"  ✓ Gateway accounts by cohort saved to: {cohort_accounts_file}")
+            output_files['cohort_accounts'] = cohort_accounts_file
+
+    # === GATEWAY BY INDUSTRY x REGION (DETAILED) ===
+    if 'Industry' in booking_df.columns and 'Region' in booking_df.columns:
+        detail_df = booking_df[
+            booking_df['Industry'].notna() &
+            booking_df['Region'].notna() &
+            (booking_df['Region'] != 'Unknown')
+        ]
+
+        if len(detail_df) > 0:
+            # Aggregate by industry, region and gateway
+            detail_agg = detail_df.groupby(['Industry', 'Region', 'Gateway']).agg({
+                'TotalFees': 'sum',
+                'AccountId': 'nunique'
+            }).reset_index()
+            detail_agg.columns = ['Industry', 'Region', 'Gateway', 'Fees', 'Accounts']
+
+            # Calculate totals for percentage
+            industry_region_totals = detail_agg.groupby(['Industry', 'Region'])['Fees'].sum().reset_index()
+            industry_region_totals.columns = ['Industry', 'Region', 'Total Fees']
+
+            detail_agg = detail_agg.merge(industry_region_totals, on=['Industry', 'Region'])
+            detail_agg['Gateway %'] = (detail_agg['Fees'] / detail_agg['Total Fees'] * 100).round(1)
+
+            # Sort by industry, region, then fees
+            detail_agg = detail_agg.sort_values(['Industry', 'Region', 'Fees'], ascending=[True, True, False])
+
+            detail_file = get_output_path(base_name, 'industry', '_gateway_by_industry_region.csv')
+            detail_agg.to_csv(detail_file, index=False, float_format='%.2f')
+            print(f"  ✓ Gateway by industry x region saved to: {detail_file}")
+            output_files['industry_region'] = detail_file
+
+    # === OVERALL SUMMARY ===
+    overall = booking_df.groupby('Gateway').agg({
+        'TotalFees': 'sum',
+        'PaymentReceived': 'sum',
+        'TicketQuantity': 'sum',
+        'AccountId': 'nunique',
+        'EventId': 'nunique'
+    }).reset_index()
+    overall.columns = ['Gateway', 'Total Fees', 'Total Revenue', 'Total Tickets', 'Unique Accounts', 'Unique Events']
+
+    total_fees = overall['Total Fees'].sum()
+    overall['Fees %'] = (overall['Total Fees'] / total_fees * 100).round(1)
+    overall = overall.sort_values('Total Fees', ascending=False)
+
+    summary_file = get_output_path(base_name, 'planning', '_gateway_summary.csv')
+    overall.to_csv(summary_file, index=False, float_format='%.2f')
+    print(f"  ✓ Gateway summary saved to: {summary_file}")
+    output_files['summary'] = summary_file
+
+    return output_files
+
+
 def generate_expansion_revenue_analysis_csv(booking_df, accounts_df, output_file):
     """
     Analyse revenue growth breakdown: new accounts vs existing account expansion.
@@ -2342,12 +2677,33 @@ def generate_expansion_revenue_analysis_csv(booking_df, accounts_df, output_file
 
     booking_df['Revenue Type'] = booking_df.apply(classify_revenue, axis=1)
 
+    # Add sales channel classification
+    booking_df = add_sales_channel_column(booking_df)
+    has_sales_channel = 'Sales_Channel' in booking_df.columns
+
     # Aggregate by month and revenue type
-    monthly_breakdown = booking_df.groupby(['YearMonth', 'Revenue Type']).agg({
+    agg_dict = {
         'PaymentReceived': 'sum',
         'AccountId': 'nunique'
-    }).reset_index()
-    monthly_breakdown.columns = ['YearMonth', 'Revenue Type', 'Revenue', 'Accounts']
+    }
+    if has_sales_channel and 'TotalFees' in booking_df.columns:
+        agg_dict['TotalFees'] = 'sum'
+        agg_dict['TicketQuantity'] = 'sum'
+
+    monthly_breakdown = booking_df.groupby(['YearMonth', 'Revenue Type']).agg(agg_dict).reset_index()
+    monthly_breakdown.columns = ['YearMonth', 'Revenue Type', 'Revenue', 'Accounts'] + \
+                                 (['Fees', 'Tickets'] if has_sales_channel and 'TotalFees' in booking_df.columns else [])
+
+    # Add Box Office breakdown if available
+    if has_sales_channel:
+        bo_breakdown = booking_df[booking_df['Sales_Channel'] == 'Box Office'].groupby(['YearMonth', 'Revenue Type']).agg({
+            'TicketQuantity': 'sum',
+            'TotalFees': 'sum'
+        }).reset_index()
+        bo_breakdown.columns = ['YearMonth', 'Revenue Type', 'Box Office Tickets', 'Box Office Fees']
+        monthly_breakdown = monthly_breakdown.merge(bo_breakdown, on=['YearMonth', 'Revenue Type'], how='left')
+        monthly_breakdown['Box Office Tickets'] = monthly_breakdown['Box Office Tickets'].fillna(0).astype(int)
+        monthly_breakdown['Box Office Fees'] = monthly_breakdown['Box Office Fees'].fillna(0)
 
     # Pivot for easier reading
     revenue_pivot = monthly_breakdown.pivot(index='YearMonth', columns='Revenue Type', values='Revenue').fillna(0)
@@ -2448,6 +2804,10 @@ def generate_cohort_revenue_curves_csv(booking_df, accounts_df, output_file):
     # Cap at 24 months for cleaner analysis
     booking_df = booking_df[booking_df['MonthOfLife'] <= 24]
 
+    # Add sales channel classification
+    booking_df = add_sales_channel_column(booking_df)
+    has_sales_channel = 'Sales_Channel' in booking_df.columns
+
     # Aggregate by cohort and month-of-life
     cohort_curves = booking_df.groupby(['CohortMonth', 'MonthOfLife']).agg({
         'PaymentReceived': 'sum',
@@ -2455,6 +2815,23 @@ def generate_cohort_revenue_curves_csv(booking_df, accounts_df, output_file):
         'AccountId': 'nunique'
     }).reset_index()
     cohort_curves.columns = ['Cohort', 'Month of Life', 'Revenue', 'Tickets', 'Active Accounts']
+
+    # Add Box Office metrics if available
+    if has_sales_channel:
+        bo_curves = booking_df[booking_df['Sales_Channel'] == 'Box Office'].groupby(['CohortMonth', 'MonthOfLife']).agg({
+            'TicketQuantity': 'sum',
+            'TotalFees': 'sum'
+        }).reset_index()
+        bo_curves.columns = ['Cohort', 'Month of Life', 'Box Office Tickets', 'Box Office Fees']
+
+        cohort_curves = cohort_curves.merge(bo_curves, on=['Cohort', 'Month of Life'], how='left')
+        cohort_curves['Box Office Tickets'] = cohort_curves['Box Office Tickets'].fillna(0).astype(int)
+        cohort_curves['Box Office Fees'] = cohort_curves['Box Office Fees'].fillna(0)
+        cohort_curves['Box Office Pct Tickets'] = np.where(
+            cohort_curves['Tickets'] > 0,
+            round(cohort_curves['Box Office Tickets'] / cohort_curves['Tickets'] * 100, 1),
+            0
+        )
 
     # Get cohort sizes (total accounts in each cohort)
     cohort_sizes = accounts_df.groupby('CohortMonth').size().reset_index()
@@ -3938,6 +4315,293 @@ def generate_event_metrics_analysis_csv(booking_df: pd.DataFrame, accounts_df: p
     return output_files
 
 
+def generate_boxoffice_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                     output_file: str) -> dict:
+    """
+    Generate Box Office sales analysis (in-person vs online transactions).
+
+    Box Office transactions are identified by PaymentType:
+    - 'Card Present' - In-person card payments at the door
+    - 'Cash' - Cash payments at the door
+    - All other payment types are considered online sales
+
+    Outputs:
+    - Summary by channel (Box Office vs Online)
+    - Industry breakdown by channel
+    - Monthly trends by channel
+    - Account reliance on Box Office
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating Box Office sales analysis...")
+
+    # Check if PaymentType column exists
+    if 'PaymentType' not in booking_df.columns:
+        print("    ⚠ PaymentType column not found - skipping Box Office analysis")
+        return output_files
+
+    # Prepare data
+    booking_df = booking_df.copy()
+    booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'])
+    booking_df['Year'] = booking_df['TransactionDate'].dt.year
+    booking_df['Month'] = booking_df['TransactionDate'].dt.month
+    booking_df['YearMonth'] = booking_df['TransactionDate'].dt.to_period('M').astype(str)
+
+    # Classify sales channel using shared helper
+    booking_df = add_sales_channel_column(booking_df)
+
+    # Calculate TotalFees if not present
+    if 'TotalFees' not in booking_df.columns:
+        fee_cols = ['BookingFee', 'CardFee', 'TicketFee', 'ProcessingFee']
+        available_fees = [col for col in fee_cols if col in booking_df.columns]
+        booking_df['TotalFees'] = booking_df[available_fees].fillna(0).sum(axis=1)
+
+    # === OUTPUT 1: Summary by Channel ===
+    channel_summary = booking_df.groupby('Sales_Channel').agg({
+        'BookingTransactionId': 'count',
+        'TicketQuantity': 'sum',
+        'PaymentReceived': 'sum',
+        'TotalFees': 'sum',
+        'AccountId': 'nunique',
+        'EventId': 'nunique'
+    }).reset_index()
+
+    channel_summary.columns = [
+        'Sales_Channel', 'Transactions', 'Tickets', 'Revenue',
+        'Fees', 'Unique_Accounts', 'Unique_Events'
+    ]
+
+    total_transactions = channel_summary['Transactions'].sum()
+    total_tickets = channel_summary['Tickets'].sum()
+    total_revenue = channel_summary['Revenue'].sum()
+    total_fees = channel_summary['Fees'].sum()
+
+    channel_summary['Pct_Transactions'] = round(channel_summary['Transactions'] / total_transactions * 100, 1)
+    channel_summary['Pct_Tickets'] = round(channel_summary['Tickets'] / total_tickets * 100, 1)
+    channel_summary['Pct_Revenue'] = round(channel_summary['Revenue'] / total_revenue * 100, 1) if total_revenue > 0 else 0
+    channel_summary['Pct_Fees'] = round(channel_summary['Fees'] / total_fees * 100, 1) if total_fees > 0 else 0
+    channel_summary['Avg_Tickets_Per_Transaction'] = round(channel_summary['Tickets'] / channel_summary['Transactions'], 2)
+    channel_summary['Avg_Revenue_Per_Transaction'] = round(channel_summary['Revenue'] / channel_summary['Transactions'], 2)
+
+    summary_file = get_output_path(base_name, 'boxoffice', '_channel_summary.csv')
+    channel_summary.to_csv(summary_file, index=False, float_format='%.2f')
+    output_files['channel_summary'] = summary_file
+    print(f"    ✓ Channel summary: {summary_file}")
+
+    # === OUTPUT 2: Industry Breakdown by Channel ===
+    industry_channel = booking_df.groupby(['Industry', 'Sales_Channel']).agg({
+        'BookingTransactionId': 'count',
+        'TicketQuantity': 'sum',
+        'PaymentReceived': 'sum',
+        'TotalFees': 'sum'
+    }).reset_index()
+
+    industry_channel.columns = ['Industry', 'Sales_Channel', 'Transactions', 'Tickets', 'Revenue', 'Fees']
+
+    # Pivot to show Box Office vs Online side by side
+    industry_pivot = industry_channel.pivot(index='Industry', columns='Sales_Channel',
+                                            values=['Transactions', 'Tickets', 'Revenue', 'Fees'])
+    industry_pivot.columns = [f'{col[1]}_{col[0]}' for col in industry_pivot.columns]
+    industry_pivot = industry_pivot.reset_index().fillna(0)
+
+    # Calculate Box Office percentage
+    for metric in ['Transactions', 'Tickets', 'Revenue', 'Fees']:
+        bo_col = f'Box Office_{metric}'
+        online_col = f'Online_{metric}'
+        if bo_col in industry_pivot.columns and online_col in industry_pivot.columns:
+            total = industry_pivot[bo_col] + industry_pivot[online_col]
+            industry_pivot[f'Box_Office_Pct_{metric}'] = np.where(
+                total > 0,
+                round(industry_pivot[bo_col] / total * 100, 1),
+                0
+            )
+
+    # Sort by Box Office percentage of fees
+    if 'Box_Office_Pct_Fees' in industry_pivot.columns:
+        industry_pivot = industry_pivot.sort_values('Box_Office_Pct_Fees', ascending=False)
+
+    industry_file = get_output_path(base_name, 'boxoffice', '_industry_channel_breakdown.csv')
+    industry_pivot.to_csv(industry_file, index=False, float_format='%.2f')
+    output_files['industry_channel_breakdown'] = industry_file
+    print(f"    ✓ Industry channel breakdown: {industry_file}")
+
+    # === OUTPUT 3: Monthly Trends by Channel ===
+    monthly_channel = booking_df.groupby(['YearMonth', 'Sales_Channel']).agg({
+        'BookingTransactionId': 'count',
+        'TicketQuantity': 'sum',
+        'PaymentReceived': 'sum',
+        'TotalFees': 'sum'
+    }).reset_index()
+
+    monthly_channel.columns = ['YearMonth', 'Sales_Channel', 'Transactions', 'Tickets', 'Revenue', 'Fees']
+
+    # Pivot for time series view
+    monthly_pivot = monthly_channel.pivot(index='YearMonth', columns='Sales_Channel',
+                                           values=['Transactions', 'Tickets', 'Revenue', 'Fees'])
+    monthly_pivot.columns = [f'{col[1]}_{col[0]}' for col in monthly_pivot.columns]
+    monthly_pivot = monthly_pivot.reset_index().fillna(0)
+
+    # Calculate Box Office percentage per month
+    for metric in ['Transactions', 'Tickets', 'Revenue', 'Fees']:
+        bo_col = f'Box Office_{metric}'
+        online_col = f'Online_{metric}'
+        if bo_col in monthly_pivot.columns and online_col in monthly_pivot.columns:
+            total = monthly_pivot[bo_col] + monthly_pivot[online_col]
+            monthly_pivot[f'Box_Office_Pct_{metric}'] = np.where(
+                total > 0,
+                round(monthly_pivot[bo_col] / total * 100, 1),
+                0
+            )
+
+    monthly_file = get_output_path(base_name, 'boxoffice', '_monthly_trends.csv')
+    monthly_pivot.to_csv(monthly_file, index=False, float_format='%.2f')
+    output_files['monthly_trends'] = monthly_file
+    print(f"    ✓ Monthly trends: {monthly_file}")
+
+    # === OUTPUT 4: Account Reliance on Box Office ===
+    account_channel = booking_df.groupby(['AccountId', 'Sales_Channel']).agg({
+        'TicketQuantity': 'sum',
+        'PaymentReceived': 'sum',
+        'TotalFees': 'sum'
+    }).reset_index()
+
+    account_channel.columns = ['AccountId', 'Sales_Channel', 'Tickets', 'Revenue', 'Fees']
+
+    # Pivot to get Box Office vs Online per account
+    account_pivot = account_channel.pivot(index='AccountId', columns='Sales_Channel',
+                                          values=['Tickets', 'Revenue', 'Fees'])
+    account_pivot.columns = [f'{col[1]}_{col[0]}' for col in account_pivot.columns]
+    account_pivot = account_pivot.reset_index().fillna(0)
+
+    # Calculate Box Office percentage per account
+    for metric in ['Tickets', 'Revenue', 'Fees']:
+        bo_col = f'Box Office_{metric}'
+        online_col = f'Online_{metric}'
+        if bo_col in account_pivot.columns and online_col in account_pivot.columns:
+            total = account_pivot[bo_col] + account_pivot[online_col]
+            account_pivot[f'Box_Office_Pct_{metric}'] = np.where(
+                total > 0,
+                round(account_pivot[bo_col] / total * 100, 1),
+                0
+            )
+
+    # Classify accounts by Box Office reliance
+    def classify_boxoffice_reliance(pct):
+        if pct >= 80:
+            return 'Heavy Box Office (80%+)'
+        elif pct >= 50:
+            return 'Majority Box Office (50-79%)'
+        elif pct >= 20:
+            return 'Mixed Channel (20-49%)'
+        elif pct > 0:
+            return 'Primarily Online (1-19%)'
+        else:
+            return 'Online Only (0%)'
+
+    if 'Box_Office_Pct_Fees' in account_pivot.columns:
+        account_pivot['Box_Office_Reliance'] = account_pivot['Box_Office_Pct_Fees'].apply(classify_boxoffice_reliance)
+
+        # Merge with account info
+        account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Account Id'
+        account_info = accounts_df[[account_id_col, 'Industry']].copy()
+        if account_id_col != 'AccountId':
+            account_info = account_info.rename(columns={account_id_col: 'AccountId'})
+        account_info['AccountId'] = pd.to_numeric(account_info['AccountId'], errors='coerce')
+
+        account_pivot = account_pivot.merge(account_info, on='AccountId', how='left')
+
+        # Summary by reliance category
+        reliance_summary = account_pivot.groupby('Box_Office_Reliance').agg({
+            'AccountId': 'count',
+            'Box Office_Fees': 'sum' if 'Box Office_Fees' in account_pivot.columns else None,
+            'Online_Fees': 'sum' if 'Online_Fees' in account_pivot.columns else None
+        })
+
+        # Clean up columns
+        reliance_summary = reliance_summary.reset_index()
+        if 'AccountId' in reliance_summary.columns:
+            reliance_summary = reliance_summary.rename(columns={'AccountId': 'Account_Count'})
+
+        reliance_summary['Pct_Accounts'] = round(
+            reliance_summary['Account_Count'] / reliance_summary['Account_Count'].sum() * 100, 1
+        )
+
+        # Order categories logically
+        category_order = [
+            'Online Only (0%)',
+            'Primarily Online (1-19%)',
+            'Mixed Channel (20-49%)',
+            'Majority Box Office (50-79%)',
+            'Heavy Box Office (80%+)'
+        ]
+        reliance_summary['Order'] = reliance_summary['Box_Office_Reliance'].apply(
+            lambda x: category_order.index(x) if x in category_order else 99
+        )
+        reliance_summary = reliance_summary.sort_values('Order').drop('Order', axis=1)
+
+        reliance_file = get_output_path(base_name, 'boxoffice', '_account_reliance.csv')
+        reliance_summary.to_csv(reliance_file, index=False, float_format='%.2f')
+        output_files['account_reliance'] = reliance_file
+        print(f"    ✓ Account reliance: {reliance_file}")
+
+        # === OUTPUT 5: Box Office Reliance by Industry ===
+        industry_reliance = account_pivot.groupby(['Industry', 'Box_Office_Reliance']).size().unstack(fill_value=0)
+
+        # Calculate percentages within each industry
+        industry_reliance_pct = industry_reliance.div(industry_reliance.sum(axis=1), axis=0) * 100
+
+        # Reorder columns
+        cols_order = [c for c in category_order if c in industry_reliance.columns]
+        industry_reliance = industry_reliance[cols_order]
+        industry_reliance_pct = industry_reliance_pct[cols_order]
+
+        # Add percentage columns
+        for col in cols_order:
+            industry_reliance[f'{col}_Pct'] = round(industry_reliance_pct[col], 1)
+
+        industry_reliance = industry_reliance.reset_index()
+
+        industry_reliance_file = get_output_path(base_name, 'boxoffice', '_industry_reliance.csv')
+        industry_reliance.to_csv(industry_reliance_file, index=False, float_format='%.2f')
+        output_files['industry_reliance'] = industry_reliance_file
+        print(f"    ✓ Industry reliance: {industry_reliance_file}")
+
+    # === OUTPUT 6: Box Office Payment Type Details ===
+    # Show breakdown of Card Present vs Cash
+    boxoffice_only = booking_df[booking_df['Sales_Channel'] == 'Box Office']
+    if len(boxoffice_only) > 0:
+        payment_detail = boxoffice_only.groupby('PaymentType').agg({
+            'BookingTransactionId': 'count',
+            'TicketQuantity': 'sum',
+            'PaymentReceived': 'sum',
+            'TotalFees': 'sum'
+        }).reset_index()
+
+        payment_detail.columns = ['Payment_Type', 'Transactions', 'Tickets', 'Revenue', 'Fees']
+        payment_detail['Avg_Tickets_Per_Transaction'] = round(
+            payment_detail['Tickets'] / payment_detail['Transactions'], 2
+        )
+        payment_detail['Avg_Revenue_Per_Transaction'] = round(
+            payment_detail['Revenue'] / payment_detail['Transactions'], 2
+        )
+
+        payment_file = get_output_path(base_name, 'boxoffice', '_payment_type_breakdown.csv')
+        payment_detail.to_csv(payment_file, index=False, float_format='%.2f')
+        output_files['payment_type_breakdown'] = payment_file
+        print(f"    ✓ Payment type breakdown: {payment_file}")
+
+    return output_files
+
+
 def generate_ppc_cohort_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
                                       output_file: str) -> dict:
     """
@@ -4396,6 +5060,12 @@ def main():
     print("  Analysing seasonality patterns...")
     generate_seasonality_analysis_csv(booking_df, accounts_df, output_file)
 
+    # Gateway split analysis (Stripe Connect vs TryBooking Gateway)
+    print("  Analysing gateway split...")
+    gateway_files = generate_gateway_split_analysis_csv(booking_df, accounts_df, output_file)
+    if gateway_files:
+        print(f"  ✓ Gateway analysis: {len(gateway_files)} reports generated")
+
     # Expansion revenue analysis (new vs existing account growth)
     print("  Analysing expansion revenue...")
     generate_expansion_revenue_analysis_csv(booking_df, accounts_df, output_file)
@@ -4430,6 +5100,11 @@ def main():
     ppc_files = generate_ppc_cohort_analysis_csv(booking_df, accounts_df, output_file)
     if ppc_files:
         print(f"  ✓ PPC cohort analysis: {len(ppc_files)} reports generated")
+
+    # Box Office sales analysis (Card Present/Cash vs Online)
+    boxoffice_files = generate_boxoffice_analysis_csv(booking_df, accounts_df, output_file)
+    if boxoffice_files:
+        print(f"  ✓ Box Office analysis: {len(boxoffice_files)} reports generated")
 
     print(f"\n=== Report Complete ===")
 

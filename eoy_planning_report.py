@@ -4719,7 +4719,8 @@ def generate_ppc_cohort_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.D
         # Import GA4 libraries
         from google.analytics.data_v1beta import BetaAnalyticsDataClient
         from google.analytics.data_v1beta.types import (
-            RunReportRequest, DateRange, Dimension, Metric
+            RunReportRequest, DateRange, Dimension, Metric,
+            FilterExpression, FilterExpressionList, Filter
         )
         from google.oauth2 import service_account
 
@@ -4741,16 +4742,44 @@ def generate_ppc_cohort_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.D
         print(f"    Tracking {len(campaign_names)} PPC campaigns")
 
         # Fetch GA4 conversion data (from June 2024 onwards)
+        # Use firstUser dimensions for accurate acquisition attribution
         start_date = "2024-06-01"
         end_date = datetime.now(UK_TZ).strftime("%Y-%m-%d")
+
+        # Build server-side filter for success pages (more efficient)
+        page_filter = FilterExpression(
+            filter=Filter(
+                field_name="pagePath",
+                string_filter=Filter.StringFilter(
+                    match_type=Filter.StringFilter.MatchType.CONTAINS,
+                    value="/uk/event/",
+                    case_sensitive=False
+                )
+            )
+        )
+        success_filter = FilterExpression(
+            filter=Filter(
+                field_name="pagePath",
+                string_filter=Filter.StringFilter(
+                    match_type=Filter.StringFilter.MatchType.CONTAINS,
+                    value="/success",
+                    case_sensitive=False
+                )
+            )
+        )
+        dimension_filter = FilterExpression(
+            and_group=FilterExpressionList(
+                expressions=[page_filter, success_filter]
+            )
+        )
 
         request = RunReportRequest(
             property=f"properties/{ga4_property}",
             dimensions=[
                 Dimension(name="pagePath"),
-                Dimension(name="sessionCampaignName"),
-                Dimension(name="sessionSource"),
-                Dimension(name="sessionMedium"),
+                Dimension(name="firstUserCampaignName"),
+                Dimension(name="firstUserSource"),
+                Dimension(name="firstUserMedium"),
                 Dimension(name="date"),
             ],
             metrics=[
@@ -4758,9 +4787,25 @@ def generate_ppc_cohort_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.D
                 Metric(name="totalUsers"),
             ],
             date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
+            dimension_filter=dimension_filter,
         )
 
         response = ga_client.run_report(request)
+
+        # Helper function to check if campaign is tracked (matches ppc_reporting.py logic)
+        def is_tracked_campaign(campaign_name: str, source: str, medium: str) -> bool:
+            """Check if a campaign should be tracked based on exact matching."""
+            if not campaign_name or campaign_name == '(not set)':
+                return False
+            for campaign_config in campaigns:
+                if campaign_config['campaign_name'] == campaign_name:
+                    # If source/medium are specified in config, they must also match
+                    if 'source' in campaign_config and source and campaign_config['source'] != source:
+                        continue
+                    if 'medium' in campaign_config and medium and campaign_config['medium'] != medium:
+                        continue
+                    return True
+            return False
 
         # Parse response
         ga_data = []
@@ -4773,9 +4818,9 @@ def generate_ppc_cohort_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.D
             medium = row.dimension_values[3].value
             date_str = row.dimension_values[4].value
 
-            # Extract event ID from success page
+            # Extract event ID from success page and validate campaign
             match = re.search(pattern, page_path, re.IGNORECASE)
-            if match and campaign in campaign_names:
+            if match and is_tracked_campaign(campaign, source, medium):
                 event_id = int(match.group(1))
                 ga_data.append({
                     'EventId': event_id,

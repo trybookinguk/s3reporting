@@ -5211,41 +5211,39 @@ def generate_outreach_calendar_csv(booking_df: pd.DataFrame, output_file: str) -
     events['LeadDays'] = (events['EventDate'] - events['TransactionDate']).dt.days
     events = events[events['LeadDays'] >= 0]
 
-    # Extract keywords
+    # Extract keywords and explode to one row per keyword
     events['Keywords'] = events['EventName'].apply(extract_keywords)
+    events_exploded = events.explode('Keywords')
+    events_exploded = events_exploded[events_exploded['Keywords'].notna()]
+    events_exploded['Keywords'] = events_exploded['Keywords'].astype(str)
 
-    # Build keyword calendar
+    # Aggregate by keyword using vectorised operations
+    keyword_agg = events_exploded.groupby('Keywords').agg({
+        'EventMonth': list,
+        'LeadDays': lambda x: [v for v in x if pd.notna(v)],
+        'TotalFees': 'sum'
+    }).reset_index()
+    keyword_agg.columns = ['Keyword', 'months', 'lead_days', 'fees']
+
+    # Get top 50 keywords by fees
+    keyword_agg = keyword_agg.nlargest(50, 'fees')
     calendar_data = []
-    keyword_stats = {}
 
-    for _, row in events.iterrows():
-        for keyword in row['Keywords']:
-            if keyword not in keyword_stats:
-                keyword_stats[keyword] = {
-                    'months': [],
-                    'lead_days': [],
-                    'fees': 0
-                }
-            keyword_stats[keyword]['months'].append(row['EventMonth'])
-            if pd.notna(row['LeadDays']):
-                keyword_stats[keyword]['lead_days'].append(row['LeadDays'])
-            keyword_stats[keyword]['fees'] += row['TotalFees'] if pd.notna(row['TotalFees']) else 0
+    for _, row in keyword_agg.iterrows():
+        keyword = row['Keyword']
+        months = row['months']
+        lead_days_list = row['lead_days']
 
-    # Build calendar entries for top 50 keywords
-    top_keywords = sorted(keyword_stats.keys(), key=lambda k: keyword_stats[k]['fees'], reverse=True)[:50]
-
-    for keyword in top_keywords:
-        stats = keyword_stats[keyword]
-        if not stats['months'] or not stats['lead_days']:
+        if not months or not lead_days_list:
             continue
 
         # Find peak month(s)
-        month_counts = pd.Series(stats['months']).value_counts()
+        month_counts = pd.Series(months).value_counts()
         peak_month = int(month_counts.index[0])
 
         # Calculate recommended lead time (75th percentile)
-        lead_days = sorted(stats['lead_days'])
-        recommended_lead = int(np.percentile(lead_days, 75)) if lead_days else 30
+        lead_days_sorted = sorted(lead_days_list)
+        recommended_lead = int(np.percentile(lead_days_sorted, 75)) if lead_days_sorted else 30
 
         # Calculate outreach month
         outreach_month = peak_month - (recommended_lead // 30)
@@ -5260,8 +5258,8 @@ def generate_outreach_calendar_csv(booking_df: pd.DataFrame, output_file: str) -
             'Recommended Lead (weeks)': round(recommended_lead / 7),
             'Start Outreach Month': calendar.month_name[outreach_month],
             'Outreach Month Num': outreach_month,
-            'Total Fees': round(stats['fees'], 2),
-            'Event Count': len(stats['months'])
+            'Total Fees': round(row['fees'], 2),
+            'Event Count': len(months)
         })
 
     calendar_df = pd.DataFrame(calendar_data)

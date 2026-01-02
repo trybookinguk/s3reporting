@@ -65,6 +65,7 @@ OUTPUT_FOLDERS = {
     'planning': 'planning',
     'seasonality': 'seasonality',
     'industry': 'industry',
+    'ppc': 'ppc',
     'cohorts': 'cohorts',
     'geography': 'geography',
     'keywords': 'keywords',
@@ -3937,6 +3938,331 @@ def generate_event_metrics_analysis_csv(booking_df: pd.DataFrame, accounts_df: p
     return output_files
 
 
+def generate_ppc_cohort_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                      output_file: str) -> dict:
+    """
+    Generate PPC cohort analysis using GA4 conversion data.
+
+    Identifies accounts acquired via PPC campaigns and analyses their:
+    - LTV compared to organic accounts
+    - Maturation curves (time to first event, tier progression)
+    - Campaign ROI by industry segment
+
+    Requires GA4_SERVICE_ACCOUNT_KEY and GA4_PROPERTY_ID environment variables.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    import os
+    import json
+    import re
+
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    # Check for GA4 credentials
+    ga4_key = os.environ.get('GA4_SERVICE_ACCOUNT_KEY')
+    ga4_property = os.environ.get('GA4_PROPERTY_ID')
+
+    if not ga4_key or not ga4_property:
+        print("  ⚠ PPC analysis skipped: GA4 credentials not configured")
+        print("    Set GA4_SERVICE_ACCOUNT_KEY and GA4_PROPERTY_ID to enable")
+        return output_files
+
+    print("  Generating PPC cohort analysis...")
+
+    try:
+        # Import GA4 libraries
+        from google.analytics.data_v1beta import BetaAnalyticsDataClient
+        from google.analytics.data_v1beta.types import (
+            RunReportRequest, DateRange, Dimension, Metric
+        )
+        from google.oauth2 import service_account
+
+        # Initialize GA4 client
+        key_data = json.loads(ga4_key)
+        credentials = service_account.Credentials.from_service_account_info(
+            key_data,
+            scopes=['https://www.googleapis.com/auth/analytics.readonly']
+        )
+        ga_client = BetaAnalyticsDataClient(credentials=credentials)
+
+        # Load campaign configuration
+        config_path = os.path.join(os.path.dirname(__file__), 'config', 'ppc_campaigns.json')
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+            campaigns = [c for c in config['campaigns'] if c.get('active', True)]
+
+        campaign_names = {c['campaign_name'] for c in campaigns}
+        print(f"    Tracking {len(campaign_names)} PPC campaigns")
+
+        # Fetch GA4 conversion data (from June 2024 onwards)
+        start_date = "2024-06-01"
+        end_date = datetime.now(UK_TZ).strftime("%Y-%m-%d")
+
+        request = RunReportRequest(
+            property=f"properties/{ga4_property}",
+            dimensions=[
+                Dimension(name="pagePath"),
+                Dimension(name="sessionCampaignName"),
+                Dimension(name="sessionSource"),
+                Dimension(name="sessionMedium"),
+                Dimension(name="date"),
+            ],
+            metrics=[
+                Metric(name="sessions"),
+                Metric(name="totalUsers"),
+            ],
+            date_ranges=[DateRange(start_date=start_date, end_date=end_date)],
+        )
+
+        response = ga_client.run_report(request)
+
+        # Parse response
+        ga_data = []
+        pattern = r'/uk/event/(\d+)/success'
+
+        for row in response.rows:
+            page_path = row.dimension_values[0].value
+            campaign = row.dimension_values[1].value
+            source = row.dimension_values[2].value
+            medium = row.dimension_values[3].value
+            date_str = row.dimension_values[4].value
+
+            # Extract event ID from success page
+            match = re.search(pattern, page_path, re.IGNORECASE)
+            if match and campaign in campaign_names:
+                event_id = int(match.group(1))
+                ga_data.append({
+                    'EventId': event_id,
+                    'campaign': campaign,
+                    'source': source,
+                    'medium': medium,
+                    'conversion_date': pd.to_datetime(date_str, format='%Y%m%d'),
+                    'sessions': int(row.metric_values[0].value),
+                    'users': int(row.metric_values[1].value),
+                })
+
+        if not ga_data:
+            print("    ⚠ No PPC conversions found in GA4 data")
+            return output_files
+
+        ga_df = pd.DataFrame(ga_data)
+        print(f"    Found {len(ga_df)} PPC conversion records")
+
+        # Get unique PPC event IDs
+        ppc_event_ids = set(ga_df['EventId'].unique())
+
+        # Match to booking data to get account IDs
+        booking_df = booking_df.copy()
+        booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'])
+
+        # Get accounts that have PPC events
+        ppc_bookings = booking_df[booking_df['EventId'].isin(ppc_event_ids)].copy()
+
+        if ppc_bookings.empty:
+            print("    ⚠ No matching bookings found for PPC events")
+            return output_files
+
+        ppc_account_ids = set(ppc_bookings['AccountId'].unique())
+        print(f"    Matched {len(ppc_account_ids)} accounts with PPC conversions")
+
+        # Prepare account data
+        accounts_df = accounts_df.copy()
+        accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'])
+        account_id_col = 'Account Id' if 'Account Id' in accounts_df.columns else 'AccountId'
+
+        # Add PPC flag to accounts
+        accounts_df['Is_PPC'] = accounts_df[account_id_col].isin(ppc_account_ids)
+
+        # Add region
+        if 'Postcode' in accounts_df.columns:
+            postcode_areas = extract_postcode_areas_vectorized(accounts_df['Postcode'])
+            accounts_df['Region'] = get_regions_vectorized(postcode_areas)
+        else:
+            accounts_df['Region'] = 'Unknown'
+
+        # === ANALYSIS 1: PPC vs Organic LTV Comparison ===
+        # Calculate 24-month LTV for both groups
+        account_created = accounts_df.set_index(account_id_col)['DateTimeCreated'].to_dict()
+        account_ppc = accounts_df.set_index(account_id_col)['Is_PPC'].to_dict()
+        account_industry = accounts_df.set_index(account_id_col)['Industry'].to_dict()
+
+        booking_df['AccountCreated'] = booking_df['AccountId'].map(account_created)
+        booking_df['Is_PPC'] = booking_df['AccountId'].map(account_ppc)
+        booking_df['DaysSinceCreation'] = (booking_df['TransactionDate'] - booking_df['AccountCreated']).dt.days
+
+        # Filter to first 24 months
+        booking_24m = booking_df[
+            (booking_df['DaysSinceCreation'] >= 0) &
+            (booking_df['DaysSinceCreation'] <= 730)
+        ].copy()
+
+        # Calculate LTV by acquisition channel
+        ltv_by_channel = booking_24m.groupby(['AccountId', 'Is_PPC']).agg({
+            'BookingFee': 'sum',
+            'CardFee': 'sum',
+            'TicketFee': 'sum',
+            'ProcessingFee': 'sum',
+            'TicketQuantity': 'sum',
+            'PaymentReceived': 'sum',
+            'EventId': 'nunique',
+        }).reset_index()
+
+        ltv_by_channel['Total_Fees_24m'] = (
+            ltv_by_channel['BookingFee'] + ltv_by_channel['CardFee'] +
+            ltv_by_channel['TicketFee'] + ltv_by_channel['ProcessingFee']
+        )
+
+        # Summarise by channel
+        channel_summary = ltv_by_channel.groupby('Is_PPC').agg({
+            'AccountId': 'count',
+            'Total_Fees_24m': ['sum', 'mean', 'median'],
+            'PaymentReceived': ['sum', 'mean'],
+            'EventId': ['sum', 'mean'],
+        }).reset_index()
+
+        channel_summary.columns = [
+            'Is_PPC', 'Accounts', 'Total_Fees', 'Avg_LTV_24m', 'Median_LTV_24m',
+            'Total_Revenue', 'Avg_Revenue', 'Total_Events', 'Avg_Events'
+        ]
+        channel_summary['Channel'] = channel_summary['Is_PPC'].map({True: 'PPC', False: 'Organic'})
+        channel_summary = channel_summary[['Channel'] + [c for c in channel_summary.columns if c not in ['Is_PPC', 'Channel']]]
+
+        ltv_file = get_output_path(base_name, 'ppc', '_ppc_vs_organic_ltv.csv')
+        channel_summary.to_csv(ltv_file, index=False, float_format='%.2f')
+        output_files['ppc_vs_organic_ltv'] = ltv_file
+        print(f"    ✓ PPC vs Organic LTV: {ltv_file}")
+
+        # === ANALYSIS 2: PPC Account Maturation ===
+        # Track time to first event for PPC accounts
+        ppc_accounts_df = accounts_df[accounts_df['Is_PPC']].copy()
+
+        # Get first event date for each PPC account
+        first_event = ppc_bookings.groupby('AccountId')['TransactionDate'].min().reset_index()
+        first_event.columns = ['AccountId', 'First_Transaction']
+
+        ppc_maturation = ppc_accounts_df.merge(
+            first_event.rename(columns={'AccountId': account_id_col}),
+            on=account_id_col, how='left'
+        )
+
+        ppc_maturation['Days_To_First_Sale'] = (
+            ppc_maturation['First_Transaction'] - ppc_maturation['DateTimeCreated']
+        ).dt.days
+
+        # Maturation summary
+        maturation_stats = pd.DataFrame({
+            'Metric': [
+                'Total PPC Accounts',
+                'Accounts with Sales',
+                'Activation Rate %',
+                'Avg Days to First Sale',
+                'Median Days to First Sale',
+                'Within 7 Days %',
+                'Within 30 Days %',
+                'Within 90 Days %',
+            ],
+            'Value': [
+                len(ppc_maturation),
+                ppc_maturation['First_Transaction'].notna().sum(),
+                round(ppc_maturation['First_Transaction'].notna().sum() / len(ppc_maturation) * 100, 1),
+                round(ppc_maturation['Days_To_First_Sale'].mean(), 1),
+                ppc_maturation['Days_To_First_Sale'].median(),
+                round((ppc_maturation['Days_To_First_Sale'] <= 7).sum() / len(ppc_maturation) * 100, 1),
+                round((ppc_maturation['Days_To_First_Sale'] <= 30).sum() / len(ppc_maturation) * 100, 1),
+                round((ppc_maturation['Days_To_First_Sale'] <= 90).sum() / len(ppc_maturation) * 100, 1),
+            ]
+        })
+
+        maturation_file = get_output_path(base_name, 'ppc', '_ppc_maturation_stats.csv')
+        maturation_stats.to_csv(maturation_file, index=False)
+        output_files['ppc_maturation_stats'] = maturation_file
+        print(f"    ✓ PPC maturation stats: {maturation_file}")
+
+        # === ANALYSIS 3: Campaign ROI by Industry ===
+        # Merge campaign data with account industry
+        ga_with_account = ga_df.merge(
+            ppc_bookings[['EventId', 'AccountId']].drop_duplicates(),
+            on='EventId', how='left'
+        )
+        ga_with_account['Industry'] = ga_with_account['AccountId'].map(account_industry)
+
+        # Get total fees by campaign and industry
+        ppc_fees = ppc_bookings.groupby(['AccountId', 'EventId']).agg({
+            'BookingFee': 'sum',
+            'CardFee': 'sum',
+            'TicketFee': 'sum',
+            'ProcessingFee': 'sum',
+        }).reset_index()
+        ppc_fees['Total_Fees'] = (
+            ppc_fees['BookingFee'] + ppc_fees['CardFee'] +
+            ppc_fees['TicketFee'] + ppc_fees['ProcessingFee']
+        )
+
+        ga_with_fees = ga_with_account.merge(
+            ppc_fees[['EventId', 'Total_Fees']],
+            on='EventId', how='left'
+        )
+
+        # Aggregate by campaign and industry
+        campaign_industry = ga_with_fees.groupby(['campaign', 'Industry']).agg({
+            'EventId': 'nunique',
+            'AccountId': 'nunique',
+            'sessions': 'sum',
+            'Total_Fees': 'sum',
+        }).reset_index()
+
+        campaign_industry.columns = ['Campaign', 'Industry', 'Events', 'Accounts', 'Sessions', 'Total_Fees']
+        campaign_industry['Fees_Per_Account'] = round(
+            campaign_industry['Total_Fees'] / campaign_industry['Accounts'].replace(0, 1), 2
+        )
+        campaign_industry = campaign_industry.sort_values(['Campaign', 'Total_Fees'], ascending=[True, False])
+
+        roi_file = get_output_path(base_name, 'ppc', '_campaign_roi_by_industry.csv')
+        campaign_industry.to_csv(roi_file, index=False, float_format='%.2f')
+        output_files['campaign_roi_by_industry'] = roi_file
+        print(f"    ✓ Campaign ROI by industry: {roi_file}")
+
+        # === ANALYSIS 4: PPC Summary by Campaign ===
+        campaign_summary = ga_with_fees.groupby('campaign').agg({
+            'EventId': 'nunique',
+            'AccountId': 'nunique',
+            'sessions': 'sum',
+            'users': 'sum',
+            'Total_Fees': 'sum',
+        }).reset_index()
+
+        campaign_summary.columns = ['Campaign', 'Unique_Events', 'Unique_Accounts', 'Total_Sessions',
+                                     'Total_Users', 'Total_Fees']
+        campaign_summary['Fees_Per_Account'] = round(
+            campaign_summary['Total_Fees'] / campaign_summary['Unique_Accounts'].replace(0, 1), 2
+        )
+        campaign_summary = campaign_summary.sort_values('Total_Fees', ascending=False)
+
+        summary_file = get_output_path(base_name, 'ppc', '_campaign_summary.csv')
+        campaign_summary.to_csv(summary_file, index=False, float_format='%.2f')
+        output_files['campaign_summary'] = summary_file
+        print(f"    ✓ Campaign summary: {summary_file}")
+
+    except ImportError as e:
+        print(f"    ⚠ PPC analysis skipped: Missing dependency - {e}")
+        print("    Install: pip install google-analytics-data google-auth")
+        return output_files
+    except Exception as e:
+        print(f"    ⚠ PPC analysis error: {e}")
+        import traceback
+        traceback.print_exc()
+        return output_files
+
+    return output_files
+
+
 def main():
     """Main execution function."""
     args = parse_args()
@@ -4099,6 +4425,11 @@ def main():
     event_files = generate_event_metrics_analysis_csv(booking_df, accounts_df, output_file)
     if event_files:
         print(f"  ✓ Event metrics analysis: {len(event_files)} reports generated")
+
+    # PPC cohort analysis (requires GA4 credentials)
+    ppc_files = generate_ppc_cohort_analysis_csv(booking_df, accounts_df, output_file)
+    if ppc_files:
+        print(f"  ✓ PPC cohort analysis: {len(ppc_files)} reports generated")
 
     print(f"\n=== Report Complete ===")
 

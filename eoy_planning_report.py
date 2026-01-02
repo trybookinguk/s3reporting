@@ -2499,7 +2499,29 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     scenarios = scenarios.merge(base_monthly, on='Month', how='left')
     scenarios = scenarios.fillna(0)
 
-    # Calculate scenario targets
+    # === BHAG CALCULATION ===
+    # BHAG: 25,000 cumulative accounts by end of target year
+    bhag_accounts_target = 25000
+    total_accounts_to_date = len(accounts_df)  # Current cumulative total
+
+    # Calculate how many NEW accounts needed in target year to hit BHAG
+    bhag_new_accounts_needed = max(0, bhag_accounts_target - total_accounts_to_date)
+    bhag_accounts_growth_required = round((bhag_new_accounts_needed / base_accounts - 1) * 100, 1) if base_accounts > 0 else 0
+
+    print(f"  BHAG Analysis:")
+    print(f"    Current cumulative accounts: {total_accounts_to_date:,}")
+    print(f"    BHAG target: {bhag_accounts_target:,}")
+    print(f"    New accounts needed in {target_year}: {bhag_new_accounts_needed:,}")
+    print(f"    Required YoY growth vs {base_year}: {bhag_accounts_growth_required}%")
+
+    # Calculate fees-per-new-account to derive fees BHAG
+    fees_per_new_account = base_fees / base_accounts if base_accounts > 0 else 0
+    bhag_fees_target = bhag_new_accounts_needed * fees_per_new_account
+    bhag_fees_growth_required = round((bhag_fees_target / base_fees - 1) * 100, 1) if base_fees > 0 else 0
+
+    print(f"    Derived fees BHAG: £{bhag_fees_target:,.2f} ({bhag_fees_growth_required}% YoY)")
+
+    # Calculate scenario targets (Base + BHAG only)
     for metric, base_val, idx_col in [
         ('Accounts', base_accounts, 'Accounts Index %'),
         ('Revenue', base_revenue, 'Revenue Index %'),
@@ -2507,54 +2529,55 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     ]:
         metric_key = f'Total New {metric}' if metric == 'Accounts' else f'Total Ticket {metric}' if metric == 'Revenue' else f'Total {metric}'
 
+        # Base growth from trend analysis
         if metric_key in recommendations:
             rec = recommendations[metric_key]
-            conservative_growth = rec['conservative'] / 100
             base_growth = rec['recommended'] / 100
-            stretch_growth = rec['stretch'] / 100
         else:
-            # Default growth rates if no historical data
-            conservative_growth = 0.10
-            base_growth = 0.15
-            stretch_growth = 0.25
+            base_growth = 0.15  # Default
+
+        # BHAG growth - back-calculated for accounts, derived for fees
+        if metric == 'Accounts':
+            bhag_growth = bhag_accounts_growth_required / 100
+        elif metric == 'Fees':
+            bhag_growth = bhag_fees_growth_required / 100
+        else:
+            # Revenue scales with accounts (assume same growth as accounts BHAG)
+            bhag_growth = bhag_accounts_growth_required / 100
 
         # Annual targets
-        conservative_annual = base_val * (1 + conservative_growth)
         base_annual = base_val * (1 + base_growth)
-        stretch_annual = base_val * (1 + stretch_growth)
+        bhag_annual = base_val * (1 + bhag_growth)
 
         # Monthly targets using seasonality
-        scenarios[f'{target_year} {metric} Conservative'] = round(conservative_annual * scenarios[idx_col] / 100, 0 if metric == 'Accounts' else 2)
         scenarios[f'{target_year} {metric} Base'] = round(base_annual * scenarios[idx_col] / 100, 0 if metric == 'Accounts' else 2)
-        scenarios[f'{target_year} {metric} Stretch'] = round(stretch_annual * scenarios[idx_col] / 100, 0 if metric == 'Accounts' else 2)
+        scenarios[f'{target_year} {metric} BHAG'] = round(bhag_annual * scenarios[idx_col] / 100, 0 if metric == 'Accounts' else 2)
 
         # YoY variance vs base year
         scenarios[f'{metric} Base vs {base_year} %'] = round(
             (scenarios[f'{target_year} {metric} Base'] - scenarios[f'{base_year} {metric}']) / scenarios[f'{base_year} {metric}'].replace(0, 1) * 100, 1
         )
+        scenarios[f'{metric} BHAG vs {base_year} %'] = round(
+            (scenarios[f'{target_year} {metric} BHAG'] - scenarios[f'{base_year} {metric}']) / scenarios[f'{base_year} {metric}'].replace(0, 1) * 100, 1
+        )
 
     # === ADD CUMULATIVE TOTALS FOR BHAG TRACKING ===
-    # Get total accounts ever created up to base year end
-    total_accounts_to_date = len(accounts_df)  # Current total
+    scenarios['Cumulative Accounts (Base)'] = scenarios[f'{target_year} Accounts Base'].cumsum() + total_accounts_to_date
+    scenarios['Cumulative Accounts (BHAG)'] = scenarios[f'{target_year} Accounts BHAG'].cumsum() + total_accounts_to_date
 
-    # Add cumulative columns
-    scenarios[f'Cumulative Accounts (Base)'] = scenarios[f'{target_year} Accounts Base'].cumsum() + total_accounts_to_date
-    scenarios[f'Cumulative Accounts (Stretch)'] = scenarios[f'{target_year} Accounts Stretch'].cumsum() + total_accounts_to_date
-
-    # BHAG milestone tracking (25,000 accounts)
-    bhag_target = 25000
-    scenarios['BHAG Progress %'] = round(scenarios['Cumulative Accounts (Stretch)'] / bhag_target * 100, 1)
-    scenarios['BHAG Gap'] = bhag_target - scenarios['Cumulative Accounts (Stretch)']
+    # BHAG milestone tracking
+    scenarios['BHAG Progress %'] = round(scenarios['Cumulative Accounts (BHAG)'] / bhag_accounts_target * 100, 1)
+    scenarios['BHAG Gap'] = bhag_accounts_target - scenarios['Cumulative Accounts (BHAG)']
 
     # === SAVE OUTPUTS ===
 
-    # 1. Main scenario model
+    # 1. Main scenario model (Base + BHAG only)
     scenario_cols = [
         'Month', 'Month Name', 'Holiday Type',
-        f'{base_year} Accounts', f'{target_year} Accounts Conservative', f'{target_year} Accounts Base', f'{target_year} Accounts Stretch', f'Accounts Base vs {base_year} %',
-        f'{base_year} Revenue', f'{target_year} Revenue Conservative', f'{target_year} Revenue Base', f'{target_year} Revenue Stretch', f'Revenue Base vs {base_year} %',
-        f'{base_year} Fees', f'{target_year} Fees Conservative', f'{target_year} Fees Base', f'{target_year} Fees Stretch', f'Fees Base vs {base_year} %',
-        'Cumulative Accounts (Base)', 'Cumulative Accounts (Stretch)', 'BHAG Progress %', 'BHAG Gap',
+        f'{base_year} Accounts', f'{target_year} Accounts Base', f'{target_year} Accounts BHAG', f'Accounts Base vs {base_year} %', f'Accounts BHAG vs {base_year} %',
+        f'{base_year} Revenue', f'{target_year} Revenue Base', f'{target_year} Revenue BHAG', f'Revenue Base vs {base_year} %', f'Revenue BHAG vs {base_year} %',
+        f'{base_year} Fees', f'{target_year} Fees Base', f'{target_year} Fees BHAG', f'Fees Base vs {base_year} %', f'Fees BHAG vs {base_year} %',
+        'Cumulative Accounts (Base)', 'Cumulative Accounts (BHAG)', 'BHAG Progress %', 'BHAG Gap',
     ]
     scenario_cols = [c for c in scenario_cols if c in scenarios.columns]
 
@@ -2562,16 +2585,24 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     scenarios[scenario_cols].to_csv(scenario_file, index=False, float_format='%.2f')
     print(f"  ✓ {target_year} targets saved to: {scenario_file}")
 
-    # 2. Growth recommendations summary
+    # 2. Growth recommendations summary (Base from trends, BHAG back-calculated)
     rec_rows = []
     for metric, rec in recommendations.items():
+        # Determine BHAG growth for this metric
+        if 'Accounts' in metric:
+            bhag_pct = bhag_accounts_growth_required
+        elif 'Fees' in metric:
+            bhag_pct = bhag_fees_growth_required
+        else:
+            bhag_pct = bhag_accounts_growth_required  # Revenue follows accounts
+
         rec_rows.append({
             'Metric': metric,
             'Historical Weighted Avg %': rec['weighted_avg'],
             'Recent Trend': rec['trend'],
-            'Recommended Growth %': rec['recommended'],
-            'Conservative %': rec['conservative'],
-            'Stretch %': rec['stretch'],
+            'Base (Recommended) %': rec['recommended'],
+            'BHAG Required %': bhag_pct,
+            'BHAG vs Base Gap': round(bhag_pct - rec['recommended'], 1),
         })
 
     if rec_rows:
@@ -2580,33 +2611,34 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
         rec_df.to_csv(rec_file, index=False, float_format='%.1f')
         print(f"  ✓ Growth recommendations saved to: {rec_file}")
 
-    # 3. Annual summary
+    # 3. Annual summary (Base + BHAG only)
     annual_summary = {
         'Metric': ['New Accounts', 'Ticket Revenue', 'Fees'],
         f'{base_year} Actual': [int(base_accounts), round(base_revenue, 2), round(base_fees, 2)],
-        f'{target_year} Conservative': [
-            int(scenarios[f'{target_year} Accounts Conservative'].sum()),
-            round(scenarios[f'{target_year} Revenue Conservative'].sum(), 2),
-            round(scenarios[f'{target_year} Fees Conservative'].sum(), 2),
-        ],
         f'{target_year} Base': [
             int(scenarios[f'{target_year} Accounts Base'].sum()),
             round(scenarios[f'{target_year} Revenue Base'].sum(), 2),
             round(scenarios[f'{target_year} Fees Base'].sum(), 2),
         ],
-        f'{target_year} Stretch': [
-            int(scenarios[f'{target_year} Accounts Stretch'].sum()),
-            round(scenarios[f'{target_year} Revenue Stretch'].sum(), 2),
-            round(scenarios[f'{target_year} Fees Stretch'].sum(), 2),
+        f'{target_year} BHAG': [
+            int(scenarios[f'{target_year} Accounts BHAG'].sum()),
+            round(scenarios[f'{target_year} Revenue BHAG'].sum(), 2),
+            round(scenarios[f'{target_year} Fees BHAG'].sum(), 2),
         ],
     }
 
     # Add growth percentages
-    for scenario in ['Conservative', 'Base', 'Stretch']:
+    for scenario in ['Base', 'BHAG']:
         annual_summary[f'{scenario} Growth %'] = [
             round((annual_summary[f'{target_year} {scenario}'][i] - annual_summary[f'{base_year} Actual'][i]) / annual_summary[f'{base_year} Actual'][i] * 100, 1)
             for i in range(3)
         ]
+
+    # Add BHAG gap (difference between BHAG and Base)
+    annual_summary['BHAG vs Base Gap'] = [
+        annual_summary[f'{target_year} BHAG'][i] - annual_summary[f'{target_year} Base'][i]
+        for i in range(3)
+    ]
 
     annual_df = pd.DataFrame(annual_summary)
     annual_file = f"{base_name}_{target_year}_annual_summary.csv"
@@ -2626,6 +2658,79 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     model_file = f"{base_name}_planning_model.csv"
     planning_output.to_csv(model_file, index=False, float_format='%.2f')
     print(f"  ✓ Historical planning model saved to: {model_file}")
+
+    # 5. Industry segmentation with relative growth rates and unit economics
+    print("  Generating industry segmentation...")
+
+    # Get industry data from booking_df (filter to base year for current state)
+    booking_df_filtered = booking_df.copy()
+    booking_df_filtered['TransactionDate'] = pd.to_datetime(booking_df_filtered['TransactionDate'])
+    booking_df_filtered['Year'] = booking_df_filtered['TransactionDate'].dt.year
+
+    # Calculate industry metrics for base year
+    base_year_bookings = booking_df_filtered[booking_df_filtered['Year'] == base_year]
+
+    if len(base_year_bookings) > 0 and 'Industry' in base_year_bookings.columns:
+        # Aggregate by industry
+        industry_metrics = base_year_bookings.groupby('Industry').agg({
+            'AccountId': 'nunique',
+            'TicketQuantity': 'sum',
+            'PaymentReceived': 'sum',
+            'BookingFee': 'sum',
+            'CardFee': 'sum',
+            'ProcessingFee': 'sum',
+            'TicketFee': 'sum',
+        }).reset_index()
+
+        industry_metrics.columns = ['Industry', 'Active Accounts', 'Tickets', 'Ticket Revenue',
+                                     'BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+
+        # Calculate total fees
+        fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+        industry_metrics['Fees'] = industry_metrics[fee_cols].sum(axis=1)
+
+        # Unit economics
+        industry_metrics['Fees per Account'] = round(industry_metrics['Fees'] / industry_metrics['Active Accounts'], 2)
+        industry_metrics['Tickets per Account'] = round(industry_metrics['Tickets'] / industry_metrics['Active Accounts'], 0)
+        industry_metrics['Revenue per Account'] = round(industry_metrics['Ticket Revenue'] / industry_metrics['Active Accounts'], 2)
+
+        # Calculate share of total
+        total_accounts = industry_metrics['Active Accounts'].sum()
+        total_fees = industry_metrics['Fees'].sum()
+        industry_metrics['Account Share %'] = round(industry_metrics['Active Accounts'] / total_accounts * 100, 1)
+        industry_metrics['Fees Share %'] = round(industry_metrics['Fees'] / total_fees * 100, 1)
+
+        # Value index: fees share / account share (>1 = high value, <1 = low value)
+        industry_metrics['Value Index'] = round(industry_metrics['Fees Share %'] / industry_metrics['Account Share %'].replace(0, 0.1), 2)
+
+        # Relative growth recommendation based on value index
+        industry_metrics['Relative Growth Rate'] = industry_metrics['Value Index'].apply(
+            lambda x: 'Grow 30% faster' if x >= 1.5 else
+                      'Grow 15% faster' if x >= 1.2 else
+                      'Grow at average' if x >= 0.8 else
+                      'Maintain' if x >= 0.5 else
+                      'Deprioritise'
+        )
+
+        # Sort by value index descending
+        industry_metrics = industry_metrics.sort_values('Value Index', ascending=False)
+
+        # Select output columns
+        industry_output = industry_metrics[[
+            'Industry', 'Active Accounts', 'Account Share %', 'Fees', 'Fees Share %',
+            'Fees per Account', 'Tickets per Account', 'Value Index', 'Relative Growth Rate'
+        ]]
+
+        industry_file = f"{base_name}_industry_segmentation.csv"
+        industry_output.to_csv(industry_file, index=False, float_format='%.2f')
+        print(f"  ✓ Industry segmentation saved to: {industry_file}")
+
+        # Log top industries
+        print("  Top industries by value index:")
+        for _, row in industry_output.head(5).iterrows():
+            print(f"    {row['Industry']}: Value Index {row['Value Index']} - {row['Relative Growth Rate']}")
+    else:
+        print("  Warning: No industry data available for segmentation")
 
     return scenario_file
 

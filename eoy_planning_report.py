@@ -36,9 +36,9 @@ Output Structure:
     - (root)        - Main monthly report and summary
 """
 import os
-import sys
 import argparse
 import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import calendar
@@ -1943,6 +1943,36 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
     # Standard month order for all pivots
     month_order = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
+    # === DATA QUALITY SUMMARY ===
+    total_transactions = len(booking_df)
+    total_revenue = booking_df['PaymentReceived'].sum()
+
+    print(f"\n  Data Quality Summary ({total_transactions:,} transactions, £{total_revenue:,.0f} revenue):")
+
+    # Industry coverage
+    if 'Industry' in booking_df.columns:
+        ind_valid = booking_df['Industry'].notna() & (booking_df['Industry'] != '')
+        ind_txns = ind_valid.sum()
+        ind_rev = booking_df.loc[ind_valid, 'PaymentReceived'].sum()
+        print(f"    Industry:     {ind_txns:,} txns ({ind_txns/total_transactions*100:.1f}%), £{ind_rev:,.0f} ({ind_rev/total_revenue*100:.1f}% of revenue)")
+
+    # SubIndustry coverage
+    if 'SubIndustry' in booking_df.columns:
+        sub_valid = booking_df['SubIndustry'].notna() & (booking_df['SubIndustry'] != '')
+        sub_txns = sub_valid.sum()
+        sub_rev = booking_df.loc[sub_valid, 'PaymentReceived'].sum()
+        print(f"    SubIndustry:  {sub_txns:,} txns ({sub_txns/total_transactions*100:.1f}%), £{sub_rev:,.0f} ({sub_rev/total_revenue*100:.1f}% of revenue)")
+
+    # Region coverage
+    if 'Region' in booking_df.columns:
+        reg_valid = booking_df['Region'].notna() & (booking_df['Region'] != 'Unknown')
+        reg_txns = reg_valid.sum()
+        reg_rev = booking_df.loc[reg_valid, 'PaymentReceived'].sum()
+        postcode_source = postcode_col if postcode_col else 'N/A'
+        print(f"    Region:       {reg_txns:,} txns ({reg_txns/total_transactions*100:.1f}%), £{reg_rev:,.0f} ({reg_rev/total_revenue*100:.1f}% of revenue) [from {postcode_source}]")
+
+    print()
+
     # === INDUSTRY SEASONALITY ===
     if 'Industry' in booking_df.columns:
         # Calculate monthly revenue by industry
@@ -3389,6 +3419,524 @@ def count_tier4_plus_new_accounts(accounts_df, account_tiers, year, month):
     return tier4_plus_count
 
 
+# === DDDM ANALYTICS MODULES ===
+
+def generate_account_ltv_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                       output_file: str) -> dict:
+    """
+    Generate 24-month Account Lifetime Value analysis by segment.
+
+    Calculates LTV for accounts based on their first 24 months of activity,
+    segmented by industry, region, and acquisition cohort.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating Account LTV analysis...")
+
+    # Prepare data
+    booking_df = booking_df.copy()
+    accounts_df = accounts_df.copy()
+
+    booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'])
+    accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'])
+
+    # Get account ID column
+    account_id_col = 'Account Id' if 'Account Id' in accounts_df.columns else 'AccountId'
+    booking_account_col = 'AccountId'
+
+    # Create account creation date lookup
+    account_created = accounts_df.set_index(account_id_col)['DateTimeCreated'].to_dict()
+
+    # Add account creation date to bookings
+    booking_df['AccountCreated'] = booking_df[booking_account_col].map(account_created)
+    booking_df['DaysSinceCreation'] = (booking_df['TransactionDate'] - booking_df['AccountCreated']).dt.days
+
+    # Filter to first 24 months (730 days) of each account
+    booking_df_24m = booking_df[
+        (booking_df['DaysSinceCreation'] >= 0) &
+        (booking_df['DaysSinceCreation'] <= 730)
+    ].copy()
+
+    # Calculate LTV per account
+    ltv_by_account = booking_df_24m.groupby(booking_account_col).agg({
+        'BookingFee': 'sum',
+        'CardFee': 'sum',
+        'TicketFee': 'sum',
+        'ProcessingFee': 'sum',
+        'TicketQuantity': 'sum',
+        'PaymentReceived': 'sum',
+        'EventId': 'nunique',
+        'TransactionDate': ['min', 'max', 'count']
+    }).reset_index()
+
+    # Flatten column names
+    ltv_by_account.columns = [
+        booking_account_col, 'Booking_Fee_24m', 'Card_Fee_24m', 'Ticket_Fee_24m',
+        'Processing_Fee_24m', 'Tickets_24m', 'Revenue_24m', 'Events_24m',
+        'First_Transaction', 'Last_Transaction', 'Transaction_Count_24m'
+    ]
+
+    # Calculate total fees
+    ltv_by_account['Total_Fees_24m'] = (
+        ltv_by_account['Booking_Fee_24m'] + ltv_by_account['Card_Fee_24m'] +
+        ltv_by_account['Ticket_Fee_24m'] + ltv_by_account['Processing_Fee_24m']
+    )
+
+    # Add account metadata
+    account_meta = accounts_df[[account_id_col, 'DateTimeCreated', 'Industry', 'SubIndustry']].copy()
+
+    # Add region from postcode
+    if 'Postcode' in accounts_df.columns:
+        postcode_areas = extract_postcode_areas_vectorized(accounts_df['Postcode'])
+        account_meta['Region'] = get_regions_vectorized(postcode_areas)
+    else:
+        account_meta['Region'] = 'Unknown'
+
+    # Add acquisition cohort (year-quarter)
+    account_meta['Cohort'] = account_meta['DateTimeCreated'].dt.to_period('Q').astype(str)
+    account_meta['Cohort_Year'] = account_meta['DateTimeCreated'].dt.year
+
+    ltv_by_account = ltv_by_account.merge(
+        account_meta.rename(columns={account_id_col: booking_account_col}),
+        on=booking_account_col, how='left'
+    )
+
+    # === OUTPUT 1: LTV by Industry ===
+    ltv_by_industry = ltv_by_account.groupby('Industry').agg({
+        booking_account_col: 'count',
+        'Total_Fees_24m': ['sum', 'mean', 'median'],
+        'Revenue_24m': ['sum', 'mean'],
+        'Tickets_24m': ['sum', 'mean'],
+        'Events_24m': ['sum', 'mean'],
+    }).reset_index()
+
+    ltv_by_industry.columns = [
+        'Industry', 'Accounts', 'Total_Fees', 'Avg_LTV_24m', 'Median_LTV_24m',
+        'Total_Revenue', 'Avg_Revenue_24m', 'Total_Tickets', 'Avg_Tickets_24m',
+        'Total_Events', 'Avg_Events_24m'
+    ]
+
+    # Calculate LTV per account for ranking
+    ltv_by_industry['Value_Index'] = (
+        ltv_by_industry['Total_Fees'] / ltv_by_industry['Total_Fees'].sum() * 100
+    ) / (
+        ltv_by_industry['Accounts'] / ltv_by_industry['Accounts'].sum() * 100
+    )
+    ltv_by_industry = ltv_by_industry.sort_values('Avg_LTV_24m', ascending=False)
+
+    industry_file = get_output_path(base_name, 'cohorts', '_ltv_by_industry.csv')
+    ltv_by_industry.to_csv(industry_file, index=False, float_format='%.2f')
+    output_files['ltv_by_industry'] = industry_file
+    print(f"    ✓ LTV by industry: {industry_file}")
+
+    # === OUTPUT 2: LTV by Region ===
+    ltv_by_region = ltv_by_account.groupby('Region').agg({
+        booking_account_col: 'count',
+        'Total_Fees_24m': ['sum', 'mean', 'median'],
+        'Revenue_24m': ['sum', 'mean'],
+    }).reset_index()
+
+    ltv_by_region.columns = [
+        'Region', 'Accounts', 'Total_Fees', 'Avg_LTV_24m', 'Median_LTV_24m',
+        'Total_Revenue', 'Avg_Revenue_24m'
+    ]
+    ltv_by_region = ltv_by_region.sort_values('Avg_LTV_24m', ascending=False)
+
+    region_file = get_output_path(base_name, 'geography', '_ltv_by_region.csv')
+    ltv_by_region.to_csv(region_file, index=False, float_format='%.2f')
+    output_files['ltv_by_region'] = region_file
+    print(f"    ✓ LTV by region: {region_file}")
+
+    # === OUTPUT 3: LTV by Acquisition Cohort ===
+    # Only include cohorts with at least 24 months of history
+    today = pd.Timestamp.now(tz='Europe/London')
+    cutoff_date = today - pd.Timedelta(days=730)
+
+    mature_cohorts = ltv_by_account[
+        ltv_by_account['DateTimeCreated'] <= cutoff_date
+    ]
+
+    if len(mature_cohorts) > 0:
+        ltv_by_cohort = mature_cohorts.groupby('Cohort').agg({
+            booking_account_col: 'count',
+            'Total_Fees_24m': ['sum', 'mean', 'median'],
+            'Revenue_24m': 'sum',
+            'Events_24m': 'mean',
+        }).reset_index()
+
+        ltv_by_cohort.columns = [
+            'Cohort', 'Accounts', 'Total_Fees', 'Avg_LTV_24m', 'Median_LTV_24m',
+            'Total_Revenue', 'Avg_Events_24m'
+        ]
+        ltv_by_cohort = ltv_by_cohort.sort_values('Cohort')
+
+        cohort_file = get_output_path(base_name, 'cohorts', '_ltv_by_cohort.csv')
+        ltv_by_cohort.to_csv(cohort_file, index=False, float_format='%.2f')
+        output_files['ltv_by_cohort'] = cohort_file
+        print(f"    ✓ LTV by cohort: {cohort_file}")
+
+    # === OUTPUT 4: LTV Distribution Summary ===
+    ltv_distribution = pd.DataFrame({
+        'Metric': ['Total Accounts Analysed', 'Avg 24m LTV', 'Median 24m LTV',
+                   'Top 10% LTV Threshold', 'Top 25% LTV Threshold',
+                   'Bottom 25% LTV', 'Accounts with Zero LTV'],
+        'Value': [
+            len(ltv_by_account),
+            ltv_by_account['Total_Fees_24m'].mean(),
+            ltv_by_account['Total_Fees_24m'].median(),
+            ltv_by_account['Total_Fees_24m'].quantile(0.9),
+            ltv_by_account['Total_Fees_24m'].quantile(0.75),
+            ltv_by_account['Total_Fees_24m'].quantile(0.25),
+            (ltv_by_account['Total_Fees_24m'] == 0).sum()
+        ]
+    })
+
+    dist_file = get_output_path(base_name, 'cohorts', '_ltv_distribution.csv')
+    ltv_distribution.to_csv(dist_file, index=False, float_format='%.2f')
+    output_files['ltv_distribution'] = dist_file
+    print(f"    ✓ LTV distribution: {dist_file}")
+
+    return output_files
+
+
+def generate_dormancy_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                    output_file: str) -> dict:
+    """
+    Generate dormancy/churn analysis using tier transitions.
+
+    Tracks accounts transitioning to NIL (no activity) status and identifies
+    dormancy patterns by segment.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating dormancy analysis...")
+
+    # Prepare data
+    booking_df = booking_df.copy()
+    accounts_df = accounts_df.copy()
+
+    booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'])
+    accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'])
+
+    # Get account ID column
+    account_id_col = 'Account Id' if 'Account Id' in accounts_df.columns else 'AccountId'
+    booking_account_col = 'AccountId'
+
+    today = pd.Timestamp.now(tz='Europe/London')
+
+    # Calculate last transaction date per account
+    last_txn = booking_df.groupby(booking_account_col)['TransactionDate'].max().reset_index()
+    last_txn.columns = [booking_account_col, 'Last_Transaction']
+
+    # Calculate days since last transaction
+    last_txn['Days_Since_Transaction'] = (today - last_txn['Last_Transaction']).dt.days
+    last_txn['Months_Since_Transaction'] = (last_txn['Days_Since_Transaction'] / 30.44).round(0).astype(int)
+
+    # Merge with account data
+    account_meta = accounts_df[[account_id_col, 'DateTimeCreated', 'Industry', 'SubIndustry']].copy()
+    account_meta['Account_Age_Days'] = (today - account_meta['DateTimeCreated']).dt.days
+    account_meta['Account_Age_Months'] = (account_meta['Account_Age_Days'] / 30.44).round(0).astype(int)
+
+    # Add region
+    if 'Postcode' in accounts_df.columns:
+        postcode_areas = extract_postcode_areas_vectorized(accounts_df['Postcode'])
+        account_meta['Region'] = get_regions_vectorized(postcode_areas)
+    else:
+        account_meta['Region'] = 'Unknown'
+
+    dormancy_df = account_meta.merge(
+        last_txn.rename(columns={booking_account_col: account_id_col}),
+        on=account_id_col, how='left'
+    )
+
+    # Define dormancy status based on months since last transaction
+    def classify_dormancy(months):
+        if pd.isna(months):
+            return 'Never Transacted'
+        elif months <= 3:
+            return 'Active (0-3m)'
+        elif months <= 6:
+            return 'Recent (3-6m)'
+        elif months <= 12:
+            return 'At Risk (6-12m)'
+        elif months <= 24:
+            return 'Dormant (12-24m)'
+        else:
+            return 'Churned (24m+)'
+
+    dormancy_df['Dormancy_Status'] = dormancy_df['Months_Since_Transaction'].apply(classify_dormancy)
+
+    # === OUTPUT 1: Dormancy by Industry ===
+    dormancy_by_industry = dormancy_df.groupby(['Industry', 'Dormancy_Status']).size().unstack(fill_value=0)
+    dormancy_by_industry['Total'] = dormancy_by_industry.sum(axis=1)
+
+    # Calculate percentages
+    for col in dormancy_by_industry.columns[:-1]:
+        dormancy_by_industry[f'{col} %'] = round(dormancy_by_industry[col] / dormancy_by_industry['Total'] * 100, 1)
+
+    # Calculate dormancy rate (At Risk + Dormant + Churned)
+    at_risk_cols = ['At Risk (6-12m)', 'Dormant (12-24m)', 'Churned (24m+)']
+    existing_cols = [c for c in at_risk_cols if c in dormancy_by_industry.columns]
+    if existing_cols:
+        dormancy_by_industry['Dormancy_Rate %'] = round(
+            dormancy_by_industry[existing_cols].sum(axis=1) / dormancy_by_industry['Total'] * 100, 1
+        )
+
+    dormancy_by_industry = dormancy_by_industry.sort_values('Dormancy_Rate %', ascending=False)
+
+    industry_file = get_output_path(base_name, 'cohorts', '_dormancy_by_industry.csv')
+    dormancy_by_industry.to_csv(industry_file, float_format='%.1f')
+    output_files['dormancy_by_industry'] = industry_file
+    print(f"    ✓ Dormancy by industry: {industry_file}")
+
+    # === OUTPUT 2: Dormancy by Account Age ===
+    # Group accounts by age cohort
+    def age_cohort(months):
+        if months < 12:
+            return '0-12m'
+        elif months < 24:
+            return '12-24m'
+        elif months < 36:
+            return '24-36m'
+        elif months < 48:
+            return '36-48m'
+        else:
+            return '48m+'
+
+    dormancy_df['Age_Cohort'] = dormancy_df['Account_Age_Months'].apply(age_cohort)
+
+    dormancy_by_age = dormancy_df.groupby(['Age_Cohort', 'Dormancy_Status']).size().unstack(fill_value=0)
+    dormancy_by_age['Total'] = dormancy_by_age.sum(axis=1)
+
+    existing_cols = [c for c in at_risk_cols if c in dormancy_by_age.columns]
+    if existing_cols:
+        dormancy_by_age['Dormancy_Rate %'] = round(
+            dormancy_by_age[existing_cols].sum(axis=1) / dormancy_by_age['Total'] * 100, 1
+        )
+
+    age_file = get_output_path(base_name, 'cohorts', '_dormancy_by_account_age.csv')
+    dormancy_by_age.to_csv(age_file, float_format='%.1f')
+    output_files['dormancy_by_age'] = age_file
+    print(f"    ✓ Dormancy by account age: {age_file}")
+
+    # === OUTPUT 3: Dormancy Summary ===
+    summary = dormancy_df['Dormancy_Status'].value_counts()
+    summary_df = pd.DataFrame({
+        'Status': summary.index,
+        'Count': summary.values,
+        'Percentage': round(summary.values / len(dormancy_df) * 100, 1)
+    })
+
+    summary_file = get_output_path(base_name, 'cohorts', '_dormancy_summary.csv')
+    summary_df.to_csv(summary_file, index=False)
+    output_files['dormancy_summary'] = summary_file
+    print(f"    ✓ Dormancy summary: {summary_file}")
+
+    return output_files
+
+
+def generate_event_metrics_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                         output_file: str) -> dict:
+    """
+    Generate event success proxy metrics from booking data.
+
+    Calculates:
+    - Average tickets/revenue per event
+    - Events per account per year
+    - Advance booking window (days between transaction and event)
+    - Repeat event rate
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame (unused, kept for API consistency)
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    _ = accounts_df  # Unused, kept for API consistency
+
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating event metrics analysis...")
+
+    # Prepare data
+    booking_df = booking_df.copy()
+
+    booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'])
+    booking_df['EventDate'] = pd.to_datetime(booking_df['EventDate'], errors='coerce')
+
+    # Calculate advance booking window
+    booking_df['Advance_Days'] = (booking_df['EventDate'] - booking_df['TransactionDate']).dt.days
+    # Filter out negative values (post-event transactions shouldn't exist but just in case)
+    booking_df.loc[booking_df['Advance_Days'] < 0, 'Advance_Days'] = np.nan
+
+    # Get transaction year
+    booking_df['Year'] = booking_df['TransactionDate'].dt.year
+
+    # === METRICS BY EVENT ===
+    event_metrics = booking_df.groupby('EventId').agg({
+        'TicketQuantity': 'sum',
+        'PaymentReceived': 'sum',
+        'BookingFee': 'sum',
+        'CardFee': 'sum',
+        'TicketFee': 'sum',
+        'ProcessingFee': 'sum',
+        'AccountId': 'first',
+        'Industry': 'first',
+        'Advance_Days': 'median',
+        'TransactionDate': ['min', 'max', 'count']
+    }).reset_index()
+
+    event_metrics.columns = [
+        'EventId', 'Tickets', 'Revenue', 'Booking_Fee', 'Card_Fee', 'Ticket_Fee',
+        'Processing_Fee', 'AccountId', 'Industry', 'Median_Advance_Days',
+        'First_Sale', 'Last_Sale', 'Transaction_Count'
+    ]
+
+    event_metrics['Total_Fees'] = (
+        event_metrics['Booking_Fee'] + event_metrics['Card_Fee'] +
+        event_metrics['Ticket_Fee'] + event_metrics['Processing_Fee']
+    )
+
+    # Sales window (days between first and last sale)
+    event_metrics['Sales_Window_Days'] = (
+        event_metrics['Last_Sale'] - event_metrics['First_Sale']
+    ).dt.days
+
+    # === OUTPUT 1: Event Metrics by Industry ===
+    industry_event_metrics = event_metrics.groupby('Industry').agg({
+        'EventId': 'count',
+        'Tickets': ['sum', 'mean', 'median'],
+        'Revenue': ['sum', 'mean', 'median'],
+        'Total_Fees': ['sum', 'mean'],
+        'Median_Advance_Days': 'median',
+        'Sales_Window_Days': 'median',
+    }).reset_index()
+
+    industry_event_metrics.columns = [
+        'Industry', 'Event_Count', 'Total_Tickets', 'Avg_Tickets_Per_Event',
+        'Median_Tickets_Per_Event', 'Total_Revenue', 'Avg_Revenue_Per_Event',
+        'Median_Revenue_Per_Event', 'Total_Fees', 'Avg_Fees_Per_Event',
+        'Median_Advance_Booking_Days', 'Median_Sales_Window_Days'
+    ]
+
+    industry_event_metrics = industry_event_metrics.sort_values('Total_Fees', ascending=False)
+
+    industry_file = get_output_path(base_name, 'industry', '_event_metrics_by_industry.csv')
+    industry_event_metrics.to_csv(industry_file, index=False, float_format='%.2f')
+    output_files['event_metrics_by_industry'] = industry_file
+    print(f"    ✓ Event metrics by industry: {industry_file}")
+
+    # === OUTPUT 2: Account Event Frequency ===
+    # Events per account per year
+    events_per_account_year = booking_df.groupby(['AccountId', 'Year'])['EventId'].nunique().reset_index()
+    events_per_account_year.columns = ['AccountId', 'Year', 'Events_Count']
+
+    # Calculate average events per account per year
+    account_event_freq = events_per_account_year.groupby('AccountId').agg({
+        'Events_Count': ['mean', 'max', 'sum'],
+        'Year': 'nunique'
+    }).reset_index()
+    account_event_freq.columns = ['AccountId', 'Avg_Events_Per_Year', 'Max_Events_Year',
+                                   'Total_Events', 'Active_Years']
+
+    # Classify frequency
+    def classify_frequency(avg_events):
+        if avg_events >= 4:
+            return 'Regular (4+/yr)'
+        elif avg_events >= 2:
+            return 'Occasional (2-3/yr)'
+        elif avg_events >= 1:
+            return 'Annual (1/yr)'
+        else:
+            return 'Sporadic (<1/yr)'
+
+    account_event_freq['Frequency_Category'] = account_event_freq['Avg_Events_Per_Year'].apply(classify_frequency)
+
+    # Summary by frequency category
+    freq_summary = account_event_freq['Frequency_Category'].value_counts()
+    freq_summary_df = pd.DataFrame({
+        'Frequency_Category': freq_summary.index,
+        'Account_Count': freq_summary.values,
+        'Percentage': round(freq_summary.values / len(account_event_freq) * 100, 1)
+    })
+
+    freq_file = get_output_path(base_name, 'cohorts', '_account_event_frequency.csv')
+    freq_summary_df.to_csv(freq_file, index=False)
+    output_files['account_event_frequency'] = freq_file
+    print(f"    ✓ Account event frequency: {freq_file}")
+
+    # === OUTPUT 3: Repeat Event Rate ===
+    # Accounts with more than one event ever
+    repeat_rate = (account_event_freq['Total_Events'] > 1).sum() / len(account_event_freq) * 100
+
+    repeat_stats = pd.DataFrame({
+        'Metric': [
+            'Total Accounts with Events',
+            'Accounts with 1 Event Only',
+            'Accounts with 2+ Events (Repeat)',
+            'Accounts with 5+ Events',
+            'Accounts with 10+ Events',
+            'Repeat Event Rate %',
+            'Avg Events Per Account',
+            'Median Events Per Account'
+        ],
+        'Value': [
+            len(account_event_freq),
+            (account_event_freq['Total_Events'] == 1).sum(),
+            (account_event_freq['Total_Events'] > 1).sum(),
+            (account_event_freq['Total_Events'] >= 5).sum(),
+            (account_event_freq['Total_Events'] >= 10).sum(),
+            round(repeat_rate, 1),
+            round(account_event_freq['Total_Events'].mean(), 2),
+            account_event_freq['Total_Events'].median()
+        ]
+    })
+
+    repeat_file = get_output_path(base_name, 'cohorts', '_repeat_event_stats.csv')
+    repeat_stats.to_csv(repeat_file, index=False)
+    output_files['repeat_event_stats'] = repeat_file
+    print(f"    ✓ Repeat event stats: {repeat_file}")
+
+    # === OUTPUT 4: Advance Booking Analysis ===
+    # By industry - when do tickets typically sell?
+    advance_by_industry = booking_df.groupby('Industry')['Advance_Days'].agg([
+        'count', 'mean', 'median',
+        lambda x: x.quantile(0.25),
+        lambda x: x.quantile(0.75)
+    ]).reset_index()
+    advance_by_industry.columns = ['Industry', 'Transactions', 'Mean_Advance_Days',
+                                    'Median_Advance_Days', 'Q1_Advance_Days', 'Q3_Advance_Days']
+    advance_by_industry = advance_by_industry.sort_values('Median_Advance_Days', ascending=False)
+
+    advance_file = get_output_path(base_name, 'industry', '_advance_booking_by_industry.csv')
+    advance_by_industry.to_csv(advance_file, index=False, float_format='%.1f')
+    output_files['advance_booking_by_industry'] = advance_file
+    print(f"    ✓ Advance booking by industry: {advance_file}")
+
+    return output_files
+
+
 def main():
     """Main execution function."""
     args = parse_args()
@@ -3533,6 +4081,24 @@ def main():
     # Planning model for 2026 target setting
     print("  Generating planning model...")
     generate_planning_model_csv(results_df, accounts_df, booking_df, output_file)
+
+    # === DDDM ANALYTICS ===
+    print("\nGenerating DDDM analytics...")
+
+    # Account LTV analysis (24-month)
+    ltv_files = generate_account_ltv_analysis_csv(booking_df, accounts_df, output_file)
+    if ltv_files:
+        print(f"  ✓ Account LTV analysis: {len(ltv_files)} reports generated")
+
+    # Dormancy/churn analysis
+    dormancy_files = generate_dormancy_analysis_csv(booking_df, accounts_df, output_file)
+    if dormancy_files:
+        print(f"  ✓ Dormancy analysis: {len(dormancy_files)} reports generated")
+
+    # Event metrics analysis
+    event_files = generate_event_metrics_analysis_csv(booking_df, accounts_df, output_file)
+    if event_files:
+        print(f"  ✓ Event metrics analysis: {len(event_files)} reports generated")
 
     print(f"\n=== Report Complete ===")
 

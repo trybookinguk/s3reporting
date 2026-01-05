@@ -6060,17 +6060,18 @@ def generate_organiser_concentration_csv(booking_df: pd.DataFrame, accounts_df: 
         year_account_fees['Rank'] = range(1, total_accounts + 1)
         year_account_fees['Percentile'] = year_account_fees['Rank'] / total_accounts * 100
 
+        # Assign tiers using standard tier percentile boundaries (1%, 5%, 25%, 50%)
         def assign_tier(row):
-            if row['Rank'] <= 65:
-                return 'Key Account'
-            elif row['Percentile'] <= 3.5:
-                return 'Tier 4+'
-            elif row['Percentile'] <= 16:
-                return 'Tier 3'
+            if row['Percentile'] <= 1:
+                return 'Key Account'  # Top 1%
+            elif row['Percentile'] <= 5:
+                return 'High Value'   # Top 5%
+            elif row['Percentile'] <= 25:
+                return 'Tier 4'       # Top 25%
             elif row['Percentile'] <= 50:
-                return 'Tier 2'
+                return 'Tier 3'       # Top 50%
             elif row['YearFees'] > 0:
-                return 'Tier 1'
+                return 'Tier 2/1'     # Bottom 50% with activity
             else:
                 return 'NIL'
 
@@ -6099,7 +6100,7 @@ def generate_organiser_concentration_csv(booking_df: pd.DataFrame, accounts_df: 
     result_2025, accounts_2025, total_acc_2025, total_fees_2025 = calculate_year_concentration(bookings_2025, '2025')
 
     # Merge results
-    tier_order = ['Key Account', 'Tier 4+', 'Tier 3', 'Tier 2', 'Tier 1', 'NIL']
+    tier_order = ['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2/1', 'NIL']
 
     yoy_data = []
     for tier in tier_order:
@@ -6121,90 +6122,59 @@ def generate_organiser_concentration_csv(booking_df: pd.DataFrame, accounts_df: 
 
         yoy_data.append(row)
 
-    # Add concentration metrics rows
-    # Top 65 accounts
-    if len(accounts_2024) > 0:
-        top65_2024 = accounts_2024.head(65)
-        top65_fees_2024 = top65_2024['YearFees'].sum()
-        top65_pct_2024 = round(top65_fees_2024 / total_fees_2024 * 100, 1) if total_fees_2024 > 0 else 0
-    else:
-        top65_fees_2024, top65_pct_2024 = 0, 0
+    # Add cumulative concentration metrics using tier boundaries (1%, 5%, 25%, 50%)
+    def calculate_top_n_pct(accounts_df, total_fees, pct):
+        """Calculate fees for top N% of accounts."""
+        if len(accounts_df) == 0:
+            return 0, 0, 0
+        count = max(1, int(len(accounts_df) * pct / 100))
+        top_n = accounts_df.head(count)
+        fees = top_n['YearFees'].sum()
+        fees_pct = round(fees / total_fees * 100, 1) if total_fees > 0 else 0
+        return count, fees, fees_pct
 
-    if len(accounts_2025) > 0:
-        top65_2025 = accounts_2025.head(65)
-        top65_fees_2025 = top65_2025['YearFees'].sum()
-        top65_pct_2025 = round(top65_fees_2025 / total_fees_2025 * 100, 1) if total_fees_2025 > 0 else 0
-    else:
-        top65_fees_2025, top65_pct_2025 = 0, 0
-
+    # Top 1% (Key Account boundary)
+    count_2024, fees_2024, pct_2024 = calculate_top_n_pct(accounts_2024, total_fees_2024, 1)
+    count_2025, fees_2025, pct_2025 = calculate_top_n_pct(accounts_2025, total_fees_2025, 1)
     yoy_data.append({
-        'Tier': 'Top 65 Accounts',
-        '2024 Accounts': 65 if total_acc_2024 >= 65 else total_acc_2024,
-        '2024 Account %': round(65 / total_acc_2024 * 100, 1) if total_acc_2024 >= 65 else 100,
-        '2024 Fees': round(top65_fees_2024, 2),
-        '2024 Fees %': top65_pct_2024,
-        '2025 Accounts': 65 if total_acc_2025 >= 65 else total_acc_2025,
-        '2025 Account %': round(65 / total_acc_2025 * 100, 1) if total_acc_2025 >= 65 else 100,
-        '2025 Fees': round(top65_fees_2025, 2),
-        '2025 Fees %': top65_pct_2025,
+        'Tier': 'Top 1% (Key Account)',
+        '2024 Accounts': count_2024, '2024 Account %': 1.0,
+        '2024 Fees': round(fees_2024, 2), '2024 Fees %': pct_2024,
+        '2025 Accounts': count_2025, '2025 Account %': 1.0,
+        '2025 Fees': round(fees_2025, 2), '2025 Fees %': pct_2025,
     })
 
-    # Top 3.5% of accounts
-    if len(accounts_2024) > 0:
-        top_3_5_count_2024 = max(1, int(total_acc_2024 * 0.035))
-        top_3_5_2024 = accounts_2024.head(top_3_5_count_2024)
-        top_3_5_fees_2024 = top_3_5_2024['YearFees'].sum()
-        top_3_5_pct_2024 = round(top_3_5_fees_2024 / total_fees_2024 * 100, 1) if total_fees_2024 > 0 else 0
-    else:
-        top_3_5_count_2024, top_3_5_fees_2024, top_3_5_pct_2024 = 0, 0, 0
-
-    if len(accounts_2025) > 0:
-        top_3_5_count_2025 = max(1, int(total_acc_2025 * 0.035))
-        top_3_5_2025 = accounts_2025.head(top_3_5_count_2025)
-        top_3_5_fees_2025 = top_3_5_2025['YearFees'].sum()
-        top_3_5_pct_2025 = round(top_3_5_fees_2025 / total_fees_2025 * 100, 1) if total_fees_2025 > 0 else 0
-    else:
-        top_3_5_count_2025, top_3_5_fees_2025, top_3_5_pct_2025 = 0, 0, 0
-
+    # Top 5% (High Value boundary)
+    count_2024, fees_2024, pct_2024 = calculate_top_n_pct(accounts_2024, total_fees_2024, 5)
+    count_2025, fees_2025, pct_2025 = calculate_top_n_pct(accounts_2025, total_fees_2025, 5)
     yoy_data.append({
-        'Tier': 'Top 3.5%',
-        '2024 Accounts': top_3_5_count_2024,
-        '2024 Account %': 3.5,
-        '2024 Fees': round(top_3_5_fees_2024, 2),
-        '2024 Fees %': top_3_5_pct_2024,
-        '2025 Accounts': top_3_5_count_2025,
-        '2025 Account %': 3.5,
-        '2025 Fees': round(top_3_5_fees_2025, 2),
-        '2025 Fees %': top_3_5_pct_2025,
+        'Tier': 'Top 5% (High Value+)',
+        '2024 Accounts': count_2024, '2024 Account %': 5.0,
+        '2024 Fees': round(fees_2024, 2), '2024 Fees %': pct_2024,
+        '2025 Accounts': count_2025, '2025 Account %': 5.0,
+        '2025 Fees': round(fees_2025, 2), '2025 Fees %': pct_2025,
     })
 
-    # Top 16% of accounts
-    if len(accounts_2024) > 0:
-        top_16_count_2024 = max(1, int(total_acc_2024 * 0.16))
-        top_16_2024 = accounts_2024.head(top_16_count_2024)
-        top_16_fees_2024 = top_16_2024['YearFees'].sum()
-        top_16_pct_2024 = round(top_16_fees_2024 / total_fees_2024 * 100, 1) if total_fees_2024 > 0 else 0
-    else:
-        top_16_count_2024, top_16_fees_2024, top_16_pct_2024 = 0, 0, 0
-
-    if len(accounts_2025) > 0:
-        top_16_count_2025 = max(1, int(total_acc_2025 * 0.16))
-        top_16_2025 = accounts_2025.head(top_16_count_2025)
-        top_16_fees_2025 = top_16_2025['YearFees'].sum()
-        top_16_pct_2025 = round(top_16_fees_2025 / total_fees_2025 * 100, 1) if total_fees_2025 > 0 else 0
-    else:
-        top_16_count_2025, top_16_fees_2025, top_16_pct_2025 = 0, 0, 0
-
+    # Top 25% (Tier 4 boundary)
+    count_2024, fees_2024, pct_2024 = calculate_top_n_pct(accounts_2024, total_fees_2024, 25)
+    count_2025, fees_2025, pct_2025 = calculate_top_n_pct(accounts_2025, total_fees_2025, 25)
     yoy_data.append({
-        'Tier': 'Top 16%',
-        '2024 Accounts': top_16_count_2024,
-        '2024 Account %': 16.0,
-        '2024 Fees': round(top_16_fees_2024, 2),
-        '2024 Fees %': top_16_pct_2024,
-        '2025 Accounts': top_16_count_2025,
-        '2025 Account %': 16.0,
-        '2025 Fees': round(top_16_fees_2025, 2),
-        '2025 Fees %': top_16_pct_2025,
+        'Tier': 'Top 25% (Tier 4+)',
+        '2024 Accounts': count_2024, '2024 Account %': 25.0,
+        '2024 Fees': round(fees_2024, 2), '2024 Fees %': pct_2024,
+        '2025 Accounts': count_2025, '2025 Account %': 25.0,
+        '2025 Fees': round(fees_2025, 2), '2025 Fees %': pct_2025,
+    })
+
+    # Top 50% (Tier 3 boundary)
+    count_2024, fees_2024, pct_2024 = calculate_top_n_pct(accounts_2024, total_fees_2024, 50)
+    count_2025, fees_2025, pct_2025 = calculate_top_n_pct(accounts_2025, total_fees_2025, 50)
+    yoy_data.append({
+        'Tier': 'Top 50% (Tier 3+)',
+        '2024 Accounts': count_2024, '2024 Account %': 50.0,
+        '2024 Fees': round(fees_2024, 2), '2024 Fees %': pct_2024,
+        '2025 Accounts': count_2025, '2025 Account %': 50.0,
+        '2025 Fees': round(fees_2025, 2), '2025 Fees %': pct_2025,
     })
 
     yoy_concentration_df = pd.DataFrame(yoy_data)

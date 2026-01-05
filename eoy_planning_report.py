@@ -27,7 +27,7 @@ Usage:
 
 Output Structure:
     Reports are organised into folders by type:
-    - planning/     - Target models, growth recommendations, BHAG tracking
+    - planning/     - Target models, growth recommendations, Base/Stretch tracking
     - seasonality/  - Industry and event type seasonality analysis
     - industry/     - Industry breakdowns and cross-tabs
     - cohorts/      - Expansion revenue and cohort curves
@@ -3356,9 +3356,9 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     Features:
     - Year-aware seasonality (adjusts for Easter timing)
     - School holiday period flags
-    - Scenario modelling (Base + BHAG)
+    - Scenario modelling (Base + Stretch)
     - Trend-based growth recommendations
-    - BHAG cumulative tracking
+    - Base/Stretch cumulative tracking
     - Side-by-side comparison (previous year actuals vs targets)
 
     Note: This function builds its own complete historical data from booking_df
@@ -3619,33 +3619,41 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
             print(f"    {metric}: {growth}% avg YoY")
 
     # === GROWTH CAPS ===
-    # Conservative growth assumptions for realistic planning
-    MAX_MONTHLY_GROWTH = 0.20  # 20% cap for Base targets (15-20% annual)
     HISTORICAL_YOY_CAP = 0.25  # Cap historical YoY at 25% to reduce outlier impact
 
-    # === BHAG CALCULATION ===
-    # BHAG: 25,000 cumulative accounts by end of target year
-    bhag_accounts_target = 25000
+    # === BASE TARGET CALCULATION ===
+    # Base: 25,000 cumulative accounts by end of target year
+    base_cumulative_target = 25000
     total_accounts_to_date = len(accounts_df)  # Current cumulative total
 
-    # Calculate how many NEW accounts needed in target year to hit BHAG
-    bhag_new_accounts_needed = max(0, bhag_accounts_target - total_accounts_to_date)
-    bhag_accounts_growth_required = round((bhag_new_accounts_needed / base_accounts - 1) * 100, 1) if base_accounts > 0 else 0
+    # Calculate how many NEW accounts needed in target year to hit Base
+    base_new_accounts_needed = max(0, base_cumulative_target - total_accounts_to_date)
+    base_accounts_growth_required = round((base_new_accounts_needed / base_accounts - 1) * 100, 1) if base_accounts > 0 else 0
 
-    print(f"  BHAG Analysis:")
+    # === STRETCH TARGET CALCULATION ===
+    # Stretch: 10,000 NEW accounts in target year
+    stretch_new_accounts_target = 10000
+    stretch_accounts_growth_required = round((stretch_new_accounts_target / base_accounts - 1) * 100, 1) if base_accounts > 0 else 0
+
+    print(f"  Target Analysis:")
     print(f"    Current cumulative accounts: {total_accounts_to_date:,}")
-    print(f"    BHAG target: {bhag_accounts_target:,}")
-    print(f"    New accounts needed in {target_year}: {bhag_new_accounts_needed:,}")
-    print(f"    Required YoY growth vs {base_year}: {bhag_accounts_growth_required}%")
+    print(f"    Base target (25k cumulative): {base_cumulative_target:,}")
+    print(f"    New accounts needed for Base: {base_new_accounts_needed:,}")
+    print(f"    Base YoY growth vs {base_year}: {base_accounts_growth_required}%")
+    print(f"    Stretch target (10k new): {stretch_new_accounts_target:,}")
+    print(f"    Stretch YoY growth vs {base_year}: {stretch_accounts_growth_required}%")
 
-    # Calculate fees-per-new-account to derive fees BHAG
+    # Calculate fees-per-new-account to derive fee targets
     fees_per_new_account = base_fees / base_accounts if base_accounts > 0 else 0
-    bhag_fees_target = bhag_new_accounts_needed * fees_per_new_account
-    bhag_fees_growth_required = round((bhag_fees_target / base_fees - 1) * 100, 1) if base_fees > 0 else 0
+    base_fees_target = base_new_accounts_needed * fees_per_new_account
+    base_fees_growth_required = round((base_fees_target / base_fees - 1) * 100, 1) if base_fees > 0 else 0
+    stretch_fees_target = stretch_new_accounts_target * fees_per_new_account
+    stretch_fees_growth_required = round((stretch_fees_target / base_fees - 1) * 100, 1) if base_fees > 0 else 0
 
-    print(f"    Derived fees BHAG: £{bhag_fees_target:,.2f} ({bhag_fees_growth_required}% YoY)")
+    print(f"    Derived Base fees: £{base_fees_target:,.2f} ({base_fees_growth_required}% YoY)")
+    print(f"    Derived Stretch fees: £{stretch_fees_target:,.2f} ({stretch_fees_growth_required}% YoY)")
 
-    # === CALCULATE SCENARIO TARGETS (BASE + BHAG) ===
+    # === CALCULATE SCENARIO TARGETS (BASE + STRETCH) ===
     # Each metric modelled independently with its own trend
     for metric, base_val, idx_col in [
         ('Accounts', base_accounts, 'Accounts Index %'),
@@ -3654,36 +3662,30 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     ]:
         metric_key = f'Total New {metric}' if metric == 'Accounts' else f'Total Ticket {metric}' if metric == 'Revenue' else f'Total {metric}'
 
-        # Get annual growth projection from logarithmic decay model
-        if metric_key in recommendations:
-            rec = recommendations[metric_key]
-            annual_base_growth = rec['recommended'] / 100
-            print(f"    {metric}: projected {rec['recommended']}% (from {rec.get('growth_rates', [])})")
-        else:
-            annual_base_growth = 0.15  # Default
-
-        # BHAG growth - back-calculated for accounts, derived for fees
+        # Base growth - back-calculated from 25k cumulative target
         if metric == 'Accounts':
-            annual_bhag_growth = bhag_accounts_growth_required / 100
+            annual_base_growth = base_accounts_growth_required / 100
         elif metric == 'Fees':
-            annual_bhag_growth = bhag_fees_growth_required / 100
+            annual_base_growth = base_fees_growth_required / 100
         else:
-            # Revenue uses its own trend-based projection
-            annual_bhag_growth = bhag_accounts_growth_required / 100
+            # Revenue follows accounts growth
+            annual_base_growth = base_accounts_growth_required / 100
 
-        # === ENSURE BASE HAS HEADROOM BELOW BHAG ===
-        # Base should always be below BHAG - recalculate if needed
-        if annual_base_growth >= annual_bhag_growth:
-            # Calculate a dynamic gap based on the BHAG stretch
-            # Minimum 10% gap, scaling with how ambitious BHAG is
-            min_gap_ratio = 0.85  # Base should be at most 85% of BHAG
-            annual_base_growth = annual_bhag_growth * min_gap_ratio
-            print(f"    {metric}: Base capped at {round(annual_base_growth * 100, 1)}% to maintain headroom below BHAG")
+        # Stretch growth - back-calculated from 10k new accounts target
+        if metric == 'Accounts':
+            annual_stretch_growth = stretch_accounts_growth_required / 100
+        elif metric == 'Fees':
+            annual_stretch_growth = stretch_fees_growth_required / 100
+        else:
+            # Revenue follows accounts growth
+            annual_stretch_growth = stretch_accounts_growth_required / 100
+
+        print(f"    {metric}: Base {round(annual_base_growth * 100, 1)}%, Stretch {round(annual_stretch_growth * 100, 1)}%")
 
         # === CALCULATE MONTHLY TARGETS ===
         # Hybrid approach: combine monthly YoY patterns with trailing momentum
         base_targets = []
-        bhag_targets = []
+        stretch_targets = []
 
         for month in range(1, 13):
             base_year_monthly = scenarios.loc[scenarios['Month'] == month, f'{base_year} {metric}'].values[0]
@@ -3691,7 +3693,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
             # Skip if no base year data
             if base_year_monthly == 0:
                 base_targets.append(0)
-                bhag_targets.append(0)
+                stretch_targets.append(0)
                 continue
 
             # Step 1: Get historical monthly YoY pattern (capped to reduce outlier impact)
@@ -3718,71 +3720,70 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
             # Step 3: Blend historical pattern with momentum
             blended_yoy = (historical_yoy * (1 - momentum_weight)) + (momentum_yoy * momentum_weight)
 
-            # Step 4: Apply 20% cap and 0% floor to Base targets
-            # Floor ensures no negative growth (targets never below previous year)
-            capped_base_yoy = max(min(blended_yoy, MAX_MONTHLY_GROWTH), 0.0)
+            # Step 4: Scale blended YoY towards required annual growth
+            # Base target scaled to hit 25k cumulative
+            base_scale = annual_base_growth / max(blended_yoy, 0.01) if blended_yoy > 0 else 1.0
+            base_yoy = max(blended_yoy * base_scale, 0.0)  # Floor at 0%
+            base_monthly_target = base_year_monthly * (1 + base_yoy)
 
-            # Step 5: Calculate Base target with cap applied
-            base_monthly_target = base_year_monthly * (1 + capped_base_yoy)
-
-            # Step 6: Calculate BHAG target (stretch goal, can reach ~30%)
-            # BHAG uses the capped historical YoY scaled towards BHAG requirement
-            bhag_scale = annual_bhag_growth / max(annual_base_growth, 0.01) if annual_base_growth > 0 else 1.5
-            # BHAG can stretch to 30% (50% above the 20% Base cap)
-            bhag_yoy = max(min(blended_yoy * bhag_scale, 0.30), capped_base_yoy)  # At least match Base
-            bhag_monthly_target = base_year_monthly * (1 + bhag_yoy)
+            # Stretch target scaled to hit 10k new
+            stretch_scale = annual_stretch_growth / max(blended_yoy, 0.01) if blended_yoy > 0 else 1.5
+            stretch_yoy = max(blended_yoy * stretch_scale, base_yoy)  # At least match Base
+            stretch_monthly_target = base_year_monthly * (1 + stretch_yoy)
 
             base_targets.append(base_monthly_target)
-            bhag_targets.append(bhag_monthly_target)
+            stretch_targets.append(stretch_monthly_target)
 
         # Apply rounding for accounts (to nearest 50)
         if metric == 'Accounts':
             scenarios[f'{target_year} {metric} Base'] = [round_to_multiple(t, 50) for t in base_targets]
-            scenarios[f'{target_year} {metric} Base Low'] = [round_to_multiple(t * 0.9, 50) for t in base_targets]
-            scenarios[f'{target_year} {metric} Base High'] = [round_to_multiple(t * 1.1, 50) for t in base_targets]
-            scenarios[f'{target_year} {metric} BHAG'] = [round_to_multiple(t, 50) for t in bhag_targets]
+            scenarios[f'{target_year} {metric} Stretch'] = [round_to_multiple(t, 50) for t in stretch_targets]
         else:
             scenarios[f'{target_year} {metric} Base'] = [round(t, 2) for t in base_targets]
-            scenarios[f'{target_year} {metric} Base Low'] = [round(t * 0.9, 2) for t in base_targets]
-            scenarios[f'{target_year} {metric} Base High'] = [round(t * 1.1, 2) for t in base_targets]
-            scenarios[f'{target_year} {metric} BHAG'] = [round(t, 2) for t in bhag_targets]
+            scenarios[f'{target_year} {metric} Stretch'] = [round(t, 2) for t in stretch_targets]
 
-        # === FINAL CHECK: Ensure Base <= BHAG for every month ===
+        # === FINAL CHECK: Ensure Base <= Stretch for every month ===
         for i in range(len(scenarios)):
             base_val_month = scenarios.loc[i, f'{target_year} {metric} Base']
-            bhag_val_month = scenarios.loc[i, f'{target_year} {metric} BHAG']
-            if base_val_month > bhag_val_month:
-                # Cap Base at BHAG minus a small gap
+            stretch_val_month = scenarios.loc[i, f'{target_year} {metric} Stretch']
+            if base_val_month > stretch_val_month:
+                # Cap Base at Stretch minus a small gap
                 if metric == 'Accounts':
-                    scenarios.loc[i, f'{target_year} {metric} Base'] = round_to_multiple(bhag_val_month * 0.9, 50)
+                    scenarios.loc[i, f'{target_year} {metric} Base'] = round_to_multiple(stretch_val_month * 0.9, 50)
                 else:
-                    scenarios.loc[i, f'{target_year} {metric} Base'] = round(bhag_val_month * 0.9, 2)
+                    scenarios.loc[i, f'{target_year} {metric} Base'] = round(stretch_val_month * 0.9, 2)
 
         # YoY variance vs base year
         scenarios[f'{metric} Base vs {base_year} %'] = round(
             (scenarios[f'{target_year} {metric} Base'] - scenarios[f'{base_year} {metric}']) / scenarios[f'{base_year} {metric}'].replace(0, 1) * 100, 1
         )
-        scenarios[f'{metric} BHAG vs {base_year} %'] = round(
-            (scenarios[f'{target_year} {metric} BHAG'] - scenarios[f'{base_year} {metric}']) / scenarios[f'{base_year} {metric}'].replace(0, 1) * 100, 1
+        scenarios[f'{metric} Stretch vs {base_year} %'] = round(
+            (scenarios[f'{target_year} {metric} Stretch'] - scenarios[f'{base_year} {metric}']) / scenarios[f'{base_year} {metric}'].replace(0, 1) * 100, 1
         )
 
-    # === ADD CUMULATIVE TOTALS FOR BHAG TRACKING ===
+    # === ADD CUMULATIVE TOTALS FOR TARGET TRACKING ===
     scenarios['Cumulative Accounts (Base)'] = scenarios[f'{target_year} Accounts Base'].cumsum() + total_accounts_to_date
-    scenarios['Cumulative Accounts (BHAG)'] = scenarios[f'{target_year} Accounts BHAG'].cumsum() + total_accounts_to_date
+    scenarios['Cumulative Accounts (Stretch)'] = scenarios[f'{target_year} Accounts Stretch'].cumsum() + total_accounts_to_date
 
-    # BHAG milestone tracking
-    scenarios['BHAG Progress %'] = round(scenarios['Cumulative Accounts (BHAG)'] / bhag_accounts_target * 100, 1)
-    scenarios['BHAG Gap'] = bhag_accounts_target - scenarios['Cumulative Accounts (BHAG)']
+    # Base milestone tracking (25k cumulative target)
+    scenarios['Base Progress %'] = round(scenarios['Cumulative Accounts (Base)'] / base_cumulative_target * 100, 1)
+    scenarios['Base Gap'] = base_cumulative_target - scenarios['Cumulative Accounts (Base)']
+
+    # Stretch milestone tracking (10k new accounts target)
+    scenarios['Stretch New Accounts'] = scenarios[f'{target_year} Accounts Stretch'].cumsum()
+    scenarios['Stretch Progress %'] = round(scenarios['Stretch New Accounts'] / stretch_new_accounts_target * 100, 1)
+    scenarios['Stretch Gap'] = stretch_new_accounts_target - scenarios['Stretch New Accounts']
 
     # === SAVE OUTPUTS ===
 
-    # 1. Main scenario model (Base with ±10% confidence range + BHAG)
+    # 1. Main scenario model (Base + Stretch)
     scenario_cols = [
         'Month', 'Month Name', 'Holiday Type',
-        f'{base_year} Accounts', f'{target_year} Accounts Base Low', f'{target_year} Accounts Base', f'{target_year} Accounts Base High', f'{target_year} Accounts BHAG', f'Accounts Base vs {base_year} %', f'Accounts BHAG vs {base_year} %',
-        f'{base_year} Revenue', f'{target_year} Revenue Base Low', f'{target_year} Revenue Base', f'{target_year} Revenue Base High', f'{target_year} Revenue BHAG', f'Revenue Base vs {base_year} %', f'Revenue BHAG vs {base_year} %',
-        f'{base_year} Fees', f'{target_year} Fees Base Low', f'{target_year} Fees Base', f'{target_year} Fees Base High', f'{target_year} Fees BHAG', f'Fees Base vs {base_year} %', f'Fees BHAG vs {base_year} %',
-        'Cumulative Accounts (Base)', 'Cumulative Accounts (BHAG)', 'BHAG Progress %', 'BHAG Gap',
+        f'{base_year} Accounts', f'{target_year} Accounts Base', f'{target_year} Accounts Stretch', f'Accounts Base vs {base_year} %', f'Accounts Stretch vs {base_year} %',
+        f'{base_year} Revenue', f'{target_year} Revenue Base', f'{target_year} Revenue Stretch', f'Revenue Base vs {base_year} %', f'Revenue Stretch vs {base_year} %',
+        f'{base_year} Fees', f'{target_year} Fees Base', f'{target_year} Fees Stretch', f'Fees Base vs {base_year} %', f'Fees Stretch vs {base_year} %',
+        'Cumulative Accounts (Base)', 'Base Progress %', 'Base Gap',
+        'Cumulative Accounts (Stretch)', 'Stretch New Accounts', 'Stretch Progress %', 'Stretch Gap',
     ]
     scenario_cols = [c for c in scenario_cols if c in scenarios.columns]
 
@@ -3790,26 +3791,28 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     scenarios[scenario_cols].to_csv(scenario_file, index=False, float_format='%.2f')
     print(f"  ✓ {target_year} targets saved to: {scenario_file}")
 
-    # 2. Growth recommendations summary (Base from logarithmic decay, BHAG back-calculated)
+    # 2. Growth recommendations summary (Base + Stretch targets)
     rec_rows = []
     for metric, rec in recommendations.items():
-        # Determine BHAG growth for this metric
+        # Determine Base and Stretch growth for this metric
         if 'Accounts' in metric:
-            bhag_pct = bhag_accounts_growth_required
+            base_pct = base_accounts_growth_required
+            stretch_pct = stretch_accounts_growth_required
         elif 'Fees' in metric:
-            bhag_pct = bhag_fees_growth_required
+            base_pct = base_fees_growth_required
+            stretch_pct = stretch_fees_growth_required
         else:
-            bhag_pct = bhag_accounts_growth_required  # Revenue follows accounts
+            base_pct = base_accounts_growth_required  # Revenue follows accounts
+            stretch_pct = stretch_accounts_growth_required
 
         rec_rows.append({
             'Metric': metric,
             'Historical YoY Rates': ' → '.join(f"{g}%" for g in rec.get('growth_rates', [])),
             'Most Recent YoY %': rec.get('most_recent', rec['weighted_avg']),
             'Trend (acceleration)': rec['trend'],
-            'Projected (log decay) %': rec.get('projected', rec['recommended']),
-            'Base (Recommended) %': rec['recommended'],
-            'BHAG Required %': bhag_pct,
-            'BHAG vs Base Gap': round(bhag_pct - rec['recommended'], 1),
+            'Base Target %': base_pct,
+            'Stretch Target %': stretch_pct,
+            'Stretch vs Base Gap': round(stretch_pct - base_pct, 1),
         })
 
     if rec_rows:
@@ -3818,7 +3821,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
         rec_df.to_csv(rec_file, index=False, float_format='%.1f')
         print(f"  ✓ Growth recommendations saved to: {rec_file}")
 
-    # 3. Annual summary (Base + BHAG only)
+    # 3. Annual summary (Base + Stretch)
     annual_summary = {
         'Metric': ['New Accounts', 'Ticket Revenue', 'Fees'],
         f'{base_year} Actual': [int(base_accounts), round(base_revenue, 2), round(base_fees, 2)],
@@ -3827,23 +3830,23 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
             round(scenarios[f'{target_year} Revenue Base'].sum(), 2),
             round(scenarios[f'{target_year} Fees Base'].sum(), 2),
         ],
-        f'{target_year} BHAG': [
-            int(scenarios[f'{target_year} Accounts BHAG'].sum()),
-            round(scenarios[f'{target_year} Revenue BHAG'].sum(), 2),
-            round(scenarios[f'{target_year} Fees BHAG'].sum(), 2),
+        f'{target_year} Stretch': [
+            int(scenarios[f'{target_year} Accounts Stretch'].sum()),
+            round(scenarios[f'{target_year} Revenue Stretch'].sum(), 2),
+            round(scenarios[f'{target_year} Fees Stretch'].sum(), 2),
         ],
     }
 
     # Add growth percentages
-    for scenario in ['Base', 'BHAG']:
+    for scenario in ['Base', 'Stretch']:
         annual_summary[f'{scenario} Growth %'] = [
             round((annual_summary[f'{target_year} {scenario}'][i] - annual_summary[f'{base_year} Actual'][i]) / annual_summary[f'{base_year} Actual'][i] * 100, 1)
             for i in range(3)
         ]
 
-    # Add BHAG gap (difference between BHAG and Base)
-    annual_summary['BHAG vs Base Gap'] = [
-        annual_summary[f'{target_year} BHAG'][i] - annual_summary[f'{target_year} Base'][i]
+    # Add Stretch gap (difference between Stretch and Base)
+    annual_summary['Stretch vs Base Gap'] = [
+        annual_summary[f'{target_year} Stretch'][i] - annual_summary[f'{target_year} Base'][i]
         for i in range(3)
     ]
 

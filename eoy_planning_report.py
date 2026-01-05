@@ -2622,6 +2622,101 @@ def generate_gateway_split_analysis_csv(booking_df, accounts_df, output_file):
     print(f"  ✓ Gateway summary saved to: {summary_file}")
     output_files['summary'] = summary_file
 
+    # === GATEWAY YOY COMPARISON ===
+    # Compare gateway mix between 2024 and 2025 calendar years
+    print("  Generating gateway YoY comparison...")
+
+    # Prepare booking data with year
+    yoy_booking = booking_df.copy()
+    yoy_booking['TransactionDate'] = pd.to_datetime(yoy_booking['TransactionDate'])
+    yoy_booking['Year'] = yoy_booking['TransactionDate'].dt.year
+
+    yoy_rows = []
+    for year in [2024, 2025]:
+        year_bookings = yoy_booking[yoy_booking['Year'] == year]
+
+        if len(year_bookings) == 0:
+            continue
+
+        # Gateway metrics
+        gateway_year = year_bookings.groupby('Gateway').agg({
+            'TotalFees': 'sum',
+            'PaymentReceived': 'sum',
+            'TicketQuantity': 'sum',
+            'AccountId': 'nunique',
+            'EventId': 'nunique'
+        }).reset_index()
+
+        gateway_year.columns = ['Gateway', 'Fees', 'Revenue', 'Tickets', 'Accounts', 'Events']
+
+        total_fees = gateway_year['Fees'].sum()
+        total_accounts = gateway_year['Accounts'].sum()
+
+        for _, row in gateway_year.iterrows():
+            yoy_rows.append({
+                'Year': year,
+                'Gateway': row['Gateway'],
+                'Fees': round(row['Fees'], 2),
+                'Fees_Share_%': round(row['Fees'] / total_fees * 100, 1) if total_fees > 0 else 0,
+                'Accounts': row['Accounts'],
+                'Accounts_Share_%': round(row['Accounts'] / total_accounts * 100, 1) if total_accounts > 0 else 0,
+                'Tickets': row['Tickets'],
+                'Events': row['Events'],
+                'Fees_Per_Account': round(row['Fees'] / row['Accounts'], 2) if row['Accounts'] > 0 else 0
+            })
+
+    if yoy_rows:
+        gateway_yoy_df = pd.DataFrame(yoy_rows)
+
+        # Pivot to show 2024 vs 2025 side by side per gateway
+        gateways = gateway_yoy_df['Gateway'].unique()
+        comparison_rows = []
+
+        for gateway in gateways:
+            gw_data = gateway_yoy_df[gateway_yoy_df['Gateway'] == gateway]
+            data_2024 = gw_data[gw_data['Year'] == 2024].iloc[0] if len(gw_data[gw_data['Year'] == 2024]) > 0 else None
+            data_2025 = gw_data[gw_data['Year'] == 2025].iloc[0] if len(gw_data[gw_data['Year'] == 2025]) > 0 else None
+
+            row = {'Gateway': gateway}
+
+            # 2024 values
+            row['2024_Fees'] = float(data_2024['Fees']) if data_2024 is not None else 0
+            row['2024_Fees_Share_%'] = float(data_2024['Fees_Share_%']) if data_2024 is not None else 0
+            row['2024_Accounts'] = int(data_2024['Accounts']) if data_2024 is not None else 0
+            row['2024_Accounts_Share_%'] = float(data_2024['Accounts_Share_%']) if data_2024 is not None else 0
+            row['2024_Fees_Per_Account'] = float(data_2024['Fees_Per_Account']) if data_2024 is not None else 0
+
+            # 2025 values
+            row['2025_Fees'] = float(data_2025['Fees']) if data_2025 is not None else 0
+            row['2025_Fees_Share_%'] = float(data_2025['Fees_Share_%']) if data_2025 is not None else 0
+            row['2025_Accounts'] = int(data_2025['Accounts']) if data_2025 is not None else 0
+            row['2025_Accounts_Share_%'] = float(data_2025['Accounts_Share_%']) if data_2025 is not None else 0
+            row['2025_Fees_Per_Account'] = float(data_2025['Fees_Per_Account']) if data_2025 is not None else 0
+
+            # YoY changes
+            if row['2024_Fees'] > 0:
+                row['Fees_Growth_%'] = round((row['2025_Fees'] - row['2024_Fees']) / row['2024_Fees'] * 100, 1)
+            else:
+                row['Fees_Growth_%'] = 100.0 if row['2025_Fees'] > 0 else 0.0
+
+            if row['2024_Accounts'] > 0:
+                row['Accounts_Growth_%'] = round((row['2025_Accounts'] - row['2024_Accounts']) / row['2024_Accounts'] * 100, 1)
+            else:
+                row['Accounts_Growth_%'] = 100.0 if row['2025_Accounts'] > 0 else 0.0
+
+            row['Fees_Share_Change'] = round(row['2025_Fees_Share_%'] - row['2024_Fees_Share_%'], 1)
+            row['Accounts_Share_Change'] = round(row['2025_Accounts_Share_%'] - row['2024_Accounts_Share_%'], 1)
+
+            comparison_rows.append(row)
+
+        gateway_yoy_comparison = pd.DataFrame(comparison_rows)
+        gateway_yoy_comparison = gateway_yoy_comparison.sort_values('2025_Fees', ascending=False)
+
+        gateway_yoy_file = get_output_path(base_name, 'planning', '_gateway_yoy_comparison.csv')
+        gateway_yoy_comparison.to_csv(gateway_yoy_file, index=False, float_format='%.2f')
+        output_files['gateway_yoy_comparison'] = gateway_yoy_file
+        print(f"  ✓ Gateway YoY comparison saved to: {gateway_yoy_file}")
+
     return output_files
 
 
@@ -2749,6 +2844,110 @@ def generate_expansion_revenue_analysis_csv(booking_df, accounts_df, output_file
     summary_file = get_output_path(base_name, 'cohorts', '_expansion_yearly_summary.csv')
     yearly_summary.to_csv(summary_file, index=False, float_format='%.2f')
     print(f"  ✓ Expansion yearly summary saved to: {summary_file}")
+
+    # === REVENUE MATURITY YOY COMPARISON ===
+    # Compare revenue contribution from account age bands between 2024 and 2025
+    print("  Generating revenue maturity YoY comparison...")
+
+    # Get account creation dates
+    accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'])
+
+    maturity_yoy_rows = []
+    for year in [2024, 2025]:
+        # Filter bookings for this calendar year
+        year_bookings = booking_df[booking_df['YearMonth'].astype(str).str.startswith(str(year))]
+
+        if len(year_bookings) == 0:
+            continue
+
+        # For each booking, calculate account age at transaction time
+        # Reference point is start of the calendar year
+        year_start = pd.Timestamp(f'{year}-01-01')
+
+        year_bookings = year_bookings.copy()
+        year_bookings['AccountId'] = pd.to_numeric(year_bookings['AccountId'], errors='coerce')
+
+        # Get account creation lookup
+        account_created = accounts_df.set_index(account_id_col)['DateTimeCreated'].to_dict()
+
+        def get_account_age_band(account_id):
+            created = account_created.get(account_id)
+            if pd.isna(created) or created is None:
+                return 'Unknown'
+            months_old = (year_start - created).days / 30.44
+            if months_old <= 12:
+                return 'New (0-12m)'
+            elif months_old <= 24:
+                return 'Established (1-2 years)'
+            else:
+                return 'Mature (2+ years)'
+
+        year_bookings['Age_Band'] = year_bookings['AccountId'].apply(get_account_age_band)
+
+        # Aggregate by age band
+        fee_col = 'TotalFees' if 'TotalFees' in year_bookings.columns else 'Fees'
+        if fee_col not in year_bookings.columns:
+            # Calculate fees
+            fee_cols = ['BookingFee', 'CardFee', 'TicketFee', 'ProcessingFee']
+            available_fees = [col for col in fee_cols if col in year_bookings.columns]
+            year_bookings['TotalFees'] = year_bookings[available_fees].fillna(0).sum(axis=1)
+            fee_col = 'TotalFees'
+
+        age_summary = year_bookings.groupby('Age_Band').agg({
+            fee_col: 'sum',
+            'AccountId': 'nunique'
+        }).reset_index()
+
+        age_summary.columns = ['Age_Band', 'Revenue', 'Accounts']
+
+        total_revenue = age_summary['Revenue'].sum()
+
+        for _, row in age_summary.iterrows():
+            maturity_yoy_rows.append({
+                'Year': year,
+                'Account_Age': row['Age_Band'],
+                'Revenue': round(row['Revenue'], 2),
+                'Revenue_%': round(row['Revenue'] / total_revenue * 100, 1) if total_revenue > 0 else 0,
+                'Accounts': row['Accounts']
+            })
+
+    if maturity_yoy_rows:
+        maturity_yoy_df = pd.DataFrame(maturity_yoy_rows)
+
+        # Pivot to show 2024 vs 2025 side by side
+        age_bands = ['New (0-12m)', 'Established (1-2 years)', 'Mature (2+ years)']
+        comparison_rows = []
+
+        for age_band in age_bands:
+            band_data = maturity_yoy_df[maturity_yoy_df['Account_Age'] == age_band]
+            data_2024 = band_data[band_data['Year'] == 2024].iloc[0] if len(band_data[band_data['Year'] == 2024]) > 0 else None
+            data_2025 = band_data[band_data['Year'] == 2025].iloc[0] if len(band_data[band_data['Year'] == 2025]) > 0 else None
+
+            row = {'Account_Age': age_band}
+
+            row['2024_Revenue'] = float(data_2024['Revenue']) if data_2024 is not None else 0
+            row['2024_%'] = float(data_2024['Revenue_%']) if data_2024 is not None else 0
+            row['2024_Accounts'] = int(data_2024['Accounts']) if data_2024 is not None else 0
+
+            row['2025_Revenue'] = float(data_2025['Revenue']) if data_2025 is not None else 0
+            row['2025_%'] = float(data_2025['Revenue_%']) if data_2025 is not None else 0
+            row['2025_Accounts'] = int(data_2025['Accounts']) if data_2025 is not None else 0
+
+            # YoY changes
+            if row['2024_Revenue'] > 0:
+                row['Revenue_Growth_%'] = round((row['2025_Revenue'] - row['2024_Revenue']) / row['2024_Revenue'] * 100, 1)
+            else:
+                row['Revenue_Growth_%'] = 100.0 if row['2025_Revenue'] > 0 else 0.0
+
+            row['Share_Change'] = round(row['2025_%'] - row['2024_%'], 1)
+
+            comparison_rows.append(row)
+
+        maturity_comparison = pd.DataFrame(comparison_rows)
+
+        maturity_yoy_file = get_output_path(base_name, 'cohorts', '_revenue_maturity_yoy_comparison.csv')
+        maturity_comparison.to_csv(maturity_yoy_file, index=False, float_format='%.2f')
+        print(f"  ✓ Revenue maturity YoY comparison saved to: {maturity_yoy_file}")
 
     return revenue_file
 
@@ -3704,6 +3903,115 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
         print("  Top industries by value index:")
         for _, row in industry_output.head(5).iterrows():
             print(f"    {row['Industry']}: Value Index {row['Value Index']} - {row['Relative Growth Rate']}")
+
+        # === INDUSTRY YOY COMPARISON ===
+        # Compare industry metrics between 2024 and 2025 calendar years
+        print("  Generating industry YoY comparison...")
+
+        # Prepare booking data with year
+        yoy_booking = booking_df.copy()
+        yoy_booking['TransactionDate'] = pd.to_datetime(yoy_booking['TransactionDate'])
+        yoy_booking['Year'] = yoy_booking['TransactionDate'].dt.year
+
+        # Calculate TotalFees if not present
+        if 'TotalFees' not in yoy_booking.columns:
+            fee_cols = ['BookingFee', 'CardFee', 'TicketFee', 'ProcessingFee']
+            available_fees = [col for col in fee_cols if col in yoy_booking.columns]
+            yoy_booking['TotalFees'] = yoy_booking[available_fees].fillna(0).sum(axis=1)
+
+        yoy_rows = []
+        for year in [2024, 2025]:
+            year_bookings = yoy_booking[yoy_booking['Year'] == year]
+
+            if len(year_bookings) == 0:
+                continue
+
+            # Get accounts created by end of this year
+            year_end = pd.Timestamp(f'{year}-12-31', tz='Europe/London')
+            year_accounts = accounts_df[
+                pd.to_datetime(accounts_df['DateTimeCreated']) <= year_end
+            ]
+
+            # Filter to active accounts (at least MIN_TICKETS_FOR_ACTIVE tickets in the year)
+            year_bookings['AccountId'] = pd.to_numeric(year_bookings['AccountId'], errors='coerce')
+            account_tickets = year_bookings.groupby('AccountId')['TicketQuantity'].sum()
+            active_accounts = account_tickets[account_tickets >= MIN_TICKETS_FOR_ACTIVE].index.tolist()
+
+            # Industry metrics for active accounts
+            active_bookings = year_bookings[year_bookings['AccountId'].isin(active_accounts)]
+
+            industry_year = active_bookings.groupby('Industry').agg({
+                'AccountId': 'nunique',
+                'TotalFees': 'sum',
+                'TicketQuantity': 'sum',
+                'EventId': 'nunique'
+            }).reset_index()
+
+            total_accounts = industry_year['AccountId'].sum()
+            total_fees = industry_year['TotalFees'].sum()
+
+            for _, row in industry_year.iterrows():
+                yoy_rows.append({
+                    'Year': year,
+                    'Industry': row['Industry'],
+                    'Active Accounts': row['AccountId'],
+                    'Account Share %': round(row['AccountId'] / total_accounts * 100, 1) if total_accounts > 0 else 0,
+                    'Fees': round(row['TotalFees'], 2),
+                    'Fees Share %': round(row['TotalFees'] / total_fees * 100, 1) if total_fees > 0 else 0,
+                    'Tickets': row['TicketQuantity'],
+                    'Events': row['EventId'],
+                    'Fees per Account': round(row['TotalFees'] / row['AccountId'], 2) if row['AccountId'] > 0 else 0,
+                    'Tickets per Account': round(row['TicketQuantity'] / row['AccountId'], 0) if row['AccountId'] > 0 else 0
+                })
+
+        if yoy_rows:
+            industry_yoy_df = pd.DataFrame(yoy_rows)
+
+            # Pivot to show 2024 vs 2025 side by side per industry
+            industries = industry_yoy_df['Industry'].unique()
+            comparison_rows = []
+
+            for industry in industries:
+                ind_data = industry_yoy_df[industry_yoy_df['Industry'] == industry]
+                data_2024 = ind_data[ind_data['Year'] == 2024].iloc[0] if len(ind_data[ind_data['Year'] == 2024]) > 0 else None
+                data_2025 = ind_data[ind_data['Year'] == 2025].iloc[0] if len(ind_data[ind_data['Year'] == 2025]) > 0 else None
+
+                row = {'Industry': industry}
+
+                # 2024 values
+                row['2024_Accounts'] = int(data_2024['Active Accounts']) if data_2024 is not None else 0
+                row['2024_Fees'] = float(data_2024['Fees']) if data_2024 is not None else 0
+                row['2024_Account_Share_%'] = float(data_2024['Account Share %']) if data_2024 is not None else 0
+                row['2024_Fees_Share_%'] = float(data_2024['Fees Share %']) if data_2024 is not None else 0
+
+                # 2025 values
+                row['2025_Accounts'] = int(data_2025['Active Accounts']) if data_2025 is not None else 0
+                row['2025_Fees'] = float(data_2025['Fees']) if data_2025 is not None else 0
+                row['2025_Account_Share_%'] = float(data_2025['Account Share %']) if data_2025 is not None else 0
+                row['2025_Fees_Share_%'] = float(data_2025['Fees Share %']) if data_2025 is not None else 0
+
+                # YoY changes
+                if row['2024_Accounts'] > 0:
+                    row['Account_Growth_%'] = round((row['2025_Accounts'] - row['2024_Accounts']) / row['2024_Accounts'] * 100, 1)
+                else:
+                    row['Account_Growth_%'] = 100.0 if row['2025_Accounts'] > 0 else 0.0
+
+                if row['2024_Fees'] > 0:
+                    row['Fees_Growth_%'] = round((row['2025_Fees'] - row['2024_Fees']) / row['2024_Fees'] * 100, 1)
+                else:
+                    row['Fees_Growth_%'] = 100.0 if row['2025_Fees'] > 0 else 0.0
+
+                row['Account_Share_Change'] = round(row['2025_Account_Share_%'] - row['2024_Account_Share_%'], 1)
+                row['Fees_Share_Change'] = round(row['2025_Fees_Share_%'] - row['2024_Fees_Share_%'], 1)
+
+                comparison_rows.append(row)
+
+            industry_yoy_comparison = pd.DataFrame(comparison_rows)
+            industry_yoy_comparison = industry_yoy_comparison.sort_values('2025_Fees', ascending=False)
+
+            industry_yoy_file = get_output_path(base_name, 'planning', '_industry_yoy_comparison.csv')
+            industry_yoy_comparison.to_csv(industry_yoy_file, index=False, float_format='%.2f')
+            print(f"  ✓ Industry YoY comparison saved to: {industry_yoy_file}")
     else:
         print("  Warning: No industry data available for segmentation")
 
@@ -4065,6 +4373,117 @@ def generate_account_ltv_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.
     ltv_distribution.to_csv(dist_file, index=False, float_format='%.2f')
     output_files['ltv_distribution'] = dist_file
     print(f"    ✓ LTV distribution: {dist_file}")
+
+    # === REGIONAL YOY COMPARISON ===
+    # Compare regional performance between 2024 and 2025 calendar years
+    print("    Generating regional YoY comparison...")
+
+    # Prepare booking data with year
+    yoy_booking = booking_df.copy()
+    yoy_booking['TransactionDate'] = pd.to_datetime(yoy_booking['TransactionDate'])
+    yoy_booking['Year'] = yoy_booking['TransactionDate'].dt.year
+
+    # Calculate TotalFees if not present
+    if 'TotalFees' not in yoy_booking.columns:
+        fee_cols = ['BookingFee', 'CardFee', 'TicketFee', 'ProcessingFee']
+        available_fees = [col for col in fee_cols if col in yoy_booking.columns]
+        yoy_booking['TotalFees'] = yoy_booking[available_fees].fillna(0).sum(axis=1)
+
+    # Add region from postcode
+    if 'Region' not in yoy_booking.columns:
+        if 'EventPostcode' in yoy_booking.columns:
+            postcode_areas = extract_postcode_areas_vectorized(yoy_booking['EventPostcode'])
+            yoy_booking['Region'] = get_regions_vectorized(postcode_areas)
+        elif 'AccountPostcode' in yoy_booking.columns:
+            postcode_areas = extract_postcode_areas_vectorized(yoy_booking['AccountPostcode'])
+            yoy_booking['Region'] = get_regions_vectorized(postcode_areas)
+        else:
+            yoy_booking['Region'] = 'Unknown'
+
+    yoy_rows = []
+    for year in [2024, 2025]:
+        year_bookings = yoy_booking[yoy_booking['Year'] == year]
+
+        if len(year_bookings) == 0:
+            continue
+
+        # Regional metrics
+        region_year = year_bookings.groupby('Region').agg({
+            'AccountId': 'nunique',
+            'TotalFees': 'sum',
+            'TicketQuantity': 'sum',
+            'EventId': 'nunique'
+        }).reset_index()
+
+        region_year.columns = ['Region', 'Accounts', 'Fees', 'Tickets', 'Events']
+
+        total_accounts = region_year['Accounts'].sum()
+        total_fees = region_year['Fees'].sum()
+
+        for _, row in region_year.iterrows():
+            yoy_rows.append({
+                'Year': year,
+                'Region': row['Region'],
+                'Accounts': row['Accounts'],
+                'Accounts_Share_%': round(row['Accounts'] / total_accounts * 100, 1) if total_accounts > 0 else 0,
+                'Fees': round(row['Fees'], 2),
+                'Fees_Share_%': round(row['Fees'] / total_fees * 100, 1) if total_fees > 0 else 0,
+                'Tickets': row['Tickets'],
+                'Events': row['Events'],
+                'Fees_Per_Account': round(row['Fees'] / row['Accounts'], 2) if row['Accounts'] > 0 else 0
+            })
+
+    if yoy_rows:
+        region_yoy_df = pd.DataFrame(yoy_rows)
+
+        # Pivot to show 2024 vs 2025 side by side per region
+        regions = region_yoy_df['Region'].unique()
+        comparison_rows = []
+
+        for region in regions:
+            reg_data = region_yoy_df[region_yoy_df['Region'] == region]
+            data_2024 = reg_data[reg_data['Year'] == 2024].iloc[0] if len(reg_data[reg_data['Year'] == 2024]) > 0 else None
+            data_2025 = reg_data[reg_data['Year'] == 2025].iloc[0] if len(reg_data[reg_data['Year'] == 2025]) > 0 else None
+
+            row = {'Region': region}
+
+            # 2024 values
+            row['2024_Accounts'] = int(data_2024['Accounts']) if data_2024 is not None else 0
+            row['2024_Fees'] = float(data_2024['Fees']) if data_2024 is not None else 0
+            row['2024_Accounts_Share_%'] = float(data_2024['Accounts_Share_%']) if data_2024 is not None else 0
+            row['2024_Fees_Share_%'] = float(data_2024['Fees_Share_%']) if data_2024 is not None else 0
+            row['2024_Fees_Per_Account'] = float(data_2024['Fees_Per_Account']) if data_2024 is not None else 0
+
+            # 2025 values
+            row['2025_Accounts'] = int(data_2025['Accounts']) if data_2025 is not None else 0
+            row['2025_Fees'] = float(data_2025['Fees']) if data_2025 is not None else 0
+            row['2025_Accounts_Share_%'] = float(data_2025['Accounts_Share_%']) if data_2025 is not None else 0
+            row['2025_Fees_Share_%'] = float(data_2025['Fees_Share_%']) if data_2025 is not None else 0
+            row['2025_Fees_Per_Account'] = float(data_2025['Fees_Per_Account']) if data_2025 is not None else 0
+
+            # YoY changes
+            if row['2024_Accounts'] > 0:
+                row['Accounts_Growth_%'] = round((row['2025_Accounts'] - row['2024_Accounts']) / row['2024_Accounts'] * 100, 1)
+            else:
+                row['Accounts_Growth_%'] = 100.0 if row['2025_Accounts'] > 0 else 0.0
+
+            if row['2024_Fees'] > 0:
+                row['Fees_Growth_%'] = round((row['2025_Fees'] - row['2024_Fees']) / row['2024_Fees'] * 100, 1)
+            else:
+                row['Fees_Growth_%'] = 100.0 if row['2025_Fees'] > 0 else 0.0
+
+            row['Accounts_Share_Change'] = round(row['2025_Accounts_Share_%'] - row['2024_Accounts_Share_%'], 1)
+            row['Fees_Share_Change'] = round(row['2025_Fees_Share_%'] - row['2024_Fees_Share_%'], 1)
+
+            comparison_rows.append(row)
+
+        region_yoy_comparison = pd.DataFrame(comparison_rows)
+        region_yoy_comparison = region_yoy_comparison.sort_values('2025_Fees', ascending=False)
+
+        region_yoy_file = get_output_path(base_name, 'geography', '_regional_yoy_comparison.csv')
+        region_yoy_comparison.to_csv(region_yoy_file, index=False, float_format='%.2f')
+        output_files['regional_yoy_comparison'] = region_yoy_file
+        print(f"    ✓ Regional YoY comparison: {region_yoy_file}")
 
     return output_files
 
@@ -4494,6 +4913,258 @@ def generate_event_metrics_analysis_csv(booking_df: pd.DataFrame, accounts_df: p
     advance_by_industry.to_csv(advance_file, index=False, float_format='%.1f')
     output_files['advance_booking_by_industry'] = advance_file
     print(f"    ✓ Advance booking by industry: {advance_file}")
+
+    # === EVENT FREQUENCY YOY COMPARISON ===
+    # Compare event frequency distribution between 2024 and 2025 calendar years
+    print("    Generating event frequency YoY comparison...")
+
+    yoy_rows = []
+    for year in [2024, 2025]:
+        # Get events per account for this calendar year
+        year_bookings = booking_df[booking_df['Year'] == year]
+
+        if len(year_bookings) == 0:
+            continue
+
+        # Events per account in this year
+        events_per_account = year_bookings.groupby('AccountId')['EventId'].nunique().reset_index()
+        events_per_account.columns = ['AccountId', 'Events_Count']
+
+        # Classify frequency
+        def classify_freq(avg_events):
+            if avg_events >= 4:
+                return 'Regular (4+/yr)'
+            elif avg_events >= 2:
+                return 'Occasional (2-3/yr)'
+            elif avg_events >= 1:
+                return 'Annual (1/yr)'
+            else:
+                return 'Sporadic (<1/yr)'
+
+        events_per_account['Frequency_Category'] = events_per_account['Events_Count'].apply(classify_freq)
+
+        # Get fees per account for this year
+        account_fees = year_bookings.groupby('AccountId').agg({
+            'TotalFees': 'sum' if 'TotalFees' in year_bookings.columns else 'count',
+            'TicketQuantity': 'sum'
+        }).reset_index()
+
+        if 'TotalFees' not in year_bookings.columns:
+            fee_cols = ['BookingFee', 'CardFee', 'TicketFee', 'ProcessingFee']
+            available_fees = [col for col in fee_cols if col in year_bookings.columns]
+            account_fees_calc = year_bookings.groupby('AccountId')[available_fees].sum().sum(axis=1).reset_index()
+            account_fees_calc.columns = ['AccountId', 'TotalFees']
+            account_fees = account_fees.merge(account_fees_calc, on='AccountId', how='left')
+
+        events_per_account = events_per_account.merge(account_fees, on='AccountId', how='left')
+
+        # Summary by frequency category
+        freq_year = events_per_account.groupby('Frequency_Category').agg({
+            'AccountId': 'count',
+            'TotalFees': 'sum',
+            'TicketQuantity': 'sum'
+        }).reset_index()
+
+        freq_year.columns = ['Frequency_Category', 'Accounts', 'Fees', 'Tickets']
+
+        total_accounts = freq_year['Accounts'].sum()
+        total_fees = freq_year['Fees'].sum()
+
+        for _, row in freq_year.iterrows():
+            yoy_rows.append({
+                'Year': year,
+                'Frequency_Category': row['Frequency_Category'],
+                'Accounts': row['Accounts'],
+                'Accounts_Share_%': round(row['Accounts'] / total_accounts * 100, 1) if total_accounts > 0 else 0,
+                'Fees': round(row['Fees'], 2),
+                'Fees_Share_%': round(row['Fees'] / total_fees * 100, 1) if total_fees > 0 else 0,
+                'Fees_Per_Account': round(row['Fees'] / row['Accounts'], 2) if row['Accounts'] > 0 else 0
+            })
+
+    if yoy_rows:
+        freq_yoy_df = pd.DataFrame(yoy_rows)
+
+        # Pivot to show 2024 vs 2025 side by side per frequency category
+        freq_order = ['Regular (4+/yr)', 'Occasional (2-3/yr)', 'Annual (1/yr)', 'Sporadic (<1/yr)']
+        comparison_rows = []
+
+        for freq_cat in freq_order:
+            freq_data = freq_yoy_df[freq_yoy_df['Frequency_Category'] == freq_cat]
+            data_2024 = freq_data[freq_data['Year'] == 2024].iloc[0] if len(freq_data[freq_data['Year'] == 2024]) > 0 else None
+            data_2025 = freq_data[freq_data['Year'] == 2025].iloc[0] if len(freq_data[freq_data['Year'] == 2025]) > 0 else None
+
+            row = {'Frequency_Category': freq_cat}
+
+            # 2024 values
+            row['2024_Accounts'] = int(data_2024['Accounts']) if data_2024 is not None else 0
+            row['2024_Fees'] = float(data_2024['Fees']) if data_2024 is not None else 0
+            row['2024_Accounts_Share_%'] = float(data_2024['Accounts_Share_%']) if data_2024 is not None else 0
+            row['2024_Fees_Share_%'] = float(data_2024['Fees_Share_%']) if data_2024 is not None else 0
+            row['2024_Fees_Per_Account'] = float(data_2024['Fees_Per_Account']) if data_2024 is not None else 0
+
+            # 2025 values
+            row['2025_Accounts'] = int(data_2025['Accounts']) if data_2025 is not None else 0
+            row['2025_Fees'] = float(data_2025['Fees']) if data_2025 is not None else 0
+            row['2025_Accounts_Share_%'] = float(data_2025['Accounts_Share_%']) if data_2025 is not None else 0
+            row['2025_Fees_Share_%'] = float(data_2025['Fees_Share_%']) if data_2025 is not None else 0
+            row['2025_Fees_Per_Account'] = float(data_2025['Fees_Per_Account']) if data_2025 is not None else 0
+
+            # YoY changes
+            if row['2024_Accounts'] > 0:
+                row['Accounts_Growth_%'] = round((row['2025_Accounts'] - row['2024_Accounts']) / row['2024_Accounts'] * 100, 1)
+            else:
+                row['Accounts_Growth_%'] = 100.0 if row['2025_Accounts'] > 0 else 0.0
+
+            if row['2024_Fees'] > 0:
+                row['Fees_Growth_%'] = round((row['2025_Fees'] - row['2024_Fees']) / row['2024_Fees'] * 100, 1)
+            else:
+                row['Fees_Growth_%'] = 100.0 if row['2025_Fees'] > 0 else 0.0
+
+            row['Accounts_Share_Change'] = round(row['2025_Accounts_Share_%'] - row['2024_Accounts_Share_%'], 1)
+            row['Fees_Share_Change'] = round(row['2025_Fees_Share_%'] - row['2024_Fees_Share_%'], 1)
+
+            comparison_rows.append(row)
+
+        freq_yoy_comparison = pd.DataFrame(comparison_rows)
+
+        freq_yoy_file = get_output_path(base_name, 'cohorts', '_event_frequency_yoy_comparison.csv')
+        freq_yoy_comparison.to_csv(freq_yoy_file, index=False, float_format='%.2f')
+        output_files['event_frequency_yoy_comparison'] = freq_yoy_file
+        print(f"    ✓ Event frequency YoY comparison: {freq_yoy_file}")
+
+    # === ADVANCE BOOKING YOY COMPARISON ===
+    # Compare advance booking patterns between 2024 and 2025 by industry
+    print("    Generating advance booking YoY comparison...")
+
+    if 'Advance_Days' in booking_df.columns:
+        advance_yoy_rows = []
+        for year in [2024, 2025]:
+            year_bookings = booking_df[booking_df['Year'] == year]
+
+            if len(year_bookings) == 0:
+                continue
+
+            # Advance days by industry for this year
+            advance_by_ind = year_bookings.groupby('Industry')['Advance_Days'].agg([
+                'count', 'mean', 'median'
+            ]).reset_index()
+            advance_by_ind.columns = ['Industry', 'Transactions', 'Mean_Days', 'Median_Days']
+
+            for _, row in advance_by_ind.iterrows():
+                advance_yoy_rows.append({
+                    'Year': year,
+                    'Industry': row['Industry'],
+                    'Transactions': row['Transactions'],
+                    'Mean_Days': round(row['Mean_Days'], 1),
+                    'Median_Days': round(row['Median_Days'], 1)
+                })
+
+        if advance_yoy_rows:
+            advance_yoy_df = pd.DataFrame(advance_yoy_rows)
+
+            # Pivot to show 2024 vs 2025 side by side
+            industries = advance_yoy_df['Industry'].unique()
+            comparison_rows = []
+
+            for industry in industries:
+                ind_data = advance_yoy_df[advance_yoy_df['Industry'] == industry]
+                data_2024 = ind_data[ind_data['Year'] == 2024].iloc[0] if len(ind_data[ind_data['Year'] == 2024]) > 0 else None
+                data_2025 = ind_data[ind_data['Year'] == 2025].iloc[0] if len(ind_data[ind_data['Year'] == 2025]) > 0 else None
+
+                row = {'Industry': industry}
+
+                row['2024_Median_Days'] = float(data_2024['Median_Days']) if data_2024 is not None else 0
+                row['2024_Mean_Days'] = float(data_2024['Mean_Days']) if data_2024 is not None else 0
+                row['2024_Transactions'] = int(data_2024['Transactions']) if data_2024 is not None else 0
+
+                row['2025_Median_Days'] = float(data_2025['Median_Days']) if data_2025 is not None else 0
+                row['2025_Mean_Days'] = float(data_2025['Mean_Days']) if data_2025 is not None else 0
+                row['2025_Transactions'] = int(data_2025['Transactions']) if data_2025 is not None else 0
+
+                row['Median_Change'] = round(row['2025_Median_Days'] - row['2024_Median_Days'], 1)
+                row['Mean_Change'] = round(row['2025_Mean_Days'] - row['2024_Mean_Days'], 1)
+
+                comparison_rows.append(row)
+
+            advance_yoy_comparison = pd.DataFrame(comparison_rows)
+            advance_yoy_comparison = advance_yoy_comparison.sort_values('2025_Transactions', ascending=False)
+
+            advance_yoy_file = get_output_path(base_name, 'industry', '_advance_booking_yoy_comparison.csv')
+            advance_yoy_comparison.to_csv(advance_yoy_file, index=False, float_format='%.1f')
+            output_files['advance_booking_yoy_comparison'] = advance_yoy_file
+            print(f"    ✓ Advance booking YoY comparison: {advance_yoy_file}")
+
+    # === REPEAT BEHAVIOUR YOY COMPARISON ===
+    # Compare repeat event rates between 2024 and 2025
+    print("    Generating repeat behaviour YoY comparison...")
+
+    repeat_yoy_rows = []
+    for year in [2024, 2025]:
+        year_bookings = booking_df[booking_df['Year'] == year]
+
+        if len(year_bookings) == 0:
+            continue
+
+        # Events per account in this year
+        events_per_account = year_bookings.groupby('AccountId')['EventId'].nunique().reset_index()
+        events_per_account.columns = ['AccountId', 'Events_Count']
+
+        total_accounts = len(events_per_account)
+        one_and_done = (events_per_account['Events_Count'] == 1).sum()
+        repeat_accounts = (events_per_account['Events_Count'] > 1).sum()
+        avg_events = events_per_account['Events_Count'].mean()
+
+        repeat_yoy_rows.append({
+            'Year': year,
+            'Total_Active_Accounts': total_accounts,
+            'Accounts_With_Repeat_Events': repeat_accounts,
+            'Repeat_Rate_%': round(repeat_accounts / total_accounts * 100, 1) if total_accounts > 0 else 0,
+            'One_And_Done_Accounts': one_and_done,
+            'One_And_Done_%': round(one_and_done / total_accounts * 100, 1) if total_accounts > 0 else 0,
+            'Avg_Events_Per_Account': round(avg_events, 2)
+        })
+
+    if len(repeat_yoy_rows) == 2:
+        data_2024 = repeat_yoy_rows[0] if repeat_yoy_rows[0]['Year'] == 2024 else repeat_yoy_rows[1]
+        data_2025 = repeat_yoy_rows[1] if repeat_yoy_rows[1]['Year'] == 2025 else repeat_yoy_rows[0]
+
+        repeat_comparison = pd.DataFrame([
+            {
+                'Metric': '% of accounts with repeat events',
+                '2024': data_2024['Repeat_Rate_%'],
+                '2025': data_2025['Repeat_Rate_%'],
+                'Change': round(data_2025['Repeat_Rate_%'] - data_2024['Repeat_Rate_%'], 1)
+            },
+            {
+                'Metric': 'Avg events per active account',
+                '2024': data_2024['Avg_Events_Per_Account'],
+                '2025': data_2025['Avg_Events_Per_Account'],
+                'Change': round(data_2025['Avg_Events_Per_Account'] - data_2024['Avg_Events_Per_Account'], 2)
+            },
+            {
+                'Metric': '% one-and-done accounts',
+                '2024': data_2024['One_And_Done_%'],
+                '2025': data_2025['One_And_Done_%'],
+                'Change': round(data_2025['One_And_Done_%'] - data_2024['One_And_Done_%'], 1)
+            },
+            {
+                'Metric': 'Total active accounts',
+                '2024': data_2024['Total_Active_Accounts'],
+                '2025': data_2025['Total_Active_Accounts'],
+                'Change': data_2025['Total_Active_Accounts'] - data_2024['Total_Active_Accounts']
+            },
+            {
+                'Metric': 'Accounts with repeat events',
+                '2024': data_2024['Accounts_With_Repeat_Events'],
+                '2025': data_2025['Accounts_With_Repeat_Events'],
+                'Change': data_2025['Accounts_With_Repeat_Events'] - data_2024['Accounts_With_Repeat_Events']
+            }
+        ])
+
+        repeat_yoy_file = get_output_path(base_name, 'cohorts', '_repeat_behaviour_yoy_comparison.csv')
+        repeat_comparison.to_csv(repeat_yoy_file, index=False)
+        output_files['repeat_behaviour_yoy_comparison'] = repeat_yoy_file
+        print(f"    ✓ Repeat behaviour YoY comparison: {repeat_yoy_file}")
 
     return output_files
 
@@ -5806,6 +6477,134 @@ def generate_price_band_analysis_csv(booking_df: pd.DataFrame, output_file: str)
         output_files['price_band_by_industry'] = industry_file
         print(f"    ✓ Price band by industry: {industry_file}")
 
+    # === PRICE BAND YOY COMPARISON ===
+    # Compare price band economics between 2024 and 2025 calendar years
+    print("    Generating price band YoY comparison...")
+
+    # Prepare booking data with year
+    yoy_booking = booking_df.copy()
+    yoy_booking['TransactionDate'] = pd.to_datetime(yoy_booking['TransactionDate'])
+    yoy_booking['Year'] = yoy_booking['TransactionDate'].dt.year
+
+    # Calculate TotalFees if not present
+    if 'TotalFees' not in yoy_booking.columns:
+        fee_cols = ['BookingFee', 'CardFee', 'TicketFee', 'ProcessingFee']
+        available_fees = [col for col in fee_cols if col in yoy_booking.columns]
+        yoy_booking['TotalFees'] = yoy_booking[available_fees].fillna(0).sum(axis=1)
+
+    # Aggregate to event level by year
+    yoy_events = yoy_booking.groupby(['EventId', 'Year']).agg({
+        'PaymentReceived': 'sum',
+        'TicketQuantity': 'sum',
+        'TotalFees': 'sum',
+        'AccountId': 'first'
+    }).reset_index()
+
+    # Calculate average ticket price
+    yoy_events['AvgTicketPrice'] = yoy_events.apply(
+        lambda x: x['PaymentReceived'] / x['TicketQuantity'] if x['TicketQuantity'] > 0 else 0, axis=1
+    )
+
+    # Classify into price bands
+    def classify_price_band(price):
+        if price == 0:
+            return 'Free'
+        elif price < 10:
+            return '£1-£9.99'
+        elif price < 25:
+            return '£10-£24.99'
+        elif price < 50:
+            return '£25-£49.99'
+        else:
+            return '£50+'
+
+    yoy_events['Price Band'] = yoy_events['AvgTicketPrice'].apply(classify_price_band)
+
+    yoy_rows = []
+    for year in [2024, 2025]:
+        year_events = yoy_events[yoy_events['Year'] == year]
+
+        if len(year_events) == 0:
+            continue
+
+        # Summary by price band
+        band_year = year_events.groupby('Price Band').agg({
+            'EventId': 'count',
+            'TicketQuantity': 'sum',
+            'PaymentReceived': 'sum',
+            'TotalFees': 'sum',
+            'AccountId': 'nunique'
+        }).reset_index()
+
+        band_year.columns = ['Price Band', 'Events', 'Tickets', 'Revenue', 'Fees', 'Accounts']
+
+        total_events = band_year['Events'].sum()
+        total_fees = band_year['Fees'].sum()
+
+        for _, row in band_year.iterrows():
+            yoy_rows.append({
+                'Year': year,
+                'Price_Band': row['Price Band'],
+                'Events': row['Events'],
+                'Events_Share_%': round(row['Events'] / total_events * 100, 1) if total_events > 0 else 0,
+                'Tickets': row['Tickets'],
+                'Fees': round(row['Fees'], 2),
+                'Fees_Share_%': round(row['Fees'] / total_fees * 100, 1) if total_fees > 0 else 0,
+                'Accounts': row['Accounts'],
+                'Avg_Fees_Per_Event': round(row['Fees'] / row['Events'], 2) if row['Events'] > 0 else 0
+            })
+
+    if yoy_rows:
+        price_yoy_df = pd.DataFrame(yoy_rows)
+
+        # Pivot to show 2024 vs 2025 side by side per price band
+        price_band_order = ['Free', '£1-£9.99', '£10-£24.99', '£25-£49.99', '£50+']
+        comparison_rows = []
+
+        for band in price_band_order:
+            band_data = price_yoy_df[price_yoy_df['Price_Band'] == band]
+            data_2024 = band_data[band_data['Year'] == 2024].iloc[0] if len(band_data[band_data['Year'] == 2024]) > 0 else None
+            data_2025 = band_data[band_data['Year'] == 2025].iloc[0] if len(band_data[band_data['Year'] == 2025]) > 0 else None
+
+            row = {'Price_Band': band}
+
+            # 2024 values
+            row['2024_Events'] = int(data_2024['Events']) if data_2024 is not None else 0
+            row['2024_Fees'] = float(data_2024['Fees']) if data_2024 is not None else 0
+            row['2024_Events_Share_%'] = float(data_2024['Events_Share_%']) if data_2024 is not None else 0
+            row['2024_Fees_Share_%'] = float(data_2024['Fees_Share_%']) if data_2024 is not None else 0
+            row['2024_Avg_Fees_Per_Event'] = float(data_2024['Avg_Fees_Per_Event']) if data_2024 is not None else 0
+
+            # 2025 values
+            row['2025_Events'] = int(data_2025['Events']) if data_2025 is not None else 0
+            row['2025_Fees'] = float(data_2025['Fees']) if data_2025 is not None else 0
+            row['2025_Events_Share_%'] = float(data_2025['Events_Share_%']) if data_2025 is not None else 0
+            row['2025_Fees_Share_%'] = float(data_2025['Fees_Share_%']) if data_2025 is not None else 0
+            row['2025_Avg_Fees_Per_Event'] = float(data_2025['Avg_Fees_Per_Event']) if data_2025 is not None else 0
+
+            # YoY changes
+            if row['2024_Events'] > 0:
+                row['Events_Growth_%'] = round((row['2025_Events'] - row['2024_Events']) / row['2024_Events'] * 100, 1)
+            else:
+                row['Events_Growth_%'] = 100.0 if row['2025_Events'] > 0 else 0.0
+
+            if row['2024_Fees'] > 0:
+                row['Fees_Growth_%'] = round((row['2025_Fees'] - row['2024_Fees']) / row['2024_Fees'] * 100, 1)
+            else:
+                row['Fees_Growth_%'] = 100.0 if row['2025_Fees'] > 0 else 0.0
+
+            row['Events_Share_Change'] = round(row['2025_Events_Share_%'] - row['2024_Events_Share_%'], 1)
+            row['Fees_Share_Change'] = round(row['2025_Fees_Share_%'] - row['2024_Fees_Share_%'], 1)
+
+            comparison_rows.append(row)
+
+        price_yoy_comparison = pd.DataFrame(comparison_rows)
+
+        price_yoy_file = get_output_path(base_name, 'industry', '_price_band_yoy_comparison.csv')
+        price_yoy_comparison.to_csv(price_yoy_file, index=False, float_format='%.2f')
+        output_files['price_band_yoy_comparison'] = price_yoy_file
+        print(f"    ✓ Price band YoY comparison: {price_yoy_file}")
+
     return output_files
 
 
@@ -5947,6 +6746,146 @@ def generate_activation_by_month_csv(accounts_df: pd.DataFrame, booking_df: pd.D
     activation_df.to_csv(activation_file, index=False, float_format='%.1f')
     output_files['activation_by_signup_month'] = activation_file
     print(f"    ✓ Activation by signup month: {activation_file}")
+
+    # === ACTIVATION RATES YOY COMPARISON ===
+    # Compare activation rates for accounts created in 2024 vs 2025
+    print("    Generating activation rates YoY comparison...")
+
+    # Add signup year
+    accounts_df['SignupYear'] = pd.to_datetime(accounts_df['DateTimeCreated']).dt.year
+
+    # Calculate days to first sale from booking data
+    booking_account_col = 'AccountId'
+    first_sale = booking_df.groupby(booking_account_col)['TransactionDate'].min().reset_index()
+    first_sale.columns = [booking_account_col, 'FirstSaleDate']
+    first_sale['FirstSaleDate'] = pd.to_datetime(first_sale['FirstSaleDate'])
+
+    # Get account ID column
+    account_id_col = 'Account Id' if 'Account Id' in accounts_df.columns else 'AccountId'
+
+    # Merge first sale data
+    accounts_df = accounts_df.merge(
+        first_sale.rename(columns={booking_account_col: account_id_col}),
+        on=account_id_col, how='left'
+    )
+
+    accounts_df['DaysToFirstSale'] = (accounts_df['FirstSaleDate'] - accounts_df['SignupDate']).dt.days
+    accounts_df.loc[accounts_df['DaysToFirstSale'] < 0, 'DaysToFirstSale'] = None
+
+    activation_yoy_rows = []
+    for year in [2024, 2025]:
+        year_accounts = accounts_df[accounts_df['SignupYear'] == year]
+        total = len(year_accounts)
+
+        if total == 0:
+            continue
+
+        # Event activation metrics
+        has_first_event = 'DaysToFirstEvent' in year_accounts.columns
+        if has_first_event:
+            event_7d = (year_accounts['DaysToFirstEvent'] <= 7).sum()
+            event_30d = (year_accounts['DaysToFirstEvent'] <= 30).sum()
+            event_90d = (year_accounts['DaysToFirstEvent'] <= 90).sum()
+            avg_days_event = year_accounts['DaysToFirstEvent'].dropna().mean()
+        else:
+            event_7d = event_30d = event_90d = 0
+            avg_days_event = None
+
+        # Sale activation metrics
+        sale_7d = (year_accounts['DaysToFirstSale'] <= 7).sum()
+        sale_30d = (year_accounts['DaysToFirstSale'] <= 30).sum()
+        sale_90d = (year_accounts['DaysToFirstSale'] <= 90).sum()
+        avg_days_sale = year_accounts['DaysToFirstSale'].dropna().mean()
+
+        activation_yoy_rows.append({
+            'Year': year,
+            'Total_Accounts': total,
+            'Event_7d': event_7d,
+            'Event_7d_%': round(event_7d / total * 100, 1) if total > 0 else 0,
+            'Event_30d': event_30d,
+            'Event_30d_%': round(event_30d / total * 100, 1) if total > 0 else 0,
+            'Event_90d': event_90d,
+            'Event_90d_%': round(event_90d / total * 100, 1) if total > 0 else 0,
+            'Avg_Days_Event': round(avg_days_event, 1) if avg_days_event else None,
+            'Sale_7d': sale_7d,
+            'Sale_7d_%': round(sale_7d / total * 100, 1) if total > 0 else 0,
+            'Sale_30d': sale_30d,
+            'Sale_30d_%': round(sale_30d / total * 100, 1) if total > 0 else 0,
+            'Sale_90d': sale_90d,
+            'Sale_90d_%': round(sale_90d / total * 100, 1) if total > 0 else 0,
+            'Avg_Days_Sale': round(avg_days_sale, 1) if avg_days_sale else None
+        })
+
+    if len(activation_yoy_rows) == 2:
+        data_2024 = activation_yoy_rows[0] if activation_yoy_rows[0]['Year'] == 2024 else activation_yoy_rows[1]
+        data_2025 = activation_yoy_rows[1] if activation_yoy_rows[1]['Year'] == 2025 else activation_yoy_rows[0]
+
+        def calc_change(v_2025, v_2024):
+            if v_2024 is None or v_2025 is None:
+                return None
+            return round(v_2025 - v_2024, 1)
+
+        activation_comparison = pd.DataFrame([
+            {
+                'Metric': '% activated within 7 days (event)',
+                '2024': data_2024['Event_7d_%'],
+                '2025': data_2025['Event_7d_%'],
+                'Change': calc_change(data_2025['Event_7d_%'], data_2024['Event_7d_%'])
+            },
+            {
+                'Metric': '% activated within 30 days (event)',
+                '2024': data_2024['Event_30d_%'],
+                '2025': data_2025['Event_30d_%'],
+                'Change': calc_change(data_2025['Event_30d_%'], data_2024['Event_30d_%'])
+            },
+            {
+                'Metric': '% activated within 90 days (event)',
+                '2024': data_2024['Event_90d_%'],
+                '2025': data_2025['Event_90d_%'],
+                'Change': calc_change(data_2025['Event_90d_%'], data_2024['Event_90d_%'])
+            },
+            {
+                'Metric': 'Average days to first event',
+                '2024': data_2024['Avg_Days_Event'],
+                '2025': data_2025['Avg_Days_Event'],
+                'Change': calc_change(data_2025['Avg_Days_Event'], data_2024['Avg_Days_Event'])
+            },
+            {
+                'Metric': '% with sale within 7 days',
+                '2024': data_2024['Sale_7d_%'],
+                '2025': data_2025['Sale_7d_%'],
+                'Change': calc_change(data_2025['Sale_7d_%'], data_2024['Sale_7d_%'])
+            },
+            {
+                'Metric': '% with sale within 30 days',
+                '2024': data_2024['Sale_30d_%'],
+                '2025': data_2025['Sale_30d_%'],
+                'Change': calc_change(data_2025['Sale_30d_%'], data_2024['Sale_30d_%'])
+            },
+            {
+                'Metric': '% with sale within 90 days',
+                '2024': data_2024['Sale_90d_%'],
+                '2025': data_2025['Sale_90d_%'],
+                'Change': calc_change(data_2025['Sale_90d_%'], data_2024['Sale_90d_%'])
+            },
+            {
+                'Metric': 'Average days to first sale',
+                '2024': data_2024['Avg_Days_Sale'],
+                '2025': data_2025['Avg_Days_Sale'],
+                'Change': calc_change(data_2025['Avg_Days_Sale'], data_2024['Avg_Days_Sale'])
+            },
+            {
+                'Metric': 'Total accounts created',
+                '2024': data_2024['Total_Accounts'],
+                '2025': data_2025['Total_Accounts'],
+                'Change': data_2025['Total_Accounts'] - data_2024['Total_Accounts']
+            }
+        ])
+
+        activation_yoy_file = get_output_path(base_name, 'cohorts', '_activation_yoy_comparison.csv')
+        activation_comparison.to_csv(activation_yoy_file, index=False)
+        output_files['activation_yoy_comparison'] = activation_yoy_file
+        print(f"    ✓ Activation rates YoY comparison: {activation_yoy_file}")
 
     return output_files
 

@@ -3463,9 +3463,11 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     # === ADD EASTER AND HOLIDAY FLAGS ===
     # Pre-compute Easter dates for unique years only (optimised)
     unique_years = planning_df['Year'].unique()
-    easter_lookup = {year: calculate_easter_date(year) for year in unique_years}
-    planning_df['Easter Month'] = planning_df['Year'].map(lambda y: easter_lookup[y][0])
-    planning_df['Easter Day'] = planning_df['Year'].map(lambda y: easter_lookup[y][1])
+    easter_dates = {year: calculate_easter_date(year) for year in unique_years}
+    easter_month_map = {year: dates[0] for year, dates in easter_dates.items()}
+    easter_day_map = {year: dates[1] for year, dates in easter_dates.items()}
+    planning_df['Easter Month'] = planning_df['Year'].map(easter_month_map)
+    planning_df['Easter Day'] = planning_df['Year'].map(easter_day_map)
 
     # Vectorised Easter position calculation
     planning_df['Easter Position'] = np.where(

@@ -72,6 +72,10 @@ OUTPUT_FOLDERS = {
     'keywords': 'keywords',
 }
 
+# Pre-computed month mappings for performance (avoid repeated lambda calls)
+MONTH_ABBR_MAP = {i: calendar.month_abbr[i] for i in range(1, 13)}
+MONTH_NAME_MAP = {i: calendar.month_name[i] for i in range(1, 13)}
+
 
 def get_output_path(base_name: str, folder: str, filename: str) -> str:
     """
@@ -392,13 +396,13 @@ def calculate_monthly_metrics(accounts_df, booking_df, year, month):
     new_accounts = accounts_df[
         (accounts_df['DateTimeCreated'] >= month_start) &
         (accounts_df['DateTimeCreated'] <= month_end)
-    ].copy()
+    ]
     total_new_accounts = len(new_accounts)
 
     # 2. Activated accounts - created events (FirstEventCreation not null)
     accounts_with_events = new_accounts[
         new_accounts['FirstEventCreation'].notna()
-    ].copy()
+    ]
     activated_with_events = len(accounts_with_events)
 
     # Calculate average days to first event and activation buckets
@@ -2085,7 +2089,7 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
         industry_monthly.loc[industry_monthly['Variance %'] >= 2, 'Status'] = 'PEAK'
 
         # Add month names
-        industry_monthly['Month Name'] = industry_monthly['Month'].apply(lambda m: calendar.month_abbr[m])
+        industry_monthly['Month Name'] = industry_monthly['Month'].map(MONTH_ABBR_MAP)
 
         # Pivot to show months as columns for easier reading
         industry_pivot = industry_monthly.pivot(index='Industry', columns='Month Name', values='% of Annual')
@@ -2143,7 +2147,7 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
             subind_monthly['Status'] = 'Normal'
             subind_monthly.loc[subind_monthly['Variance %'] <= -2, 'Status'] = 'DIP'
             subind_monthly.loc[subind_monthly['Variance %'] >= 2, 'Status'] = 'PEAK'
-            subind_monthly['Month Name'] = subind_monthly['Month'].apply(lambda m: calendar.month_abbr[m])
+            subind_monthly['Month Name'] = subind_monthly['Month'].map(MONTH_ABBR_MAP)
 
             # Pivot for overview
             subind_pivot = subind_monthly.pivot(index='SubIndustry', columns='Month Name', values='% of Annual')
@@ -2178,7 +2182,7 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
         hierarchy_monthly = hierarchy_monthly.merge(hierarchy_annual, on=['Industry', 'SubIndustry'])
         hierarchy_monthly['% of Annual'] = round(hierarchy_monthly['Revenue'] / hierarchy_monthly['Annual Revenue'] * 100, 1)
         hierarchy_monthly['Variance %'] = round(hierarchy_monthly['% of Annual'] - 8.33, 1)
-        hierarchy_monthly['Month Name'] = hierarchy_monthly['Month'].apply(lambda m: calendar.month_abbr[m])
+        hierarchy_monthly['Month Name'] = hierarchy_monthly['Month'].map(MONTH_ABBR_MAP)
 
         # Pivot with multi-index
         hierarchy_pivot = hierarchy_monthly.pivot(
@@ -2223,7 +2227,7 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
             region_monthly['Status'] = 'Normal'
             region_monthly.loc[region_monthly['Variance %'] <= -2, 'Status'] = 'DIP'
             region_monthly.loc[region_monthly['Variance %'] >= 2, 'Status'] = 'PEAK'
-            region_monthly['Month Name'] = region_monthly['Month'].apply(lambda m: calendar.month_abbr[m])
+            region_monthly['Month Name'] = region_monthly['Month'].map(MONTH_ABBR_MAP)
 
             # Pivot for overview
             region_pivot = region_monthly.pivot(index='Region', columns='Month Name', values='% of Annual')
@@ -2355,7 +2359,7 @@ def generate_seasonality_analysis_csv(booking_df, accounts_df, output_file):
         keyword_monthly['Status'] = 'Normal'
         keyword_monthly.loc[keyword_monthly['Variance %'] <= -2, 'Status'] = 'DIP'
         keyword_monthly.loc[keyword_monthly['Variance %'] >= 2, 'Status'] = 'PEAK'
-        keyword_monthly['Month Name'] = keyword_monthly['Month'].apply(lambda m: calendar.month_abbr[m])
+        keyword_monthly['Month Name'] = keyword_monthly['Month'].map(MONTH_ABBR_MAP)
 
         # Pivot for overview
         keyword_pivot = keyword_monthly.pivot(index='Keyword', columns='Month Name', values='% of Annual')
@@ -3278,7 +3282,7 @@ def calculate_monthly_yoy_patterns(planning_df: pd.DataFrame, complete_years: li
         return None
 
     # Get YoY data for complete years only
-    yoy_data = planning_df[planning_df['Year'].isin(complete_years)].copy()
+    yoy_data = planning_df[planning_df['Year'].isin(complete_years)]
 
     results = {}
     for month in range(1, 13):
@@ -3457,20 +3461,30 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     planning_df['Fees Index %'] = round(planning_df['Total Fees'] / planning_df['Year_Fees'] * 100, 2)
 
     # === ADD EASTER AND HOLIDAY FLAGS ===
-    planning_df['Easter Month'] = planning_df['Year'].apply(lambda y: calculate_easter_date(y)[0])
-    planning_df['Easter Day'] = planning_df['Year'].apply(lambda y: calculate_easter_date(y)[1])
-    planning_df['Easter Position'] = planning_df.apply(
-        lambda r: 'Early (Mar)' if r['Easter Month'] == 3 else 'Late (Apr)' if r['Easter Day'] > 15 else 'Mid (Apr)',
-        axis=1
+    # Pre-compute Easter dates for unique years only (optimised)
+    unique_years = planning_df['Year'].unique()
+    easter_lookup = {year: calculate_easter_date(year) for year in unique_years}
+    planning_df['Easter Month'] = planning_df['Year'].map(lambda y: easter_lookup[y][0])
+    planning_df['Easter Day'] = planning_df['Year'].map(lambda y: easter_lookup[y][1])
+
+    # Vectorised Easter position calculation
+    planning_df['Easter Position'] = np.where(
+        planning_df['Easter Month'] == 3, 'Early (Mar)',
+        np.where(planning_df['Easter Day'] > 15, 'Late (Apr)', 'Mid (Apr)')
     )
 
-    # Add holiday flags
-    for _, row in planning_df.iterrows():
-        flags = get_school_holiday_flags(row['Year'], row['Month'])
-        for flag, value in flags.items():
-            if flag not in planning_df.columns:
-                planning_df[flag] = None
-            planning_df.loc[(planning_df['Year'] == row['Year']) & (planning_df['Month'] == row['Month']), flag] = value
+    # Add holiday flags - build flags dataframe first, then merge (optimised)
+    flags_list = []
+    for year in unique_years:
+        for month in range(1, 13):
+            flags = get_school_holiday_flags(year, month)
+            flags['Year'] = year
+            flags['Month'] = month
+            flags_list.append(flags)
+
+    if flags_list:
+        flags_df = pd.DataFrame(flags_list)
+        planning_df = planning_df.merge(flags_df, on=['Year', 'Month'], how='left')
 
     # === IDENTIFY COMPLETE YEARS FOR SEASONALITY ===
     # Complete years (all 12 months) are needed for accurate seasonality indices
@@ -3525,17 +3539,17 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     base_year = target_year - 1
 
     if base_year in complete_years:
-        base_year_data = planning_df[planning_df['Year'] == base_year].copy()
+        base_year_data = planning_df[planning_df['Year'] == base_year]
     elif len(complete_years) > 0:
         # Use most recent complete year
         base_year = max(complete_years)
-        base_year_data = planning_df[planning_df['Year'] == base_year].copy()
+        base_year_data = planning_df[planning_df['Year'] == base_year]
         print(f"  Note: Using {base_year} as base year (most recent complete year)")
     else:
         # No complete years - use most recent year but warn
         available_years = planning_df['Year'].unique()
         base_year = max(available_years)
-        base_year_data = planning_df[planning_df['Year'] == base_year].copy()
+        base_year_data = planning_df[planning_df['Year'] == base_year]
         months_available = len(base_year_data)
         print(f"  Warning: No complete year data. Using {base_year} with {months_available} months.")
         print(f"           Targets may be inaccurate. Run with --year for full year data.")
@@ -3568,7 +3582,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     # === CREATE TARGET SCENARIOS ===
     scenarios = pd.DataFrame()
     scenarios['Month'] = range(1, 13)
-    scenarios['Month Name'] = scenarios['Month'].apply(lambda m: calendar.month_name[m])
+    scenarios['Month Name'] = scenarios['Month'].map(MONTH_NAME_MAP)
 
     # Add holiday flags for target year
     for month in range(1, 13):
@@ -4076,52 +4090,59 @@ def calculate_account_tiers(accounts_df, booking_df, as_of_date=None):
             reference_ts = reference_ts.tz_localize('UTC')
         booking_df = booking_df[booking_df['TransactionDate'].dt.date <= reference_date]
 
-    # Aggregate metrics per account
-    account_metrics = {}
+    # Aggregate metrics per account using vectorised operations (optimised)
+    # Filter out null AccountIds upfront
+    booking_df = booking_df[booking_df['AccountId'].notna()]
 
-    # Group bookings by account
-    for account_id, group in booking_df.groupby('AccountId'):
-        if pd.isna(account_id):
-            continue
-
-        account_id = int(account_id)
-
-        # Current period (365 days before reference date)
-        tx_dates = pd.to_datetime(group['TransactionDate']).dt.date
-        current_mask = tx_dates >= cutoff_365
-
-        tickets_current = group.loc[current_mask, 'TicketQuantity'].sum() if 'TicketQuantity' in group.columns else 0
-
-        # Calculate revenue from fees
-        fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
-        revenue_current = 0
-        revenue_lifetime = 0
-        for col in fee_cols:
-            if col in group.columns:
-                revenue_current += group.loc[current_mask, col].fillna(0).sum()
-                revenue_lifetime += group[col].fillna(0).sum()
-
-        # Years loyalty (unique years with transactions)
-        years_with_tx = pd.to_datetime(group['TransactionDate']).dt.year.nunique()
-
-        # Average revenue per year
-        avg_revenue_per_year = revenue_lifetime / years_with_tx if years_with_tx > 0 else 0
-
-        account_metrics[account_id] = {
-            'tickets_current': tickets_current,
-            'revenue_current': revenue_current,
-            'revenue_lifetime': revenue_lifetime,
-            'years_loyalty': years_with_tx,
-            'avg_revenue_per_year': avg_revenue_per_year,
-        }
-
-    if not account_metrics:
+    if len(booking_df) == 0:
         print("    No accounts with transactions found")
         return {}
 
-    # Convert to DataFrame for percentile calculations
-    metrics_df = pd.DataFrame.from_dict(account_metrics, orient='index')
-    metrics_df.index.name = 'AccountId'
+    # Ensure AccountId is integer
+    booking_df['AccountId'] = booking_df['AccountId'].astype(int)
+
+    # Add current period flag
+    booking_df['tx_date'] = pd.to_datetime(booking_df['TransactionDate']).dt.date
+    booking_df['is_current'] = booking_df['tx_date'] >= cutoff_365
+    booking_df['tx_year'] = pd.to_datetime(booking_df['TransactionDate']).dt.year
+
+    # Calculate fee columns sum
+    fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+    existing_fee_cols = [col for col in fee_cols if col in booking_df.columns]
+    for col in existing_fee_cols:
+        booking_df[col] = booking_df[col].fillna(0)
+    booking_df['total_fees'] = booking_df[existing_fee_cols].sum(axis=1) if existing_fee_cols else 0
+
+    # Vectorised aggregation - lifetime metrics
+    lifetime_agg = booking_df.groupby('AccountId').agg({
+        'total_fees': 'sum',
+        'tx_year': 'nunique'
+    }).rename(columns={'total_fees': 'revenue_lifetime', 'tx_year': 'years_loyalty'})
+
+    # Vectorised aggregation - current period metrics
+    current_df = booking_df[booking_df['is_current']]
+    if len(current_df) > 0:
+        current_agg = current_df.groupby('AccountId').agg({
+            'TicketQuantity': 'sum' if 'TicketQuantity' in current_df.columns else lambda x: 0,
+            'total_fees': 'sum'
+        }).rename(columns={'TicketQuantity': 'tickets_current', 'total_fees': 'revenue_current'})
+    else:
+        current_agg = pd.DataFrame(columns=['tickets_current', 'revenue_current'])
+
+    # Merge lifetime and current metrics
+    metrics_df = lifetime_agg.join(current_agg, how='left')
+    metrics_df['tickets_current'] = metrics_df['tickets_current'].fillna(0)
+    metrics_df['revenue_current'] = metrics_df['revenue_current'].fillna(0)
+
+    # Calculate average revenue per year
+    metrics_df['avg_revenue_per_year'] = np.where(
+        metrics_df['years_loyalty'] > 0,
+        metrics_df['revenue_lifetime'] / metrics_df['years_loyalty'],
+        0
+    )
+
+    # Clean up temporary columns from booking_df
+    booking_df.drop(columns=['tx_date', 'is_current', 'tx_year', 'total_fees'], inplace=True, errors='ignore')
 
     # Calculate percentile rankings (only for accounts with activity)
     for metric in ['tickets_current', 'revenue_current', 'revenue_lifetime', 'avg_revenue_per_year']:
@@ -4131,26 +4152,28 @@ def calculate_account_tiers(accounts_df, booking_df, as_of_date=None):
             metrics_df.loc[mask, pct_col] = metrics_df.loc[mask, metric].rank(pct=True, method='average') * 100
         metrics_df.loc[~mask, pct_col] = 0
 
-    # Determine tier for each account
-    account_tiers = {}
+    # Determine tier for each account using vectorised apply (optimised)
+    metrics_df['has_activity'] = metrics_df['tickets_current'] >= MIN_TICKETS_FOR_ACTIVE
 
-    for account_id, row in metrics_df.iterrows():
-        has_activity = row['tickets_current'] >= MIN_TICKETS_FOR_ACTIVE
-
-        tier = determine_tier_from_percentiles(
-            a_pct=row.get('tickets_current_pct', 0),
-            b_pct=row.get('revenue_current_pct', 0),
-            c_years=row.get('years_loyalty', 0),
-            d_pct=row.get('revenue_lifetime_pct', 0),
-            e_pct=row.get('avg_revenue_per_year_pct', 0),
-            has_activity=has_activity
+    # Use numpy arrays for faster iteration than iterrows
+    metrics_df['tier'] = [
+        determine_tier_from_percentiles(
+            a_pct=row['tickets_current_pct'],
+            b_pct=row['revenue_current_pct'],
+            c_years=row['years_loyalty'],
+            d_pct=row['revenue_lifetime_pct'],
+            e_pct=row['avg_revenue_per_year_pct'],
+            has_activity=row['has_activity']
         )
-        account_tiers[account_id] = tier
+        for _, row in metrics_df[['tickets_current_pct', 'revenue_current_pct', 'years_loyalty',
+                                   'revenue_lifetime_pct', 'avg_revenue_per_year_pct', 'has_activity']].iterrows()
+    ]
 
-    # Log tier distribution
-    tier_counts = {}
-    for tier in account_tiers.values():
-        tier_counts[tier] = tier_counts.get(tier, 0) + 1
+    # Convert to dictionary
+    account_tiers = metrics_df['tier'].to_dict()
+
+    # Log tier distribution using value_counts (optimised)
+    tier_counts = metrics_df['tier'].value_counts().to_dict()
 
     print(f"    Calculated tiers for {len(account_tiers):,} accounts")
     tier_4_plus = sum(tier_counts.get(t, 0) for t in ['Key Account', 'High Value', 'Tier 4'])
@@ -6380,7 +6403,7 @@ def generate_outreach_calendar_csv(booking_df: pd.DataFrame, output_file: str) -
         'Keyword': lambda x: ', '.join(x[:5]),  # Top 5 keywords
         'Total Fees': 'sum'
     }).reset_index()
-    monthly_outreach['Month'] = monthly_outreach['Outreach Month Num'].apply(lambda m: calendar.month_name[int(m)])
+    monthly_outreach['Month'] = monthly_outreach['Outreach Month Num'].astype(int).map(MONTH_NAME_MAP)
     monthly_outreach = monthly_outreach[['Month', 'Keyword', 'Total Fees']]
     monthly_outreach.columns = ['Month', 'Top Keywords to Target', 'Potential Fees']
 
@@ -6653,8 +6676,8 @@ def generate_fee_structure_analysis_csv(booking_df: pd.DataFrame, output_file: s
         'AccountId': 'first'
     }).reset_index()
 
-    # Classify as free or paid
-    events['Event Type'] = events['PaymentReceived'].apply(lambda x: 'Free' if x == 0 else 'Paid')
+    # Classify as free or paid (vectorised)
+    events['Event Type'] = np.where(events['PaymentReceived'] == 0, 'Free', 'Paid')
 
     # Summary by industry
     if 'Industry' in events.columns and events['Industry'].dtype == 'object':

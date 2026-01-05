@@ -4486,7 +4486,10 @@ def generate_boxoffice_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.Da
     industry_pivot = industry_channel.pivot(index='Industry', columns='Sales_Channel',
                                             values=['Transactions', 'Tickets', 'Revenue', 'Fees'])
     industry_pivot.columns = [f'{col[1]}_{col[0]}' for col in industry_pivot.columns]
-    industry_pivot = industry_pivot.reset_index().fillna(0)
+    industry_pivot = industry_pivot.reset_index()
+    # Fill NaN only in numeric columns (Industry column may be categorical)
+    numeric_cols = industry_pivot.select_dtypes(include=[np.number]).columns
+    industry_pivot[numeric_cols] = industry_pivot[numeric_cols].fillna(0)
 
     # Calculate Box Office percentage
     for metric in ['Transactions', 'Tickets', 'Revenue', 'Fees']:
@@ -4523,7 +4526,10 @@ def generate_boxoffice_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.Da
     monthly_pivot = monthly_channel.pivot(index='YearMonth', columns='Sales_Channel',
                                            values=['Transactions', 'Tickets', 'Revenue', 'Fees'])
     monthly_pivot.columns = [f'{col[1]}_{col[0]}' for col in monthly_pivot.columns]
-    monthly_pivot = monthly_pivot.reset_index().fillna(0)
+    monthly_pivot = monthly_pivot.reset_index()
+    # Fill NaN only in numeric columns
+    numeric_cols = monthly_pivot.select_dtypes(include=[np.number]).columns
+    monthly_pivot[numeric_cols] = monthly_pivot[numeric_cols].fillna(0)
 
     # Calculate Box Office percentage per month
     for metric in ['Transactions', 'Tickets', 'Revenue', 'Fees']:
@@ -4555,7 +4561,10 @@ def generate_boxoffice_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.Da
     account_pivot = account_channel.pivot(index='AccountId', columns='Sales_Channel',
                                           values=['Tickets', 'Revenue', 'Fees'])
     account_pivot.columns = [f'{col[1]}_{col[0]}' for col in account_pivot.columns]
-    account_pivot = account_pivot.reset_index().fillna(0)
+    account_pivot = account_pivot.reset_index()
+    # Fill NaN only in numeric columns
+    numeric_cols = account_pivot.select_dtypes(include=[np.number]).columns
+    account_pivot[numeric_cols] = account_pivot[numeric_cols].fillna(0)
 
     # Calculate Box Office percentage per account
     for metric in ['Tickets', 'Revenue', 'Fees']:

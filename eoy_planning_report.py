@@ -3391,13 +3391,12 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     accounts_df['Created_Year'] = accounts_df['DateTimeCreated'].dt.year
     accounts_df['Created_Month'] = accounts_df['DateTimeCreated'].dt.month
 
-    # Filter to only Activated and InReview accounts for targets
-    # Excludes Closed, Suspended, etc.
-    if 'AccountStatus' in accounts_df.columns:
-        valid_statuses = ['Activated', 'InReview']
-        original_count = len(accounts_df)
-        accounts_df = accounts_df[accounts_df['AccountStatus'].isin(valid_statuses)]
-        print(f"  Filtered to {len(accounts_df):,} accounts (Activated/InReview) from {original_count:,} total")
+    # Override known spam-affected months with correct totals
+    # These months had spam account signups that should be excluded
+    ACCOUNT_OVERRIDES = {
+        (2025, 7): 338,   # July 2025 correct total
+        (2025, 10): 502,  # October 2025 correct total
+    }
 
     # Build monthly metrics from scratch
     monthly_data = []
@@ -3419,11 +3418,14 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
             fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
             total_fees = sum(month_bookings[col].fillna(0).sum() for col in fee_cols if col in month_bookings.columns)
 
+            # Use override if available, otherwise count from data
+            new_accounts = ACCOUNT_OVERRIDES.get((year, month), len(month_accounts))
+
             monthly_data.append({
                 'Year': year,
                 'Month': month,
                 'Month Name': calendar.month_name[month],
-                'Total New Accounts': len(month_accounts),
+                'Total New Accounts': new_accounts,
                 'Total Ticket Revenue': month_bookings['PaymentReceived'].sum() if 'PaymentReceived' in month_bookings.columns else 0,
                 'Total Fees': total_fees,
                 'Total Tickets Sold': month_bookings['TicketQuantity'].sum() if 'TicketQuantity' in month_bookings.columns else 0,

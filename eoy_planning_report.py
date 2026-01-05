@@ -2862,19 +2862,31 @@ def generate_expansion_revenue_analysis_csv(booking_df, accounts_df, output_file
 
         # For each booking, calculate account age at transaction time
         # Reference point is start of the calendar year
-        year_start = pd.Timestamp(f'{year}-01-01')
+        year_start = pd.Timestamp(f'{year}-01-01', tz='Europe/London')
 
         year_bookings = year_bookings.copy()
         year_bookings['AccountId'] = pd.to_numeric(year_bookings['AccountId'], errors='coerce')
 
-        # Get account creation lookup
-        account_created = accounts_df.set_index(account_id_col)['DateTimeCreated'].to_dict()
+        # Get account creation lookup - ensure timezone consistency
+        accounts_df_copy = accounts_df.copy()
+        accounts_df_copy['DateTimeCreated'] = pd.to_datetime(accounts_df_copy['DateTimeCreated'])
+        # Make timezone-aware if not already
+        if accounts_df_copy['DateTimeCreated'].dt.tz is None:
+            accounts_df_copy['DateTimeCreated'] = accounts_df_copy['DateTimeCreated'].dt.tz_localize('Europe/London')
+        account_created = accounts_df_copy.set_index(account_id_col)['DateTimeCreated'].to_dict()
 
         def get_account_age_band(account_id):
             created = account_created.get(account_id)
             if pd.isna(created) or created is None:
                 return 'Unknown'
-            months_old = (year_start - created).days / 30.44
+            try:
+                months_old = (year_start - created).days / 30.44
+            except TypeError:
+                # Handle timezone mismatch by converting
+                created_tz = pd.Timestamp(created)
+                if created_tz.tz is None:
+                    created_tz = created_tz.tz_localize('Europe/London')
+                months_old = (year_start - created_tz).days / 30.44
             if months_old <= 12:
                 return 'New (0-12m)'
             elif months_old <= 24:

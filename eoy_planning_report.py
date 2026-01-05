@@ -3180,6 +3180,14 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     accounts_df['Created_Year'] = accounts_df['DateTimeCreated'].dt.year
     accounts_df['Created_Month'] = accounts_df['DateTimeCreated'].dt.month
 
+    # Filter to only Activated and InReview accounts for targets
+    # Excludes Closed, Suspended, etc.
+    if 'AccountStatus' in accounts_df.columns:
+        valid_statuses = ['Activated', 'InReview']
+        original_count = len(accounts_df)
+        accounts_df = accounts_df[accounts_df['AccountStatus'].isin(valid_statuses)]
+        print(f"  Filtered to {len(accounts_df):,} accounts (Activated/InReview) from {original_count:,} total")
+
     # Build monthly metrics from scratch
     monthly_data = []
 

@@ -4211,6 +4211,106 @@ def generate_dormancy_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.Dat
     output_files['dormancy_summary'] = summary_file
     print(f"    ✓ Dormancy summary: {summary_file}")
 
+    # === OUTPUT 4: YoY Dormancy Comparison (2024 vs 2025 cohorts) ===
+    # Compare dormancy status for accounts created in each year, measured at end of that year
+    # This gives an apples-to-apples comparison of first-year performance
+
+    def classify_dormancy_at_date(last_txn_date, reference_date):
+        """Classify dormancy status relative to a specific reference date."""
+        if pd.isna(last_txn_date):
+            return 'Never Transacted'
+        months = (reference_date - last_txn_date).days / 30.44
+        if months <= 3:
+            return 'Active (0-3m)'
+        elif months <= 6:
+            return 'Recent (3-6m)'
+        elif months <= 12:
+            return 'At Risk (6-12m)'
+        elif months <= 24:
+            return 'Dormant (12-24m)'
+        else:
+            return 'Churned (24m+)'
+
+    # Reference dates for each cohort year
+    end_of_2024 = pd.Timestamp('2024-12-31', tz='Europe/London')
+    end_of_2025 = pd.Timestamp('2025-12-31', tz='Europe/London')
+
+    # Get accounts created in each year
+    accounts_2024 = accounts_df[
+        (accounts_df['DateTimeCreated'].dt.year == 2024)
+    ][account_id_col].unique()
+
+    accounts_2025 = accounts_df[
+        (accounts_df['DateTimeCreated'].dt.year == 2025)
+    ][account_id_col].unique()
+
+    # Get last transaction dates for bookings up to end of each year
+    booking_df_ts = booking_df.copy()
+    booking_df_ts['TransactionDate'] = pd.to_datetime(booking_df_ts['TransactionDate'])
+
+    # 2024 cohort: transactions up to end of 2024
+    bookings_2024 = booking_df_ts[booking_df_ts['TransactionDate'] <= end_of_2024]
+    last_txn_2024 = bookings_2024.groupby(booking_account_col)['TransactionDate'].max()
+
+    # 2025 cohort: transactions up to end of 2025
+    bookings_2025 = booking_df_ts[booking_df_ts['TransactionDate'] <= end_of_2025]
+    last_txn_2025 = bookings_2025.groupby(booking_account_col)['TransactionDate'].max()
+
+    # Classify 2024 cohort at end of 2024
+    cohort_2024_status = []
+    for acc_id in accounts_2024:
+        last_txn = last_txn_2024.get(acc_id)
+        status = classify_dormancy_at_date(last_txn, end_of_2024)
+        cohort_2024_status.append(status)
+
+    # Classify 2025 cohort at end of 2025
+    cohort_2025_status = []
+    for acc_id in accounts_2025:
+        last_txn = last_txn_2025.get(acc_id)
+        status = classify_dormancy_at_date(last_txn, end_of_2025)
+        cohort_2025_status.append(status)
+
+    # Build comparison DataFrame
+    status_order = ['Never Transacted', 'Active (0-3m)', 'Recent (3-6m)',
+                    'At Risk (6-12m)', 'Dormant (12-24m)', 'Churned (24m+)']
+
+    from collections import Counter
+    counts_2024 = Counter(cohort_2024_status)
+    counts_2025 = Counter(cohort_2025_status)
+
+    total_2024 = len(accounts_2024)
+    total_2025 = len(accounts_2025)
+
+    yoy_comparison = []
+    for status in status_order:
+        count_2024 = counts_2024.get(status, 0)
+        count_2025 = counts_2025.get(status, 0)
+        pct_2024 = round(count_2024 / total_2024 * 100, 1) if total_2024 > 0 else 0
+        pct_2025 = round(count_2025 / total_2025 * 100, 1) if total_2025 > 0 else 0
+
+        yoy_comparison.append({
+            'Status': status,
+            '2024 Cohort Count': count_2024,
+            '2024 Cohort %': pct_2024,
+            '2025 Cohort Count': count_2025,
+            '2025 Cohort %': pct_2025,
+        })
+
+    # Add totals row
+    yoy_comparison.append({
+        'Status': 'TOTAL',
+        '2024 Cohort Count': total_2024,
+        '2024 Cohort %': 100.0,
+        '2025 Cohort Count': total_2025,
+        '2025 Cohort %': 100.0,
+    })
+
+    yoy_df = pd.DataFrame(yoy_comparison)
+    yoy_file = get_output_path(base_name, 'cohorts', '_dormancy_yoy_comparison.csv')
+    yoy_df.to_csv(yoy_file, index=False)
+    output_files['dormancy_yoy_comparison'] = yoy_file
+    print(f"    ✓ Dormancy YoY comparison: {yoy_file}")
+
     return output_files
 
 
@@ -5219,6 +5319,189 @@ def generate_organiser_concentration_csv(booking_df: pd.DataFrame, accounts_df: 
     tier_summary.to_csv(concentration_file, index=False, float_format='%.2f')
     output_files['tier_concentration'] = concentration_file
     print(f"    ✓ Tier concentration: {concentration_file}")
+
+    # === OUTPUT 2: YoY Concentration Comparison (2024 vs 2025) ===
+    # Compare concentration by tier for each calendar year
+
+    booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'])
+    booking_df['Year'] = booking_df['TransactionDate'].dt.year
+
+    # Calculate TotalFees if not present
+    if 'TotalFees' not in booking_df.columns:
+        fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+        available_fees = [c for c in fee_cols if c in booking_df.columns]
+        if available_fees:
+            booking_df['TotalFees'] = booking_df[available_fees].fillna(0).sum(axis=1)
+        else:
+            booking_df['TotalFees'] = 0
+
+    def calculate_year_concentration(year_bookings, year_label):
+        """Calculate tier concentration for a specific year's bookings."""
+        if len(year_bookings) == 0:
+            return pd.DataFrame()
+
+        # Calculate tiers based on this year's activity only
+        year_account_fees = year_bookings.groupby('AccountId')['TotalFees'].sum().reset_index()
+        year_account_fees.columns = ['AccountId', 'YearFees']
+        year_account_fees = year_account_fees.sort_values('YearFees', ascending=False)
+
+        # Assign tiers based on percentiles
+        total_accounts = len(year_account_fees)
+        year_account_fees['Rank'] = range(1, total_accounts + 1)
+        year_account_fees['Percentile'] = year_account_fees['Rank'] / total_accounts * 100
+
+        def assign_tier(row):
+            if row['Rank'] <= 65:
+                return 'Key Account'
+            elif row['Percentile'] <= 3.5:
+                return 'Tier 4+'
+            elif row['Percentile'] <= 16:
+                return 'Tier 3'
+            elif row['Percentile'] <= 50:
+                return 'Tier 2'
+            elif row['YearFees'] > 0:
+                return 'Tier 1'
+            else:
+                return 'NIL'
+
+        year_account_fees['Tier'] = year_account_fees.apply(assign_tier, axis=1)
+
+        # Aggregate by tier
+        tier_agg = year_account_fees.groupby('Tier').agg({
+            'AccountId': 'count',
+            'YearFees': 'sum'
+        }).reset_index()
+        tier_agg.columns = ['Tier', f'{year_label} Accounts', f'{year_label} Fees']
+
+        total_accounts = tier_agg[f'{year_label} Accounts'].sum()
+        total_fees = tier_agg[f'{year_label} Fees'].sum()
+
+        tier_agg[f'{year_label} Account %'] = round(tier_agg[f'{year_label} Accounts'] / total_accounts * 100, 1)
+        tier_agg[f'{year_label} Fees %'] = round(tier_agg[f'{year_label} Fees'] / total_fees * 100, 1) if total_fees > 0 else 0
+
+        return tier_agg, year_account_fees, total_accounts, total_fees
+
+    # Calculate for 2024 and 2025
+    bookings_2024 = booking_df[booking_df['Year'] == 2024]
+    bookings_2025 = booking_df[booking_df['Year'] == 2025]
+
+    result_2024, accounts_2024, total_acc_2024, total_fees_2024 = calculate_year_concentration(bookings_2024, '2024')
+    result_2025, accounts_2025, total_acc_2025, total_fees_2025 = calculate_year_concentration(bookings_2025, '2025')
+
+    # Merge results
+    tier_order = ['Key Account', 'Tier 4+', 'Tier 3', 'Tier 2', 'Tier 1', 'NIL']
+
+    yoy_data = []
+    for tier in tier_order:
+        row = {'Tier': tier}
+
+        # 2024 data
+        tier_2024 = result_2024[result_2024['Tier'] == tier] if len(result_2024) > 0 else pd.DataFrame()
+        row['2024 Accounts'] = int(tier_2024['2024 Accounts'].values[0]) if len(tier_2024) > 0 else 0
+        row['2024 Account %'] = float(tier_2024['2024 Account %'].values[0]) if len(tier_2024) > 0 else 0
+        row['2024 Fees'] = float(tier_2024['2024 Fees'].values[0]) if len(tier_2024) > 0 else 0
+        row['2024 Fees %'] = float(tier_2024['2024 Fees %'].values[0]) if len(tier_2024) > 0 else 0
+
+        # 2025 data
+        tier_2025 = result_2025[result_2025['Tier'] == tier] if len(result_2025) > 0 else pd.DataFrame()
+        row['2025 Accounts'] = int(tier_2025['2025 Accounts'].values[0]) if len(tier_2025) > 0 else 0
+        row['2025 Account %'] = float(tier_2025['2025 Account %'].values[0]) if len(tier_2025) > 0 else 0
+        row['2025 Fees'] = float(tier_2025['2025 Fees'].values[0]) if len(tier_2025) > 0 else 0
+        row['2025 Fees %'] = float(tier_2025['2025 Fees %'].values[0]) if len(tier_2025) > 0 else 0
+
+        yoy_data.append(row)
+
+    # Add concentration metrics rows
+    # Top 65 accounts
+    if len(accounts_2024) > 0:
+        top65_2024 = accounts_2024.head(65)
+        top65_fees_2024 = top65_2024['YearFees'].sum()
+        top65_pct_2024 = round(top65_fees_2024 / total_fees_2024 * 100, 1) if total_fees_2024 > 0 else 0
+    else:
+        top65_fees_2024, top65_pct_2024 = 0, 0
+
+    if len(accounts_2025) > 0:
+        top65_2025 = accounts_2025.head(65)
+        top65_fees_2025 = top65_2025['YearFees'].sum()
+        top65_pct_2025 = round(top65_fees_2025 / total_fees_2025 * 100, 1) if total_fees_2025 > 0 else 0
+    else:
+        top65_fees_2025, top65_pct_2025 = 0, 0
+
+    yoy_data.append({
+        'Tier': 'Top 65 Accounts',
+        '2024 Accounts': 65 if total_acc_2024 >= 65 else total_acc_2024,
+        '2024 Account %': round(65 / total_acc_2024 * 100, 1) if total_acc_2024 >= 65 else 100,
+        '2024 Fees': round(top65_fees_2024, 2),
+        '2024 Fees %': top65_pct_2024,
+        '2025 Accounts': 65 if total_acc_2025 >= 65 else total_acc_2025,
+        '2025 Account %': round(65 / total_acc_2025 * 100, 1) if total_acc_2025 >= 65 else 100,
+        '2025 Fees': round(top65_fees_2025, 2),
+        '2025 Fees %': top65_pct_2025,
+    })
+
+    # Top 3.5% of accounts
+    if len(accounts_2024) > 0:
+        top_3_5_count_2024 = max(1, int(total_acc_2024 * 0.035))
+        top_3_5_2024 = accounts_2024.head(top_3_5_count_2024)
+        top_3_5_fees_2024 = top_3_5_2024['YearFees'].sum()
+        top_3_5_pct_2024 = round(top_3_5_fees_2024 / total_fees_2024 * 100, 1) if total_fees_2024 > 0 else 0
+    else:
+        top_3_5_count_2024, top_3_5_fees_2024, top_3_5_pct_2024 = 0, 0, 0
+
+    if len(accounts_2025) > 0:
+        top_3_5_count_2025 = max(1, int(total_acc_2025 * 0.035))
+        top_3_5_2025 = accounts_2025.head(top_3_5_count_2025)
+        top_3_5_fees_2025 = top_3_5_2025['YearFees'].sum()
+        top_3_5_pct_2025 = round(top_3_5_fees_2025 / total_fees_2025 * 100, 1) if total_fees_2025 > 0 else 0
+    else:
+        top_3_5_count_2025, top_3_5_fees_2025, top_3_5_pct_2025 = 0, 0, 0
+
+    yoy_data.append({
+        'Tier': 'Top 3.5%',
+        '2024 Accounts': top_3_5_count_2024,
+        '2024 Account %': 3.5,
+        '2024 Fees': round(top_3_5_fees_2024, 2),
+        '2024 Fees %': top_3_5_pct_2024,
+        '2025 Accounts': top_3_5_count_2025,
+        '2025 Account %': 3.5,
+        '2025 Fees': round(top_3_5_fees_2025, 2),
+        '2025 Fees %': top_3_5_pct_2025,
+    })
+
+    # Top 16% of accounts
+    if len(accounts_2024) > 0:
+        top_16_count_2024 = max(1, int(total_acc_2024 * 0.16))
+        top_16_2024 = accounts_2024.head(top_16_count_2024)
+        top_16_fees_2024 = top_16_2024['YearFees'].sum()
+        top_16_pct_2024 = round(top_16_fees_2024 / total_fees_2024 * 100, 1) if total_fees_2024 > 0 else 0
+    else:
+        top_16_count_2024, top_16_fees_2024, top_16_pct_2024 = 0, 0, 0
+
+    if len(accounts_2025) > 0:
+        top_16_count_2025 = max(1, int(total_acc_2025 * 0.16))
+        top_16_2025 = accounts_2025.head(top_16_count_2025)
+        top_16_fees_2025 = top_16_2025['YearFees'].sum()
+        top_16_pct_2025 = round(top_16_fees_2025 / total_fees_2025 * 100, 1) if total_fees_2025 > 0 else 0
+    else:
+        top_16_count_2025, top_16_fees_2025, top_16_pct_2025 = 0, 0, 0
+
+    yoy_data.append({
+        'Tier': 'Top 16%',
+        '2024 Accounts': top_16_count_2024,
+        '2024 Account %': 16.0,
+        '2024 Fees': round(top_16_fees_2024, 2),
+        '2024 Fees %': top_16_pct_2024,
+        '2025 Accounts': top_16_count_2025,
+        '2025 Account %': 16.0,
+        '2025 Fees': round(top_16_fees_2025, 2),
+        '2025 Fees %': top_16_pct_2025,
+    })
+
+    yoy_concentration_df = pd.DataFrame(yoy_data)
+    yoy_concentration_file = get_output_path(base_name, 'cohorts', '_concentration_yoy_comparison.csv')
+    yoy_concentration_df.to_csv(yoy_concentration_file, index=False, float_format='%.2f')
+    output_files['concentration_yoy_comparison'] = yoy_concentration_file
+    print(f"    ✓ Concentration YoY comparison: {yoy_concentration_file}")
 
     return output_files
 

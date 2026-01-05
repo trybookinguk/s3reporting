@@ -3462,10 +3462,13 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
 
     # === ADD EASTER AND HOLIDAY FLAGS ===
     # Pre-compute Easter dates for unique years only (optimised)
-    unique_years = planning_df['Year'].unique()
+    # Convert to Python int to ensure consistent key types for map lookup
+    unique_years = [int(y) for y in planning_df['Year'].unique()]
     easter_dates = {year: calculate_easter_date(year) for year in unique_years}
     easter_month_map = {year: dates[0] for year, dates in easter_dates.items()}
     easter_day_map = {year: dates[1] for year, dates in easter_dates.items()}
+    # Ensure Year column is int for consistent mapping
+    planning_df['Year'] = planning_df['Year'].astype(int)
     planning_df['Easter Month'] = planning_df['Year'].map(easter_month_map)
     planning_df['Easter Day'] = planning_df['Year'].map(easter_day_map)
 

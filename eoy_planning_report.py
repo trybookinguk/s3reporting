@@ -7134,6 +7134,289 @@ def generate_monthly_performance_yoy_csv(booking_df: pd.DataFrame, output_file: 
     return output_files
 
 
+def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, booking_df: pd.DataFrame,
+                                                account_tiers: dict, output_file: str) -> dict:
+    """
+    Generate new account conversion funnel by month for 2024 and 2025.
+
+    Shows how accounts created in each month progressed through the activation funnel:
+    - Accounts Created
+    - Created Any Event
+    - Created Paid Event
+    - Sold Free Only
+    - Sold Paid Tickets
+    - Conversion rates and timing metrics
+
+    Args:
+        accounts_df: Accounts DataFrame
+        booking_df: Booking transactions DataFrame
+        account_tiers: Dictionary mapping AccountId -> tier string
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating new account conversion funnel...")
+
+    accounts_df = accounts_df.copy()
+    booking_df = booking_df.copy()
+
+    # Standardise account ID column
+    account_id_col = 'Account Id' if 'Account Id' in accounts_df.columns else 'AccountId'
+
+    # Ensure datetime columns
+    accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'], utc=True)
+    if 'FirstEventCreation' in accounts_df.columns:
+        accounts_df['FirstEventCreation'] = pd.to_datetime(accounts_df['FirstEventCreation'], errors='coerce', utc=True)
+    booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], utc=True)
+
+    # Add year/month to accounts
+    accounts_df['Created_Year'] = accounts_df['DateTimeCreated'].dt.year
+    accounts_df['Created_Month'] = accounts_df['DateTimeCreated'].dt.month
+
+    # === PRE-COMPUTE ACCOUNT-LEVEL METRICS ===
+    # Get first sale date and paid/free status per account
+    account_sales = booking_df.groupby('AccountId').agg({
+        'TransactionDate': 'min',
+        'PaymentReceived': 'sum',
+        'TicketQuantity': 'sum'
+    }).reset_index()
+    account_sales.columns = ['AccountId', 'FirstSaleDate', 'TotalRevenue', 'TotalTickets']
+
+    # Determine if account has paid sales (revenue > 0)
+    account_sales['HasPaidSales'] = account_sales['TotalRevenue'] > 0
+
+    # Get paid vs free event breakdown per account
+    # An event is "paid" if it has any revenue
+    event_revenue = booking_df.groupby(['AccountId', 'EventId'])['PaymentReceived'].sum().reset_index()
+    event_revenue['IsPaidEvent'] = event_revenue['PaymentReceived'] > 0
+
+    # Count paid and free events per account
+    account_events = event_revenue.groupby('AccountId').agg({
+        'EventId': 'nunique',
+        'IsPaidEvent': 'sum'  # Count of paid events
+    }).reset_index()
+    account_events.columns = ['AccountId', 'TotalEvents', 'PaidEvents']
+    account_events['FreeEvents'] = account_events['TotalEvents'] - account_events['PaidEvents']
+    account_events['HasPaidEvent'] = account_events['PaidEvents'] > 0
+    account_events['OnlyFreeEvents'] = (account_events['FreeEvents'] > 0) & (account_events['PaidEvents'] == 0)
+
+    # Merge sales data with accounts
+    accounts_df = accounts_df.merge(
+        account_sales.rename(columns={'AccountId': account_id_col}),
+        on=account_id_col, how='left'
+    )
+    accounts_df = accounts_df.merge(
+        account_events.rename(columns={'AccountId': account_id_col}),
+        on=account_id_col, how='left'
+    )
+
+    # Fill NaN with appropriate defaults
+    accounts_df['HasPaidSales'] = accounts_df['HasPaidSales'].fillna(False)
+    accounts_df['HasPaidEvent'] = accounts_df['HasPaidEvent'].fillna(False)
+    accounts_df['OnlyFreeEvents'] = accounts_df['OnlyFreeEvents'].fillna(False)
+    accounts_df['TotalEvents'] = accounts_df['TotalEvents'].fillna(0)
+    accounts_df['PaidEvents'] = accounts_df['PaidEvents'].fillna(0)
+    accounts_df['FreeEvents'] = accounts_df['FreeEvents'].fillna(0)
+
+    # Calculate timing metrics
+    accounts_df['DaysToFirstEvent'] = None
+    if 'FirstEventCreation' in accounts_df.columns:
+        valid_events = accounts_df['FirstEventCreation'].notna()
+        accounts_df.loc[valid_events, 'DaysToFirstEvent'] = (
+            accounts_df.loc[valid_events, 'FirstEventCreation'] - accounts_df.loc[valid_events, 'DateTimeCreated']
+        ).dt.total_seconds() / 86400
+        # Filter invalid values
+        accounts_df.loc[accounts_df['DaysToFirstEvent'] < 0, 'DaysToFirstEvent'] = None
+        accounts_df.loc[accounts_df['DaysToFirstEvent'] > 365, 'DaysToFirstEvent'] = None
+
+    accounts_df['DaysToFirstSale'] = None
+    valid_sales = accounts_df['FirstSaleDate'].notna()
+    accounts_df.loc[valid_sales, 'DaysToFirstSale'] = (
+        accounts_df.loc[valid_sales, 'FirstSaleDate'] - accounts_df.loc[valid_sales, 'DateTimeCreated']
+    ).dt.total_seconds() / 86400
+    accounts_df.loc[accounts_df['DaysToFirstSale'] < 0, 'DaysToFirstSale'] = None
+    accounts_df.loc[accounts_df['DaysToFirstSale'] > 365, 'DaysToFirstSale'] = None
+
+    # Add tier information
+    tier_4_plus = {'Key Account', 'High Value', 'Tier 4'}
+    accounts_df['Tier'] = accounts_df[account_id_col].map(account_tiers)
+    accounts_df['IsT4Plus'] = accounts_df['Tier'].isin(tier_4_plus)
+
+    # === CALCULATE FUNNEL METRICS BY MONTH ===
+    funnel_rows = []
+
+    for year in [2024, 2025]:
+        for month in range(1, 13):
+            # Filter accounts created in this month
+            month_accounts = accounts_df[
+                (accounts_df['Created_Year'] == year) &
+                (accounts_df['Created_Month'] == month)
+            ]
+
+            total = len(month_accounts)
+            if total == 0:
+                continue
+
+            # Funnel metrics
+            created_any_event = month_accounts['FirstEventCreation'].notna().sum()
+            created_paid_event = month_accounts['HasPaidEvent'].sum()
+            sold_free_only = month_accounts['OnlyFreeEvents'].sum()
+            sold_paid_tickets = month_accounts['HasPaidSales'].sum()
+
+            # Event breakdown
+            total_events_created = month_accounts['TotalEvents'].sum()
+            paid_events_created = month_accounts['PaidEvents'].sum()
+            free_events_created = month_accounts['FreeEvents'].sum()
+
+            pct_free_events = round(free_events_created / total_events_created * 100, 1) if total_events_created > 0 else 0
+            pct_paid_events = round(paid_events_created / total_events_created * 100, 1) if total_events_created > 0 else 0
+
+            # Conversion rate (paid)
+            conversion_rate_paid = round(sold_paid_tickets / total * 100, 1)
+
+            # Timing metrics
+            avg_days_to_event = month_accounts['DaysToFirstEvent'].dropna().mean()
+            avg_days_to_sale = month_accounts['DaysToFirstSale'].dropna().mean()
+
+            # Activated within 30 days
+            activated_30d = (month_accounts['DaysToFirstEvent'] <= 30).sum() if 'DaysToFirstEvent' in month_accounts.columns else 0
+            pct_activated_30d = round(activated_30d / total * 100, 1)
+
+            # T4+ accounts
+            t4_plus_count = month_accounts['IsT4Plus'].sum()
+
+            funnel_rows.append({
+                'Month': month,
+                'Year': year,
+                'Month Name': MONTH_NAME_MAP[month],
+                'Accounts Created': total,
+                'Created Any Event': created_any_event,
+                'Created Paid Event': created_paid_event,
+                'Sold Free Only': sold_free_only,
+                'Sold Paid Tickets': sold_paid_tickets,
+                'Conversion Rate (Paid) %': conversion_rate_paid,
+                '% Free Events': pct_free_events,
+                '% Paid Events': pct_paid_events,
+                'Avg Days to First Event': round(avg_days_to_event, 1) if avg_days_to_event and not pd.isna(avg_days_to_event) else None,
+                'Avg Days to First Sale': round(avg_days_to_sale, 1) if avg_days_to_sale and not pd.isna(avg_days_to_sale) else None,
+                'Activated Within 30 Days %': pct_activated_30d,
+                'Reached T4+': t4_plus_count
+            })
+
+    # Create DataFrame
+    funnel_df = pd.DataFrame(funnel_rows)
+
+    # === ADD TOTAL ROWS FOR 2024 AND 2025 ===
+    for year in [2024, 2025]:
+        year_data = funnel_df[funnel_df['Year'] == year]
+        if len(year_data) == 0:
+            continue
+
+        year_accounts = accounts_df[accounts_df['Created_Year'] == year]
+        total = len(year_accounts)
+
+        if total > 0:
+            created_any_event = year_accounts['FirstEventCreation'].notna().sum()
+            created_paid_event = year_accounts['HasPaidEvent'].sum()
+            sold_free_only = year_accounts['OnlyFreeEvents'].sum()
+            sold_paid_tickets = year_accounts['HasPaidSales'].sum()
+
+            total_events = year_accounts['TotalEvents'].sum()
+            paid_events = year_accounts['PaidEvents'].sum()
+            free_events = year_accounts['FreeEvents'].sum()
+
+            pct_free = round(free_events / total_events * 100, 1) if total_events > 0 else 0
+            pct_paid = round(paid_events / total_events * 100, 1) if total_events > 0 else 0
+
+            avg_days_event = year_accounts['DaysToFirstEvent'].dropna().mean()
+            avg_days_sale = year_accounts['DaysToFirstSale'].dropna().mean()
+            activated_30d = (year_accounts['DaysToFirstEvent'] <= 30).sum()
+            t4_plus = year_accounts['IsT4Plus'].sum()
+
+            total_row = pd.DataFrame([{
+                'Month': 99,  # Sort to end
+                'Year': year,
+                'Month Name': f'TOTAL {year}',
+                'Accounts Created': total,
+                'Created Any Event': created_any_event,
+                'Created Paid Event': created_paid_event,
+                'Sold Free Only': sold_free_only,
+                'Sold Paid Tickets': sold_paid_tickets,
+                'Conversion Rate (Paid) %': round(sold_paid_tickets / total * 100, 1),
+                '% Free Events': pct_free,
+                '% Paid Events': pct_paid,
+                'Avg Days to First Event': round(avg_days_event, 1) if avg_days_event and not pd.isna(avg_days_event) else None,
+                'Avg Days to First Sale': round(avg_days_sale, 1) if avg_days_sale and not pd.isna(avg_days_sale) else None,
+                'Activated Within 30 Days %': round(activated_30d / total * 100, 1),
+                'Reached T4+': t4_plus
+            }])
+            funnel_df = pd.concat([funnel_df, total_row], ignore_index=True)
+
+    # === ADD CHANGE ROW (2025 vs 2024) ===
+    total_2024 = funnel_df[(funnel_df['Year'] == 2024) & (funnel_df['Month'] == 99)]
+    total_2025 = funnel_df[(funnel_df['Year'] == 2025) & (funnel_df['Month'] == 99)]
+
+    if len(total_2024) > 0 and len(total_2025) > 0:
+        t24 = total_2024.iloc[0]
+        t25 = total_2025.iloc[0]
+
+        def calc_change(v25, v24):
+            if pd.isna(v25) or pd.isna(v24):
+                return None
+            return v25 - v24
+
+        def calc_pct_change(v25, v24):
+            if pd.isna(v25) or pd.isna(v24) or v24 == 0:
+                return None
+            return round((v25 - v24) / v24 * 100, 1)
+
+        change_row = pd.DataFrame([{
+            'Month': 100,  # Sort after totals
+            'Year': 'CHANGE',
+            'Month Name': '2025 vs 2024',
+            'Accounts Created': f"{calc_change(t25['Accounts Created'], t24['Accounts Created']):+,} ({calc_pct_change(t25['Accounts Created'], t24['Accounts Created']):+.1f}%)" if calc_change(t25['Accounts Created'], t24['Accounts Created']) is not None else None,
+            'Created Any Event': f"{calc_change(t25['Created Any Event'], t24['Created Any Event']):+,} ({calc_pct_change(t25['Created Any Event'], t24['Created Any Event']):+.1f}%)" if calc_change(t25['Created Any Event'], t24['Created Any Event']) is not None else None,
+            'Created Paid Event': f"{calc_change(t25['Created Paid Event'], t24['Created Paid Event']):+,} ({calc_pct_change(t25['Created Paid Event'], t24['Created Paid Event']):+.1f}%)" if calc_change(t25['Created Paid Event'], t24['Created Paid Event']) is not None else None,
+            'Sold Free Only': f"{calc_change(t25['Sold Free Only'], t24['Sold Free Only']):+,} ({calc_pct_change(t25['Sold Free Only'], t24['Sold Free Only']):+.1f}%)" if calc_change(t25['Sold Free Only'], t24['Sold Free Only']) is not None else None,
+            'Sold Paid Tickets': f"{calc_change(t25['Sold Paid Tickets'], t24['Sold Paid Tickets']):+,} ({calc_pct_change(t25['Sold Paid Tickets'], t24['Sold Paid Tickets']):+.1f}%)" if calc_change(t25['Sold Paid Tickets'], t24['Sold Paid Tickets']) is not None else None,
+            'Conversion Rate (Paid) %': f"{calc_change(t25['Conversion Rate (Paid) %'], t24['Conversion Rate (Paid) %']):+.1f}pp" if calc_change(t25['Conversion Rate (Paid) %'], t24['Conversion Rate (Paid) %']) is not None else None,
+            '% Free Events': f"{calc_change(t25['% Free Events'], t24['% Free Events']):+.1f}pp" if calc_change(t25['% Free Events'], t24['% Free Events']) is not None else None,
+            '% Paid Events': f"{calc_change(t25['% Paid Events'], t24['% Paid Events']):+.1f}pp" if calc_change(t25['% Paid Events'], t24['% Paid Events']) is not None else None,
+            'Avg Days to First Event': f"{calc_change(t25['Avg Days to First Event'], t24['Avg Days to First Event']):+.1f}" if calc_change(t25['Avg Days to First Event'], t24['Avg Days to First Event']) is not None else None,
+            'Avg Days to First Sale': f"{calc_change(t25['Avg Days to First Sale'], t24['Avg Days to First Sale']):+.1f}" if calc_change(t25['Avg Days to First Sale'], t24['Avg Days to First Sale']) is not None else None,
+            'Activated Within 30 Days %': f"{calc_change(t25['Activated Within 30 Days %'], t24['Activated Within 30 Days %']):+.1f}pp" if calc_change(t25['Activated Within 30 Days %'], t24['Activated Within 30 Days %']) is not None else None,
+            'Reached T4+': f"{calc_change(t25['Reached T4+'], t24['Reached T4+']):+,} ({calc_pct_change(t25['Reached T4+'], t24['Reached T4+']):+.1f}%)" if calc_change(t25['Reached T4+'], t24['Reached T4+']) is not None else None,
+        }])
+        funnel_df = pd.concat([funnel_df, change_row], ignore_index=True)
+
+    # Sort by Year then Month
+    funnel_df = funnel_df.sort_values(['Year', 'Month'], key=lambda x: pd.to_numeric(x, errors='coerce'))
+
+    # Reorder columns
+    columns = [
+        'Month Name', 'Year', 'Accounts Created', 'Created Any Event', 'Created Paid Event',
+        'Sold Free Only', 'Sold Paid Tickets', 'Conversion Rate (Paid) %',
+        '% Free Events', '% Paid Events', 'Avg Days to First Event', 'Avg Days to First Sale',
+        'Activated Within 30 Days %', 'Reached T4+'
+    ]
+    funnel_df = funnel_df[[c for c in columns if c in funnel_df.columns]]
+
+    # Rename Month Name to Month for cleaner output
+    funnel_df = funnel_df.rename(columns={'Month Name': 'Month'})
+
+    # Save to CSV
+    output_path = get_output_path(base_name, None, '_new_account_conversion_funnel.csv')
+    funnel_df.to_csv(output_path, index=False)
+    output_files['new_account_conversion_funnel'] = output_path
+    print(f"    ✓ New account conversion funnel: {output_path}")
+
+    return output_files
+
+
 def main():
     """Main execution function."""
     args = parse_args()
@@ -7360,6 +7643,13 @@ def main():
     performance_yoy_files = generate_monthly_performance_yoy_csv(booking_df, output_file)
     if performance_yoy_files:
         print(f"  ✓ Monthly performance YoY: {len(performance_yoy_files)} reports generated")
+
+    # New account conversion funnel by month (2024 vs 2025)
+    conversion_funnel_files = generate_new_account_conversion_funnel_csv(
+        accounts_df, booking_df, account_tiers_current, output_file
+    )
+    if conversion_funnel_files:
+        print(f"  ✓ New account conversion funnel: {len(conversion_funnel_files)} reports generated")
 
     print(f"\n=== Report Complete ===")
 

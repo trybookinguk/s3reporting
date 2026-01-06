@@ -23,7 +23,7 @@ Reports are organised into folders by category:
 
 | Folder | Purpose |
 |--------|---------|
-| `planning/` | Target models, growth recommendations, BHAG tracking, outreach calendar |
+| `planning/` | Target models, growth recommendations, Base/Stretch tracking, outreach calendar |
 | `seasonality/` | Industry and event type seasonality analysis |
 | `industry/` | Industry breakdowns, cross-tabs, price bands, fee structure |
 | `cohorts/` | Expansion revenue, cohort curves, dormancy, LTV, tier concentration, activation, gateway migration |
@@ -57,6 +57,48 @@ Aggregated view of the reporting period with:
 - YoY comparison
 - Churn/retention metrics
 
+### `_monthly_performance_yoy_comparison.csv`
+**Monthly performance 2024 vs 2025**
+
+Side-by-side monthly comparison for charting:
+- Live Accounts (unique accounts with sales)
+- Events (unique events with sales)
+- Tickets (total tickets sold)
+- Revenue (total ticket revenue)
+- Fees (total fees)
+- YoY percentage change for each metric
+
+### `_new_account_conversion_funnel.csv`
+**New account conversion funnel by month**
+
+For accounts created in each month of 2024 and 2025:
+- Accounts Created
+- Created Any Event (has FirstEventCreation)
+- Created Paid Event (created event with revenue > 0)
+- Sold Free Only (only free ticket sales)
+- Sold Paid Tickets (has any paid ticket sale)
+- Conversion Rate (Paid) %
+- % Free Events / % Paid Events
+- Avg Days to First Event
+- Avg Days to First Sale
+- Activated Within 30 Days %
+- Reached T4+ (Tier 4 or above)
+
+Includes TOTAL rows for 2024 and 2025, plus CHANGE row showing differences.
+
+### `_average_transaction_metrics_4yr.csv`
+**Average and median transaction metrics (2022-2025)**
+
+4-year comparison of key transaction metrics:
+
+| Metric | Description |
+|--------|-------------|
+| Avg/Median Price Per Ticket | Revenue ÷ tickets (per transaction) |
+| Avg/Median Tickets Per Booking | Tickets ÷ transactions |
+| Avg/Median Transaction Value (ATV) | Revenue ÷ transactions |
+| Avg/Median Fees Per Account | Total fees ÷ unique accounts |
+| Avg/Median 12m Value Per Account | Total revenue ÷ unique accounts |
+
 ---
 
 ## Planning Folder (`planning/`)
@@ -65,29 +107,24 @@ Aggregated view of the reporting period with:
 **Monthly targets for 2026**
 
 Target model with:
-- **Base targets**: Realistic expectation using logarithmic growth decay
-- **BHAG targets**: Stretch goals (25,000 cumulative accounts by end of 2026)
+- **Base targets**: 25,000 cumulative accounts by end of 2026
+- **Stretch targets**: 10,000 NEW accounts in 2026
 - Accounts, revenue, and fees targets per month
-- Cumulative tracking against BHAG
+- Cumulative tracking for Base and new account tracking for Stretch
 
 ### `_growth_recommendations.csv`
 **Growth rate analysis and recommendations**
 
 - Historical YoY growth rates by metric
-- Projected growth using logarithmic decay model
-- Monthly YoY patterns with recency weighting
+- Base and Stretch target percentages
+- Gap analysis between targets
 
-### `_bhag_tracking.csv`
-**BHAG progress tracking**
+### `_annual_summary.csv`
+**Annual summary with Base vs Stretch**
 
-- Current cumulative accounts vs BHAG trajectory
-- Monthly gap analysis
-- Pace required to hit BHAG
-
-### `_scenario_comparison.csv`
-**Base vs BHAG scenario comparison**
-
-Side-by-side comparison of conservative (Base) vs stretch (BHAG) scenarios.
+- Previous year actuals
+- Base and Stretch targets with growth percentages
+- Gap between Stretch and Base scenarios
 
 ---
 
@@ -436,8 +473,10 @@ Cohort-by-cohort gateway analysis:
 | Total Fees | TryBooking revenue (BookingFee + CardFee + TicketFee + ProcessingFee) |
 | Total Revenue | Ticket sales (PaymentReceived) |
 | Box Office | In-person sales (Card Present or Cash) |
-| BHAG | Big Hairy Audacious Goal (25,000 cumulative accounts by end of 2026) |
+| Base Target | 25,000 cumulative accounts by end of 2026 |
+| Stretch Target | 10,000 NEW accounts in 2026 |
 | LTV | Lifetime Value (24-month horizon) |
+| T4+ | Tier 4 or above (Key Account, High Value, or Tier 4) |
 
 ---
 

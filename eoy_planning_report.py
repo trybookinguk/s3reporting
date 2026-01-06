@@ -7417,6 +7417,107 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
     return output_files
 
 
+def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, output_file: str) -> dict:
+    """
+    Generate average transaction metrics by year (2022-2025).
+
+    Calculates annual averages for key transaction metrics:
+    - Avg Price Per Ticket
+    - Avg Tickets Per Booking
+    - Avg Transaction Value (ATV)
+    - Avg Fees Per Account
+    - Avg 12m Value Per Account
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating average transaction metrics by year...")
+
+    booking_df = booking_df.copy()
+
+    # Ensure TransactionDate is datetime and add Year column
+    if not pd.api.types.is_datetime64_any_dtype(booking_df['TransactionDate']):
+        booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], utc=True)
+    booking_df['Year'] = booking_df['TransactionDate'].dt.year
+
+    # Years to process
+    years = [2022, 2023, 2024, 2025]
+
+    # Calculate metrics per year
+    metrics_rows = []
+
+    for year in years:
+        year_df = booking_df[booking_df['Year'] == year]
+
+        if len(year_df) == 0:
+            metrics_rows.append({
+                'Metric': f'{year}',
+                'Avg Price Per Ticket': None,
+                'Avg Tickets Per Booking': None,
+                'Avg Transaction Value (ATV)': None,
+                'Avg Fees Per Account': None,
+                'Avg 12m Value Per Account': None
+            })
+            continue
+
+        # Core metrics
+        total_revenue = year_df['PaymentReceived'].sum() if 'PaymentReceived' in year_df.columns else 0
+        total_tickets = year_df['TicketQuantity'].sum() if 'TicketQuantity' in year_df.columns else 0
+        total_transactions = len(year_df)
+
+        # Calculate total fees
+        fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+        total_fees = sum(year_df[col].fillna(0).sum() for col in fee_cols if col in year_df.columns)
+
+        # Unique accounts with sales in the year
+        unique_accounts = year_df['AccountId'].nunique() if 'AccountId' in year_df.columns else 0
+
+        # Calculate averages
+        avg_price_per_ticket = round(total_revenue / total_tickets, 2) if total_tickets > 0 else 0
+        avg_tickets_per_booking = round(total_tickets / total_transactions, 2) if total_transactions > 0 else 0
+        avg_transaction_value = round(total_revenue / total_transactions, 2) if total_transactions > 0 else 0
+        avg_fees_per_account = round(total_fees / unique_accounts, 2) if unique_accounts > 0 else 0
+
+        # Avg 12m Value Per Account = Total annual revenue / unique accounts selling
+        avg_12m_value_per_account = round(total_revenue / unique_accounts, 2) if unique_accounts > 0 else 0
+
+        metrics_rows.append({
+            'Year': year,
+            'Avg Price Per Ticket': avg_price_per_ticket,
+            'Avg Tickets Per Booking': avg_tickets_per_booking,
+            'Avg Transaction Value (ATV)': avg_transaction_value,
+            'Avg Fees Per Account': avg_fees_per_account,
+            'Avg 12m Value Per Account': avg_12m_value_per_account
+        })
+
+    # Create DataFrame
+    metrics_df = pd.DataFrame(metrics_rows)
+
+    # Transpose to get metrics as rows and years as columns
+    metrics_df = metrics_df.set_index('Year').T
+    metrics_df.index.name = 'Metric'
+    metrics_df = metrics_df.reset_index()
+
+    # Ensure column order
+    cols = ['Metric'] + [c for c in years if c in metrics_df.columns]
+    metrics_df = metrics_df[[c for c in cols if c in metrics_df.columns]]
+
+    # Save to CSV
+    output_path = get_output_path(base_name, None, '_average_transaction_metrics_4yr.csv')
+    metrics_df.to_csv(output_path, index=False, float_format='%.2f')
+    output_files['average_transaction_metrics'] = output_path
+    print(f"    ✓ Average transaction metrics: {output_path}")
+
+    return output_files
+
+
 def main():
     """Main execution function."""
     args = parse_args()
@@ -7650,6 +7751,11 @@ def main():
     )
     if conversion_funnel_files:
         print(f"  ✓ New account conversion funnel: {len(conversion_funnel_files)} reports generated")
+
+    # Average transaction metrics by year (2022-2025)
+    avg_metrics_files = generate_average_transaction_metrics_csv(booking_df, output_file)
+    if avg_metrics_files:
+        print(f"  ✓ Average transaction metrics: {len(avg_metrics_files)} reports generated")
 
     print(f"\n=== Report Complete ===")
 

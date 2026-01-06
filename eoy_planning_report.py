@@ -3978,14 +3978,13 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
         accounts_with_year = accounts_df.copy()
         accounts_with_year['CreatedYear'] = pd.to_datetime(accounts_with_year['DateTimeCreated']).dt.year
 
-        # Calculate tiers for T4+ analysis (need tiers as of end of each year)
-        # For simplicity, use current tiers - accounts that are T4+ now
-        from modules.tier_calculator import determine_tier_from_percentiles
-        t4_plus_tiers = {'Key Account', 'High Value', 'Tier 4'}
+        # Calculate tiers for High Value analysis (Key Account + High Value)
+        # Tiers are calculated based on each year's activity
+        high_value_tiers = {'Key Account', 'High Value'}
 
         yoy_rows = []
         new_account_rows = []
-        t4_plus_rows = []
+        high_value_rows = []
 
         for year in [2024, 2025]:
             year_bookings = yoy_booking[yoy_booking['Year'] == year]
@@ -4055,54 +4054,50 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
                         'New_Account_Fees': round(row['New_Account_Fees'], 2)
                     })
 
-            # === T4+ ACCOUNTS BY INDUSTRY ===
-            # Get T4+ accounts that were active in this year
-            # Calculate tiers based on activity in the year
+            # === HIGH VALUE ACCOUNTS BY INDUSTRY ===
+            # Get High Value (Key Account + High Value) accounts active in this year
+            # Calculate tiers based on activity in that specific year
             year_account_fees = year_bookings.groupby('AccountId').agg({
                 'TotalFees': 'sum',
                 'TicketQuantity': 'sum'
             }).reset_index()
 
             if len(year_account_fees) > 0:
-                # Calculate percentiles for tier assignment
+                # Calculate percentiles for tier assignment based on this year's data
                 year_account_fees['fees_pct'] = year_account_fees['TotalFees'].rank(pct=True) * 100
                 year_account_fees['tickets_pct'] = year_account_fees['TicketQuantity'].rank(pct=True) * 100
 
-                # Assign tiers based on percentiles
+                # Assign tiers based on percentiles (Key Account = 99th, High Value = 95th)
                 def assign_tier(row):
                     max_pct = max(row['fees_pct'], row['tickets_pct'])
                     if max_pct >= 99:
                         return 'Key Account'
                     elif max_pct >= 95:
                         return 'High Value'
-                    elif max_pct >= 75:
-                        return 'Tier 4'
-                    elif max_pct >= 50:
-                        return 'Tier 3'
                     else:
                         return 'Other'
 
                 year_account_fees['Tier'] = year_account_fees.apply(assign_tier, axis=1)
-                year_account_fees['IsT4Plus'] = year_account_fees['Tier'].isin(t4_plus_tiers)
+                year_account_fees['IsHighValue'] = year_account_fees['Tier'].isin(high_value_tiers)
 
-                # Get T4+ account IDs
-                t4_plus_accounts = year_account_fees[year_account_fees['IsT4Plus']]['AccountId'].tolist()
+                # Get High Value account IDs
+                high_value_accounts = year_account_fees[year_account_fees['IsHighValue']]['AccountId'].tolist()
 
-                # Get industry for T4+ accounts from bookings
-                t4_plus_bookings = year_bookings[year_bookings['AccountId'].isin(t4_plus_accounts)]
+                # Get industry for High Value accounts from bookings
+                high_value_bookings = year_bookings[year_bookings['AccountId'].isin(high_value_accounts)]
 
-                t4_by_industry = t4_plus_bookings.groupby('Industry').agg({
+                hv_by_industry = high_value_bookings.groupby('Industry').agg({
                     'AccountId': 'nunique',
                     'TotalFees': 'sum'
                 }).reset_index()
-                t4_by_industry.columns = ['Industry', 'T4_Plus_Accounts', 'T4_Plus_Fees']
+                hv_by_industry.columns = ['Industry', 'High_Value_Accounts', 'High_Value_Fees']
 
-                for _, row in t4_by_industry.iterrows():
-                    t4_plus_rows.append({
+                for _, row in hv_by_industry.iterrows():
+                    high_value_rows.append({
                         'Year': year,
                         'Industry': row['Industry'],
-                        'T4_Plus_Accounts': int(row['T4_Plus_Accounts']),
-                        'T4_Plus_Fees': round(row['T4_Plus_Fees'], 2)
+                        'High_Value_Accounts': int(row['High_Value_Accounts']),
+                        'High_Value_Fees': round(row['High_Value_Fees'], 2)
                     })
 
         if yoy_rows:
@@ -4112,9 +4107,9 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
             industries = industry_yoy_df['Industry'].unique()
             comparison_rows = []
 
-            # Create DataFrames for new accounts and T4+ for easy lookup
+            # Create DataFrames for new accounts and High Value for easy lookup
             new_account_df = pd.DataFrame(new_account_rows) if new_account_rows else pd.DataFrame()
-            t4_plus_df = pd.DataFrame(t4_plus_rows) if t4_plus_rows else pd.DataFrame()
+            high_value_df = pd.DataFrame(high_value_rows) if high_value_rows else pd.DataFrame()
 
             for industry in industries:
                 ind_data = industry_yoy_df[industry_yoy_df['Industry'] == industry]
@@ -4170,26 +4165,26 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
                     else:
                         row['New_Account_Fees_Growth_%'] = 100.0 if row['2025_New_Account_Fees'] > 0 else 0.0
 
-                # === T4+ ACCOUNTS BY INDUSTRY ===
-                if len(t4_plus_df) > 0:
-                    t4_2024 = t4_plus_df[(t4_plus_df['Year'] == 2024) & (t4_plus_df['Industry'] == industry)]
-                    t4_2025 = t4_plus_df[(t4_plus_df['Year'] == 2025) & (t4_plus_df['Industry'] == industry)]
+                # === HIGH VALUE ACCOUNTS BY INDUSTRY ===
+                if len(high_value_df) > 0:
+                    hv_2024 = high_value_df[(high_value_df['Year'] == 2024) & (high_value_df['Industry'] == industry)]
+                    hv_2025 = high_value_df[(high_value_df['Year'] == 2025) & (high_value_df['Industry'] == industry)]
 
-                    row['2024_T4_Plus_Accounts'] = int(t4_2024['T4_Plus_Accounts'].iloc[0]) if len(t4_2024) > 0 else 0
-                    row['2024_T4_Plus_Fees'] = float(t4_2024['T4_Plus_Fees'].iloc[0]) if len(t4_2024) > 0 else 0
-                    row['2025_T4_Plus_Accounts'] = int(t4_2025['T4_Plus_Accounts'].iloc[0]) if len(t4_2025) > 0 else 0
-                    row['2025_T4_Plus_Fees'] = float(t4_2025['T4_Plus_Fees'].iloc[0]) if len(t4_2025) > 0 else 0
+                    row['2024_High_Value_Accounts'] = int(hv_2024['High_Value_Accounts'].iloc[0]) if len(hv_2024) > 0 else 0
+                    row['2024_High_Value_Fees'] = float(hv_2024['High_Value_Fees'].iloc[0]) if len(hv_2024) > 0 else 0
+                    row['2025_High_Value_Accounts'] = int(hv_2025['High_Value_Accounts'].iloc[0]) if len(hv_2025) > 0 else 0
+                    row['2025_High_Value_Fees'] = float(hv_2025['High_Value_Fees'].iloc[0]) if len(hv_2025) > 0 else 0
 
-                    # T4+ growth
-                    if row['2024_T4_Plus_Accounts'] > 0:
-                        row['T4_Plus_Account_Growth_%'] = round((row['2025_T4_Plus_Accounts'] - row['2024_T4_Plus_Accounts']) / row['2024_T4_Plus_Accounts'] * 100, 1)
+                    # High Value growth
+                    if row['2024_High_Value_Accounts'] > 0:
+                        row['High_Value_Account_Growth_%'] = round((row['2025_High_Value_Accounts'] - row['2024_High_Value_Accounts']) / row['2024_High_Value_Accounts'] * 100, 1)
                     else:
-                        row['T4_Plus_Account_Growth_%'] = 100.0 if row['2025_T4_Plus_Accounts'] > 0 else 0.0
+                        row['High_Value_Account_Growth_%'] = 100.0 if row['2025_High_Value_Accounts'] > 0 else 0.0
 
-                    if row['2024_T4_Plus_Fees'] > 0:
-                        row['T4_Plus_Fees_Growth_%'] = round((row['2025_T4_Plus_Fees'] - row['2024_T4_Plus_Fees']) / row['2024_T4_Plus_Fees'] * 100, 1)
+                    if row['2024_High_Value_Fees'] > 0:
+                        row['High_Value_Fees_Growth_%'] = round((row['2025_High_Value_Fees'] - row['2024_High_Value_Fees']) / row['2024_High_Value_Fees'] * 100, 1)
                     else:
-                        row['T4_Plus_Fees_Growth_%'] = 100.0 if row['2025_T4_Plus_Fees'] > 0 else 0.0
+                        row['High_Value_Fees_Growth_%'] = 100.0 if row['2025_High_Value_Fees'] > 0 else 0.0
 
                 comparison_rows.append(row)
 

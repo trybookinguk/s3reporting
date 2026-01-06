@@ -7417,19 +7417,22 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
     return output_files
 
 
-def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, output_file: str) -> dict:
+def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, account_tiers: dict,
+                                              output_file: str) -> dict:
     """
     Generate average transaction metrics by year (2022-2025).
 
     Calculates annual averages for key transaction metrics:
-    - Avg Price Per Ticket
-    - Avg Tickets Per Booking
-    - Avg Transaction Value (ATV)
-    - Avg Fees Per Account
-    - Avg 12m Value Per Account
+    - Mean/Median Price Per Ticket (paid only)
+    - Mean/Median Tickets Per Booking
+    - Mean/Median Transaction Value (ATV)
+    - Mean/Median Fees Per Account
+    - Free vs Paid Event Split
+    - High Value % of Revenue (Key Account + High Value tiers)
 
     Args:
         booking_df: Booking transactions DataFrame
+        account_tiers: Dictionary mapping AccountId -> tier string
         output_file: Base output filename
 
     Returns:
@@ -7466,7 +7469,10 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, output_fi
                 'Mean Transaction Value (ATV)': None,
                 'Median Transaction Value': None,
                 'Mean Fees Per Account': None,
-                'Median Fees Per Account': None
+                'Median Fees Per Account': None,
+                '% Free Events': None,
+                '% Paid Events': None,
+                'High Value % of Fees': None
             })
             continue
 
@@ -7475,6 +7481,7 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, output_fi
 
         # Core metrics
         total_transactions = len(year_df)
+        total_revenue = year_df['PaymentReceived'].sum()
 
         # Calculate total fees per transaction
         fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
@@ -7497,7 +7504,7 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, output_fi
         # Calculate means
         mean_price_per_ticket = round(paid_revenue / paid_tickets, 2) if paid_tickets > 0 else 0
         mean_tickets_per_booking = round(year_df['TicketQuantity'].sum() / total_transactions, 2) if total_transactions > 0 else 0
-        mean_transaction_value = round(year_df['PaymentReceived'].sum() / total_transactions, 2) if total_transactions > 0 else 0
+        mean_transaction_value = round(total_revenue / total_transactions, 2) if total_transactions > 0 else 0
         mean_fees_per_account = round(total_fees / unique_accounts, 2) if unique_accounts > 0 else 0
 
         # Calculate medians
@@ -7509,6 +7516,25 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, output_fi
         account_agg = year_df.groupby('AccountId')['TotalFees'].sum().reset_index()
         median_fees_per_account = round(account_agg['TotalFees'].median(), 2) if len(account_agg) > 0 else 0
 
+        # === FREE VS PAID EVENT SPLIT ===
+        # An event is "paid" if it has any revenue, "free" if all tickets are £0
+        event_revenue = year_df.groupby('EventId')['PaymentReceived'].sum()
+        total_events = len(event_revenue)
+        paid_events = (event_revenue > 0).sum()
+        free_events = (event_revenue == 0).sum()
+
+        pct_free_events = round(free_events / total_events * 100, 1) if total_events > 0 else 0
+        pct_paid_events = round(paid_events / total_events * 100, 1) if total_events > 0 else 0
+
+        # === HIGH VALUE % OF FEES ===
+        # High Value = Key Account + High Value tiers
+        high_value_tiers = {'Key Account', 'High Value'}
+        year_df['Tier'] = year_df['AccountId'].map(account_tiers)
+        year_df['IsHighValue'] = year_df['Tier'].isin(high_value_tiers)
+
+        high_value_fees = year_df.loc[year_df['IsHighValue'], 'TotalFees'].sum()
+        pct_high_value_fees = round(high_value_fees / total_fees * 100, 1) if total_fees > 0 else 0
+
         metrics_rows.append({
             'Year': year,
             'Mean Price Per Ticket': mean_price_per_ticket,
@@ -7518,7 +7544,10 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, output_fi
             'Mean Transaction Value (ATV)': mean_transaction_value,
             'Median Transaction Value': median_transaction_value,
             'Mean Fees Per Account': mean_fees_per_account,
-            'Median Fees Per Account': median_fees_per_account
+            'Median Fees Per Account': median_fees_per_account,
+            '% Free Events': pct_free_events,
+            '% Paid Events': pct_paid_events,
+            'High Value % of Fees': pct_high_value_fees
         })
 
     # Create DataFrame
@@ -7777,7 +7806,7 @@ def main():
         print(f"  ✓ New account conversion funnel: {len(conversion_funnel_files)} reports generated")
 
     # Average transaction metrics by year (2022-2025)
-    avg_metrics_files = generate_average_transaction_metrics_csv(booking_df, output_file)
+    avg_metrics_files = generate_average_transaction_metrics_csv(booking_df, account_tiers_current, output_file)
     if avg_metrics_files:
         print(f"  ✓ Average transaction metrics: {len(avg_metrics_files)} reports generated")
 

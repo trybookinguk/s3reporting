@@ -7417,21 +7417,24 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
     return output_files
 
 
-def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, account_tiers: dict,
-                                              output_file: str) -> dict:
+def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                              account_tiers: dict, output_file: str) -> dict:
     """
     Generate average transaction metrics by year (2022-2025).
 
     Calculates annual averages for key transaction metrics:
     - Mean/Median Price Per Ticket (paid only)
-    - Mean/Median Tickets Per Booking
-    - Mean/Median Transaction Value (ATV)
-    - Mean/Median Fees Per Account
+    - Mean/Median Tickets Per Booking (all transactions)
+    - Mean/Median Transaction Value (ATV) (paid only - so price × tickets ≈ ATV)
+    - Mean/Median Fees Per Account (all accounts)
     - Free vs Paid Event Split
-    - High Value % of Revenue (Key Account + High Value tiers)
+    - High Value % of Fees (Key Account + High Value tiers)
+    - % Fees from Mature (accounts 12+ months old)
+    - % Fees from New (accounts in month 0)
 
     Args:
         booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame (for account age classification)
         account_tiers: Dictionary mapping AccountId -> tier string
         output_file: Base output filename
 
@@ -7444,11 +7447,17 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, account_t
     print("  Generating average transaction metrics by year...")
 
     booking_df = booking_df.copy()
+    accounts_df = accounts_df.copy()
 
     # Ensure TransactionDate is datetime and add Year column
     if not pd.api.types.is_datetime64_any_dtype(booking_df['TransactionDate']):
         booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], utc=True)
     booking_df['Year'] = booking_df['TransactionDate'].dt.year
+
+    # Create account creation year lookup for New vs Mature classification
+    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Id'
+    accounts_df['CreatedYear'] = pd.to_datetime(accounts_df['DateTimeCreated']).dt.year
+    account_created_year = accounts_df.set_index(account_id_col)['CreatedYear'].to_dict()
 
     # Years to process
     years = [2022, 2023, 2024, 2025]
@@ -7457,7 +7466,7 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, account_t
     metrics_rows = []
 
     for year in years:
-        year_df = booking_df[booking_df['Year'] == year]
+        year_df = booking_df[booking_df['Year'] == year].copy()
 
         if len(year_df) == 0:
             metrics_rows.append({
@@ -7472,16 +7481,18 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, account_t
                 'Median Fees Per Account': None,
                 '% Free Events': None,
                 '% Paid Events': None,
-                'High Value % of Fees': None
+                'High Value % of Fees': None,
+                '% Fees from New': None,
+                '% Fees from Mature': None
             })
             continue
 
-        # Filter to paid transactions only for price per ticket calculation
+        # Filter to paid transactions only for price per ticket and ATV calculation
         paid_df = year_df[year_df['PaymentReceived'] > 0].copy()
 
         # Core metrics
         total_transactions = len(year_df)
-        total_revenue = year_df['PaymentReceived'].sum()
+        paid_transactions = len(paid_df)
 
         # Calculate total fees per transaction
         fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
@@ -7501,18 +7512,18 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, account_t
             0
         )
 
-        # Calculate means
+        # Calculate means - ATV now uses paid transactions only (so price × tickets ≈ ATV)
         mean_price_per_ticket = round(paid_revenue / paid_tickets, 2) if paid_tickets > 0 else 0
         mean_tickets_per_booking = round(year_df['TicketQuantity'].sum() / total_transactions, 2) if total_transactions > 0 else 0
-        mean_transaction_value = round(total_revenue / total_transactions, 2) if total_transactions > 0 else 0
+        mean_transaction_value = round(paid_revenue / paid_transactions, 2) if paid_transactions > 0 else 0
         mean_fees_per_account = round(total_fees / unique_accounts, 2) if unique_accounts > 0 else 0
 
-        # Calculate medians
+        # Calculate medians - ATV median also uses paid transactions only
         median_price_per_ticket = round(paid_df['PricePerTicket'].median(), 2) if len(paid_df) > 0 else 0
         median_tickets_per_booking = round(year_df['TicketQuantity'].median(), 2) if len(year_df) > 0 else 0
-        median_transaction_value = round(year_df['PaymentReceived'].median(), 2) if len(year_df) > 0 else 0
+        median_transaction_value = round(paid_df['PaymentReceived'].median(), 2) if len(paid_df) > 0 else 0
 
-        # Calculate per-account aggregates for median fees
+        # Calculate per-account aggregates for median fees (includes all accounts)
         account_agg = year_df.groupby('AccountId')['TotalFees'].sum().reset_index()
         median_fees_per_account = round(account_agg['TotalFees'].median(), 2) if len(account_agg) > 0 else 0
 
@@ -7535,6 +7546,19 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, account_t
         high_value_fees = year_df.loc[year_df['IsHighValue'], 'TotalFees'].sum()
         pct_high_value_fees = round(high_value_fees / total_fees * 100, 1) if total_fees > 0 else 0
 
+        # === % FEES FROM NEW VS MATURE ===
+        # New = accounts created in this year
+        # Mature = accounts created before this year
+        year_df['AccountCreatedYear'] = year_df['AccountId'].map(account_created_year)
+        year_df['IsNewAccount'] = year_df['AccountCreatedYear'] == year
+        year_df['IsMatureAccount'] = year_df['AccountCreatedYear'] < year
+
+        new_account_fees = year_df.loc[year_df['IsNewAccount'], 'TotalFees'].sum()
+        mature_account_fees = year_df.loc[year_df['IsMatureAccount'], 'TotalFees'].sum()
+
+        pct_fees_from_new = round(new_account_fees / total_fees * 100, 1) if total_fees > 0 else 0
+        pct_fees_from_mature = round(mature_account_fees / total_fees * 100, 1) if total_fees > 0 else 0
+
         metrics_rows.append({
             'Year': year,
             'Mean Price Per Ticket': mean_price_per_ticket,
@@ -7547,7 +7571,9 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, account_t
             'Median Fees Per Account': median_fees_per_account,
             '% Free Events': pct_free_events,
             '% Paid Events': pct_paid_events,
-            'High Value % of Fees': pct_high_value_fees
+            'High Value % of Fees': pct_high_value_fees,
+            '% Fees from New': pct_fees_from_new,
+            '% Fees from Mature': pct_fees_from_mature
         })
 
     # Create DataFrame
@@ -7806,7 +7832,7 @@ def main():
         print(f"  ✓ New account conversion funnel: {len(conversion_funnel_files)} reports generated")
 
     # Average transaction metrics by year (2022-2025)
-    avg_metrics_files = generate_average_transaction_metrics_csv(booking_df, account_tiers_current, output_file)
+    avg_metrics_files = generate_average_transaction_metrics_csv(booking_df, accounts_df, account_tiers_current, output_file)
     if avg_metrics_files:
         print(f"  ✓ Average transaction metrics: {len(avg_metrics_files)} reports generated")
 

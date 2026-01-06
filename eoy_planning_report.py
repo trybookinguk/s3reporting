@@ -3461,18 +3461,21 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     planning_df['Fees Index %'] = round(planning_df['Total Fees'] / planning_df['Year_Fees'] * 100, 2)
 
     # === ADD EASTER AND HOLIDAY FLAGS ===
+    # Ensure Year column is int FIRST before creating unique_years
+    planning_df['Year'] = planning_df['Year'].astype(int)
+
     # Pre-compute Easter dates for unique years only (optimised)
-    # Convert to Python int to ensure consistent key types for map lookup
-    unique_years = [int(y) for y in planning_df['Year'].unique()]
+    unique_years = list(planning_df['Year'].unique())
     easter_dates = {year: calculate_easter_date(year) for year in unique_years}
     easter_month_map = {year: dates[0] for year, dates in easter_dates.items()}
     easter_day_map = {year: dates[1] for year, dates in easter_dates.items()}
-    # Ensure Year column is int for consistent mapping
-    planning_df['Year'] = planning_df['Year'].astype(int)
+
+    # Map Easter dates - these will be int values (month 3 or 4, day 1-30)
     planning_df['Easter Month'] = planning_df['Year'].map(easter_month_map)
     planning_df['Easter Day'] = planning_df['Year'].map(easter_day_map)
 
     # Vectorised Easter position calculation
+    # Handle potential NaN values from map() if year not found
     planning_df['Easter Position'] = np.where(
         planning_df['Easter Month'] == 3, 'Early (Mar)',
         np.where(planning_df['Easter Day'] > 15, 'Late (Apr)', 'Mid (Apr)')
@@ -3505,13 +3508,28 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
         print("  Warning: No complete years - seasonality indices may be skewed")
 
     # === CALCULATE EASTER-ADJUSTED SEASONALITY ===
+    # Verify Easter Position column exists before groupby
+    if 'Easter Position' not in complete_year_data.columns:
+        print(f"  Warning: Easter Position column missing. Columns: {list(complete_year_data.columns)}")
+        # Recreate Easter Position from Easter Month/Day if they exist
+        if 'Easter Month' in complete_year_data.columns and 'Easter Day' in complete_year_data.columns:
+            complete_year_data = complete_year_data.copy()
+            complete_year_data['Easter Position'] = np.where(
+                complete_year_data['Easter Month'] == 3, 'Early (Mar)',
+                np.where(complete_year_data['Easter Day'] > 15, 'Late (Apr)', 'Mid (Apr)')
+            )
+        else:
+            print("  Error: Cannot recreate Easter Position - skipping Easter-adjusted seasonality")
+            easter_adjusted = pd.DataFrame(columns=['Month', 'Easter Position', 'Easter Adj Accounts %', 'Easter Adj Revenue %', 'Easter Adj Fees %'])
+
     # Group by Easter position to get adjusted indices (using complete years only)
-    easter_adjusted = complete_year_data.groupby(['Month', 'Easter Position']).agg({
-        'Accounts Index %': 'mean',
-        'Revenue Index %': 'mean',
-        'Fees Index %': 'mean',
-    }).reset_index()
-    easter_adjusted.columns = ['Month', 'Easter Position', 'Easter Adj Accounts %', 'Easter Adj Revenue %', 'Easter Adj Fees %']
+    if 'Easter Position' in complete_year_data.columns:
+        easter_adjusted = complete_year_data.groupby(['Month', 'Easter Position']).agg({
+            'Accounts Index %': 'mean',
+            'Revenue Index %': 'mean',
+            'Fees Index %': 'mean',
+        }).reset_index()
+        easter_adjusted.columns = ['Month', 'Easter Position', 'Easter Adj Accounts %', 'Easter Adj Revenue %', 'Easter Adj Fees %']
 
     # Get target year's Easter position
     target_easter_month, target_easter_day = calculate_easter_date(target_year)

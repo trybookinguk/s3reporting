@@ -7459,22 +7459,21 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, output_fi
         if len(year_df) == 0:
             metrics_rows.append({
                 'Year': year,
-                'Avg Price Per Ticket': None,
+                'Mean Price Per Ticket': None,
                 'Median Price Per Ticket': None,
-                'Avg Tickets Per Booking': None,
+                'Mean Tickets Per Booking': None,
                 'Median Tickets Per Booking': None,
-                'Avg Transaction Value (ATV)': None,
+                'Mean Transaction Value (ATV)': None,
                 'Median Transaction Value': None,
-                'Avg Fees Per Account': None,
-                'Median Fees Per Account': None,
-                'Avg 12m Value Per Account': None,
-                'Median 12m Value Per Account': None
+                'Mean Fees Per Account': None,
+                'Median Fees Per Account': None
             })
             continue
 
+        # Filter to paid transactions only for price per ticket calculation
+        paid_df = year_df[year_df['PaymentReceived'] > 0].copy()
+
         # Core metrics
-        total_revenue = year_df['PaymentReceived'].sum() if 'PaymentReceived' in year_df.columns else 0
-        total_tickets = year_df['TicketQuantity'].sum() if 'TicketQuantity' in year_df.columns else 0
         total_transactions = len(year_df)
 
         # Calculate total fees per transaction
@@ -7485,46 +7484,41 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, output_fi
         # Unique accounts with sales in the year
         unique_accounts = year_df['AccountId'].nunique() if 'AccountId' in year_df.columns else 0
 
-        # Calculate price per ticket for each transaction (for median)
-        year_df['PricePerTicket'] = np.where(
-            year_df['TicketQuantity'] > 0,
-            year_df['PaymentReceived'] / year_df['TicketQuantity'],
+        # Calculate price per ticket for paid transactions only (excludes free)
+        paid_revenue = paid_df['PaymentReceived'].sum() if len(paid_df) > 0 else 0
+        paid_tickets = paid_df['TicketQuantity'].sum() if len(paid_df) > 0 else 0
+
+        paid_df['PricePerTicket'] = np.where(
+            paid_df['TicketQuantity'] > 0,
+            paid_df['PaymentReceived'] / paid_df['TicketQuantity'],
             0
         )
 
-        # Calculate averages
-        avg_price_per_ticket = round(total_revenue / total_tickets, 2) if total_tickets > 0 else 0
-        avg_tickets_per_booking = round(total_tickets / total_transactions, 2) if total_transactions > 0 else 0
-        avg_transaction_value = round(total_revenue / total_transactions, 2) if total_transactions > 0 else 0
-        avg_fees_per_account = round(total_fees / unique_accounts, 2) if unique_accounts > 0 else 0
-        avg_12m_value_per_account = round(total_revenue / unique_accounts, 2) if unique_accounts > 0 else 0
+        # Calculate means
+        mean_price_per_ticket = round(paid_revenue / paid_tickets, 2) if paid_tickets > 0 else 0
+        mean_tickets_per_booking = round(year_df['TicketQuantity'].sum() / total_transactions, 2) if total_transactions > 0 else 0
+        mean_transaction_value = round(year_df['PaymentReceived'].sum() / total_transactions, 2) if total_transactions > 0 else 0
+        mean_fees_per_account = round(total_fees / unique_accounts, 2) if unique_accounts > 0 else 0
 
-        # Calculate medians at transaction level
-        median_price_per_ticket = round(year_df.loc[year_df['PricePerTicket'] > 0, 'PricePerTicket'].median(), 2) if len(year_df[year_df['PricePerTicket'] > 0]) > 0 else 0
+        # Calculate medians
+        median_price_per_ticket = round(paid_df['PricePerTicket'].median(), 2) if len(paid_df) > 0 else 0
         median_tickets_per_booking = round(year_df['TicketQuantity'].median(), 2) if len(year_df) > 0 else 0
         median_transaction_value = round(year_df['PaymentReceived'].median(), 2) if len(year_df) > 0 else 0
 
-        # Calculate per-account aggregates for median fees and value
-        account_agg = year_df.groupby('AccountId').agg({
-            'TotalFees': 'sum',
-            'PaymentReceived': 'sum'
-        }).reset_index()
-
+        # Calculate per-account aggregates for median fees
+        account_agg = year_df.groupby('AccountId')['TotalFees'].sum().reset_index()
         median_fees_per_account = round(account_agg['TotalFees'].median(), 2) if len(account_agg) > 0 else 0
-        median_12m_value_per_account = round(account_agg['PaymentReceived'].median(), 2) if len(account_agg) > 0 else 0
 
         metrics_rows.append({
             'Year': year,
-            'Avg Price Per Ticket': avg_price_per_ticket,
+            'Mean Price Per Ticket': mean_price_per_ticket,
             'Median Price Per Ticket': median_price_per_ticket,
-            'Avg Tickets Per Booking': avg_tickets_per_booking,
+            'Mean Tickets Per Booking': mean_tickets_per_booking,
             'Median Tickets Per Booking': median_tickets_per_booking,
-            'Avg Transaction Value (ATV)': avg_transaction_value,
+            'Mean Transaction Value (ATV)': mean_transaction_value,
             'Median Transaction Value': median_transaction_value,
-            'Avg Fees Per Account': avg_fees_per_account,
-            'Median Fees Per Account': median_fees_per_account,
-            'Avg 12m Value Per Account': avg_12m_value_per_account,
-            'Median 12m Value Per Account': median_12m_value_per_account
+            'Mean Fees Per Account': mean_fees_per_account,
+            'Median Fees Per Account': median_fees_per_account
         })
 
     # Create DataFrame

@@ -3973,7 +3973,20 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
             available_fees = [col for col in fee_cols if col in yoy_booking.columns]
             yoy_booking['TotalFees'] = yoy_booking[available_fees].fillna(0).sum(axis=1)
 
+        # Prepare accounts data with creation year and industry
+        account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Id'
+        accounts_with_year = accounts_df.copy()
+        accounts_with_year['CreatedYear'] = pd.to_datetime(accounts_with_year['DateTimeCreated']).dt.year
+
+        # Calculate tiers for T4+ analysis (need tiers as of end of each year)
+        # For simplicity, use current tiers - accounts that are T4+ now
+        from modules.tier_calculator import determine_tier_from_percentiles
+        t4_plus_tiers = {'Key Account', 'High Value', 'Tier 4'}
+
         yoy_rows = []
+        new_account_rows = []
+        t4_plus_rows = []
+
         for year in [2024, 2025]:
             year_bookings = yoy_booking[yoy_booking['Year'] == year]
 
@@ -3982,9 +3995,6 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
 
             # Get accounts created by end of this year
             year_end = pd.Timestamp(f'{year}-12-31', tz='Europe/London')
-            year_accounts = accounts_df[
-                pd.to_datetime(accounts_df['DateTimeCreated']) <= year_end
-            ]
 
             # Filter to active accounts (at least MIN_TICKETS_FOR_ACTIVE tickets in the year)
             year_bookings['AccountId'] = pd.to_numeric(year_bookings['AccountId'], errors='coerce')
@@ -4018,12 +4028,93 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
                     'Tickets per Account': round(row['TicketQuantity'] / row['AccountId'], 0) if row['AccountId'] > 0 else 0
                 })
 
+            # === NEW ACCOUNTS BY INDUSTRY ===
+            # Accounts created in this year
+            new_accounts_year = accounts_with_year[accounts_with_year['CreatedYear'] == year]
+
+            # Get fees from new accounts in their first year
+            new_account_ids = new_accounts_year[account_id_col].tolist()
+            new_account_bookings = year_bookings[year_bookings['AccountId'].isin(new_account_ids)]
+
+            # Industry for new accounts (from accounts table)
+            if 'Industry' in new_accounts_year.columns:
+                new_by_industry = new_accounts_year.groupby('Industry').size().reset_index(name='New_Accounts')
+
+                # Fees from new accounts by industry
+                new_fees_by_industry = new_account_bookings.groupby('Industry')['TotalFees'].sum().reset_index()
+                new_fees_by_industry.columns = ['Industry', 'New_Account_Fees']
+
+                new_industry_merged = new_by_industry.merge(new_fees_by_industry, on='Industry', how='left')
+                new_industry_merged['New_Account_Fees'] = new_industry_merged['New_Account_Fees'].fillna(0)
+
+                for _, row in new_industry_merged.iterrows():
+                    new_account_rows.append({
+                        'Year': year,
+                        'Industry': row['Industry'],
+                        'New_Accounts': int(row['New_Accounts']),
+                        'New_Account_Fees': round(row['New_Account_Fees'], 2)
+                    })
+
+            # === T4+ ACCOUNTS BY INDUSTRY ===
+            # Get T4+ accounts that were active in this year
+            # Calculate tiers based on activity in the year
+            year_account_fees = year_bookings.groupby('AccountId').agg({
+                'TotalFees': 'sum',
+                'TicketQuantity': 'sum'
+            }).reset_index()
+
+            if len(year_account_fees) > 0:
+                # Calculate percentiles for tier assignment
+                year_account_fees['fees_pct'] = year_account_fees['TotalFees'].rank(pct=True) * 100
+                year_account_fees['tickets_pct'] = year_account_fees['TicketQuantity'].rank(pct=True) * 100
+
+                # Assign tiers based on percentiles
+                def assign_tier(row):
+                    max_pct = max(row['fees_pct'], row['tickets_pct'])
+                    if max_pct >= 99:
+                        return 'Key Account'
+                    elif max_pct >= 95:
+                        return 'High Value'
+                    elif max_pct >= 75:
+                        return 'Tier 4'
+                    elif max_pct >= 50:
+                        return 'Tier 3'
+                    else:
+                        return 'Other'
+
+                year_account_fees['Tier'] = year_account_fees.apply(assign_tier, axis=1)
+                year_account_fees['IsT4Plus'] = year_account_fees['Tier'].isin(t4_plus_tiers)
+
+                # Get T4+ account IDs
+                t4_plus_accounts = year_account_fees[year_account_fees['IsT4Plus']]['AccountId'].tolist()
+
+                # Get industry for T4+ accounts from bookings
+                t4_plus_bookings = year_bookings[year_bookings['AccountId'].isin(t4_plus_accounts)]
+
+                t4_by_industry = t4_plus_bookings.groupby('Industry').agg({
+                    'AccountId': 'nunique',
+                    'TotalFees': 'sum'
+                }).reset_index()
+                t4_by_industry.columns = ['Industry', 'T4_Plus_Accounts', 'T4_Plus_Fees']
+
+                for _, row in t4_by_industry.iterrows():
+                    t4_plus_rows.append({
+                        'Year': year,
+                        'Industry': row['Industry'],
+                        'T4_Plus_Accounts': int(row['T4_Plus_Accounts']),
+                        'T4_Plus_Fees': round(row['T4_Plus_Fees'], 2)
+                    })
+
         if yoy_rows:
             industry_yoy_df = pd.DataFrame(yoy_rows)
 
             # Pivot to show 2024 vs 2025 side by side per industry
             industries = industry_yoy_df['Industry'].unique()
             comparison_rows = []
+
+            # Create DataFrames for new accounts and T4+ for easy lookup
+            new_account_df = pd.DataFrame(new_account_rows) if new_account_rows else pd.DataFrame()
+            t4_plus_df = pd.DataFrame(t4_plus_rows) if t4_plus_rows else pd.DataFrame()
 
             for industry in industries:
                 ind_data = industry_yoy_df[industry_yoy_df['Industry'] == industry]
@@ -4057,6 +4148,48 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
 
                 row['Account_Share_Change'] = round(row['2025_Account_Share_%'] - row['2024_Account_Share_%'], 1)
                 row['Fees_Share_Change'] = round(row['2025_Fees_Share_%'] - row['2024_Fees_Share_%'], 1)
+
+                # === NEW ACCOUNTS BY INDUSTRY ===
+                if len(new_account_df) > 0:
+                    new_2024 = new_account_df[(new_account_df['Year'] == 2024) & (new_account_df['Industry'] == industry)]
+                    new_2025 = new_account_df[(new_account_df['Year'] == 2025) & (new_account_df['Industry'] == industry)]
+
+                    row['2024_New_Accounts'] = int(new_2024['New_Accounts'].iloc[0]) if len(new_2024) > 0 else 0
+                    row['2024_New_Account_Fees'] = float(new_2024['New_Account_Fees'].iloc[0]) if len(new_2024) > 0 else 0
+                    row['2025_New_Accounts'] = int(new_2025['New_Accounts'].iloc[0]) if len(new_2025) > 0 else 0
+                    row['2025_New_Account_Fees'] = float(new_2025['New_Account_Fees'].iloc[0]) if len(new_2025) > 0 else 0
+
+                    # New account growth
+                    if row['2024_New_Accounts'] > 0:
+                        row['New_Account_Growth_%'] = round((row['2025_New_Accounts'] - row['2024_New_Accounts']) / row['2024_New_Accounts'] * 100, 1)
+                    else:
+                        row['New_Account_Growth_%'] = 100.0 if row['2025_New_Accounts'] > 0 else 0.0
+
+                    if row['2024_New_Account_Fees'] > 0:
+                        row['New_Account_Fees_Growth_%'] = round((row['2025_New_Account_Fees'] - row['2024_New_Account_Fees']) / row['2024_New_Account_Fees'] * 100, 1)
+                    else:
+                        row['New_Account_Fees_Growth_%'] = 100.0 if row['2025_New_Account_Fees'] > 0 else 0.0
+
+                # === T4+ ACCOUNTS BY INDUSTRY ===
+                if len(t4_plus_df) > 0:
+                    t4_2024 = t4_plus_df[(t4_plus_df['Year'] == 2024) & (t4_plus_df['Industry'] == industry)]
+                    t4_2025 = t4_plus_df[(t4_plus_df['Year'] == 2025) & (t4_plus_df['Industry'] == industry)]
+
+                    row['2024_T4_Plus_Accounts'] = int(t4_2024['T4_Plus_Accounts'].iloc[0]) if len(t4_2024) > 0 else 0
+                    row['2024_T4_Plus_Fees'] = float(t4_2024['T4_Plus_Fees'].iloc[0]) if len(t4_2024) > 0 else 0
+                    row['2025_T4_Plus_Accounts'] = int(t4_2025['T4_Plus_Accounts'].iloc[0]) if len(t4_2025) > 0 else 0
+                    row['2025_T4_Plus_Fees'] = float(t4_2025['T4_Plus_Fees'].iloc[0]) if len(t4_2025) > 0 else 0
+
+                    # T4+ growth
+                    if row['2024_T4_Plus_Accounts'] > 0:
+                        row['T4_Plus_Account_Growth_%'] = round((row['2025_T4_Plus_Accounts'] - row['2024_T4_Plus_Accounts']) / row['2024_T4_Plus_Accounts'] * 100, 1)
+                    else:
+                        row['T4_Plus_Account_Growth_%'] = 100.0 if row['2025_T4_Plus_Accounts'] > 0 else 0.0
+
+                    if row['2024_T4_Plus_Fees'] > 0:
+                        row['T4_Plus_Fees_Growth_%'] = round((row['2025_T4_Plus_Fees'] - row['2024_T4_Plus_Fees']) / row['2024_T4_Plus_Fees'] * 100, 1)
+                    else:
+                        row['T4_Plus_Fees_Growth_%'] = 100.0 if row['2025_T4_Plus_Fees'] > 0 else 0.0
 
                 comparison_rows.append(row)
 
@@ -6009,34 +6142,46 @@ def generate_organiser_concentration_csv(booking_df: pd.DataFrame, accounts_df: 
 
     booking_df = booking_df.copy()
 
+    # Ensure TransactionDate is datetime and filter to 2025
+    booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'])
+    booking_df['Year'] = booking_df['TransactionDate'].dt.year
+    booking_2025 = booking_df[booking_df['Year'] == 2025].copy()
+
+    if len(booking_2025) == 0:
+        print("    Warning: No 2025 booking data for concentration analysis")
+        return output_files
+
     # Get account tiers if not provided
     if account_tiers is None:
         # Calculate tiers
         account_tiers = calculate_account_tiers(accounts_df, booking_df)
 
     # Map tiers to bookings
-    booking_df['Tier'] = booking_df['AccountId'].map(account_tiers).fillna('Untiered')
+    booking_2025['Tier'] = booking_2025['AccountId'].map(account_tiers).fillna('Untiered')
 
-    # Aggregate by tier
-    tier_summary = booking_df.groupby('Tier').agg({
-        'TotalFees': 'sum' if 'TotalFees' in booking_df.columns else 'count',
-        'PaymentReceived': 'sum' if 'PaymentReceived' in booking_df.columns else 'count',
-        'TicketQuantity': 'sum' if 'TicketQuantity' in booking_df.columns else 'count',
-        'AccountId': 'nunique',
-        'EventId': 'nunique'
+    # Calculate TotalFees if not present
+    if 'TotalFees' not in booking_2025.columns:
+        fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+        available_fees = [c for c in fee_cols if c in booking_2025.columns]
+        booking_2025['TotalFees'] = booking_2025[available_fees].fillna(0).sum(axis=1)
+
+    # Aggregate by tier - 2025 only
+    tier_summary = booking_2025.groupby('Tier').agg({
+        'TotalFees': 'sum',
+        'PaymentReceived': 'sum',
+        'AccountId': 'nunique'
     }).reset_index()
 
-    tier_summary.columns = ['Tier', 'Total Fees', 'Total Revenue', 'Total Tickets', 'Accounts', 'Events']
+    tier_summary.columns = ['Tier', 'Fees', 'Revenue', 'Accounts']
 
     # Calculate totals for percentages
-    total_fees = tier_summary['Total Fees'].sum()
-    total_revenue = tier_summary['Total Revenue'].sum()
+    total_fees = tier_summary['Fees'].sum()
+    total_revenue = tier_summary['Revenue'].sum()
     total_accounts = tier_summary['Accounts'].sum()
 
-    tier_summary['Fees %'] = round(tier_summary['Total Fees'] / total_fees * 100, 1)
-    tier_summary['Revenue %'] = round(tier_summary['Total Revenue'] / total_revenue * 100, 1)
+    tier_summary['Fees %'] = round(tier_summary['Fees'] / total_fees * 100, 1)
+    tier_summary['Revenue %'] = round(tier_summary['Revenue'] / total_revenue * 100, 1)
     tier_summary['Accounts %'] = round(tier_summary['Accounts'] / total_accounts * 100, 1)
-    tier_summary['Avg Fees Per Account'] = round(tier_summary['Total Fees'] / tier_summary['Accounts'], 2)
 
     # Order tiers logically
     tier_order = ['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1', 'Untiered']
@@ -6052,7 +6197,7 @@ def generate_organiser_concentration_csv(booking_df: pd.DataFrame, accounts_df: 
     concentration_file = get_output_path(base_name, 'cohorts', '_tier_concentration.csv')
     tier_summary.to_csv(concentration_file, index=False, float_format='%.2f')
     output_files['tier_concentration'] = concentration_file
-    print(f"    ✓ Tier concentration: {concentration_file}")
+    print(f"    ✓ Tier concentration (2025): {concentration_file}")
 
     # === OUTPUT 2: YoY Concentration Comparison (2024 vs 2025) ===
     # Compare concentration by tier for each calendar year
@@ -7597,6 +7742,300 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, accounts_
     return output_files
 
 
+def generate_top_accounts_list_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                    account_tiers: dict, output_file: str) -> dict:
+    """
+    Generate a list of top accounts (Key Account + High Value tiers) sorted by 2025 fees.
+
+    Output columns:
+    - Rank
+    - Account ID
+    - Account Name
+    - Industry
+    - Region
+    - Signup Date
+    - Tenure (Years)
+    - 2025 Fees
+    - 2025 Events
+    - Lifetime Fees
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        account_tiers: Dictionary mapping AccountId -> tier string
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating top accounts list...")
+
+    # Filter to High Value tiers only (Key Account + High Value)
+    high_value_tiers = {'Key Account', 'High Value'}
+    high_value_accounts = {acc_id for acc_id, tier in account_tiers.items() if tier in high_value_tiers}
+
+    if not high_value_accounts:
+        print("    Warning: No high value accounts found")
+        return output_files
+
+    booking_df = booking_df.copy()
+    accounts_df = accounts_df.copy()
+
+    # Ensure TransactionDate is datetime
+    if not pd.api.types.is_datetime64_any_dtype(booking_df['TransactionDate']):
+        booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], utc=True)
+
+    # Calculate total fees per transaction
+    fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+    booking_df['TotalFees'] = sum(booking_df[col].fillna(0) for col in fee_cols if col in booking_df.columns)
+
+    # Filter to high value accounts only
+    hv_bookings = booking_df[booking_df['AccountId'].isin(high_value_accounts)].copy()
+
+    # Calculate 2025 metrics
+    hv_bookings['Year'] = hv_bookings['TransactionDate'].dt.year
+    bookings_2025 = hv_bookings[hv_bookings['Year'] == 2025]
+
+    fees_2025 = bookings_2025.groupby('AccountId')['TotalFees'].sum().reset_index()
+    fees_2025.columns = ['AccountId', '2025 Fees']
+
+    events_2025 = bookings_2025.groupby('AccountId')['EventId'].nunique().reset_index()
+    events_2025.columns = ['AccountId', '2025 Events']
+
+    # Calculate lifetime fees (all time)
+    lifetime_fees = hv_bookings.groupby('AccountId')['TotalFees'].sum().reset_index()
+    lifetime_fees.columns = ['AccountId', 'Lifetime Fees']
+
+    # Merge metrics
+    account_metrics = fees_2025.merge(events_2025, on='AccountId', how='outer')
+    account_metrics = account_metrics.merge(lifetime_fees, on='AccountId', how='outer')
+    account_metrics = account_metrics.fillna(0)
+
+    # Get account details from accounts_df
+    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Id'
+
+    # Prepare account details
+    account_details = accounts_df[[account_id_col, 'AccountName', 'DateTimeCreated']].copy()
+    account_details = account_details.rename(columns={account_id_col: 'AccountId'})
+
+    # Add Industry if available
+    if 'Industry' in accounts_df.columns:
+        account_details['Industry'] = accounts_df['Industry'].values
+
+    # Add postcode for region extraction
+    postcode_col = 'Postcode' if 'Postcode' in accounts_df.columns else 'AccountPostcode' if 'AccountPostcode' in accounts_df.columns else None
+    if postcode_col:
+        account_details['PostcodeArea'] = extract_postcode_areas_vectorized(accounts_df[postcode_col])
+        account_details['Region'] = get_regions_vectorized(account_details['PostcodeArea'])
+
+    # Merge account details with metrics
+    result_df = account_metrics.merge(account_details, on='AccountId', how='left')
+
+    # Calculate tenure in years
+    today = pd.Timestamp.now(tz='Europe/London')
+    result_df['DateTimeCreated'] = pd.to_datetime(result_df['DateTimeCreated'], utc=True)
+    result_df['Tenure (Years)'] = ((today - result_df['DateTimeCreated']).dt.days / 365.25).round(1)
+
+    # Format signup date
+    result_df['Signup Date'] = result_df['DateTimeCreated'].dt.strftime('%Y-%m-%d')
+
+    # Sort by 2025 Fees descending
+    result_df = result_df.sort_values('2025 Fees', ascending=False).reset_index(drop=True)
+
+    # Add rank
+    result_df['Rank'] = range(1, len(result_df) + 1)
+
+    # Select and order columns
+    output_cols = [
+        'Rank',
+        'AccountId',
+        'AccountName',
+        'Industry',
+        'Region',
+        'Signup Date',
+        'Tenure (Years)',
+        '2025 Fees',
+        '2025 Events',
+        'Lifetime Fees'
+    ]
+
+    # Only include columns that exist
+    output_cols = [col for col in output_cols if col in result_df.columns]
+    result_df = result_df[output_cols]
+
+    # Rename AccountId to Account ID for output
+    result_df = result_df.rename(columns={'AccountId': 'Account ID', 'AccountName': 'Account Name'})
+
+    # Format numeric columns
+    result_df['2025 Fees'] = result_df['2025 Fees'].round(2)
+    result_df['2025 Events'] = result_df['2025 Events'].astype(int)
+    result_df['Lifetime Fees'] = result_df['Lifetime Fees'].round(2)
+
+    # Save to CSV
+    output_path = get_output_path(base_name, None, '_top_accounts_list.csv')
+    result_df.to_csv(output_path, index=False, float_format='%.2f')
+    output_files['top_accounts_list'] = output_path
+    print(f"    ✓ Top accounts list ({len(result_df)} accounts): {output_path}")
+
+    return output_files
+
+
+def generate_top_5_percent_revenue_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                        account_tiers: dict, output_file: str) -> dict:
+    """
+    Generate a list of the top 5% of accounts by 2025 revenue.
+
+    This is based purely on revenue ranking, not tier assignment.
+
+    Output columns:
+    - Rank
+    - Account ID
+    - Account Name
+    - Industry
+    - Region
+    - Tier (current tier for reference)
+    - Signup Date
+    - Tenure (Years)
+    - 2025 Revenue
+    - 2025 Fees
+    - 2025 Events
+    - Lifetime Revenue
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        account_tiers: Dictionary mapping AccountId -> tier string
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating top 5% by revenue list...")
+
+    booking_df = booking_df.copy()
+    accounts_df = accounts_df.copy()
+
+    # Ensure TransactionDate is datetime
+    if not pd.api.types.is_datetime64_any_dtype(booking_df['TransactionDate']):
+        booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], utc=True)
+
+    booking_df['Year'] = booking_df['TransactionDate'].dt.year
+
+    # Calculate total fees per transaction
+    fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+    booking_df['TotalFees'] = sum(booking_df[col].fillna(0) for col in fee_cols if col in booking_df.columns)
+
+    # Filter to 2025 bookings
+    bookings_2025 = booking_df[booking_df['Year'] == 2025]
+
+    if len(bookings_2025) == 0:
+        print("    Warning: No 2025 booking data found")
+        return output_files
+
+    # Calculate 2025 revenue per account
+    revenue_2025 = bookings_2025.groupby('AccountId').agg({
+        'PaymentReceived': 'sum',
+        'TotalFees': 'sum',
+        'EventId': 'nunique'
+    }).reset_index()
+    revenue_2025.columns = ['AccountId', '2025 Revenue', '2025 Fees', '2025 Events']
+
+    # Calculate top 5% threshold
+    top_5_pct_threshold = revenue_2025['2025 Revenue'].quantile(0.95)
+    top_5_pct_accounts = revenue_2025[revenue_2025['2025 Revenue'] >= top_5_pct_threshold].copy()
+
+    if len(top_5_pct_accounts) == 0:
+        print("    Warning: No accounts in top 5%")
+        return output_files
+
+    # Calculate lifetime revenue
+    lifetime_revenue = booking_df.groupby('AccountId')['PaymentReceived'].sum().reset_index()
+    lifetime_revenue.columns = ['AccountId', 'Lifetime Revenue']
+
+    # Merge lifetime revenue
+    top_5_pct_accounts = top_5_pct_accounts.merge(lifetime_revenue, on='AccountId', how='left')
+
+    # Get account details from accounts_df
+    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Id'
+
+    # Prepare account details
+    account_details = accounts_df[[account_id_col, 'AccountName', 'DateTimeCreated']].copy()
+    account_details = account_details.rename(columns={account_id_col: 'AccountId'})
+
+    # Add Industry if available
+    if 'Industry' in accounts_df.columns:
+        account_details['Industry'] = accounts_df['Industry'].values
+
+    # Add postcode for region extraction
+    postcode_col = 'Postcode' if 'Postcode' in accounts_df.columns else 'AccountPostcode' if 'AccountPostcode' in accounts_df.columns else None
+    if postcode_col:
+        account_details['PostcodeArea'] = extract_postcode_areas_vectorized(accounts_df[postcode_col])
+        account_details['Region'] = get_regions_vectorized(account_details['PostcodeArea'])
+
+    # Merge account details with metrics
+    result_df = top_5_pct_accounts.merge(account_details, on='AccountId', how='left')
+
+    # Add tier from account_tiers dict
+    result_df['Tier'] = result_df['AccountId'].map(account_tiers).fillna('Unknown')
+
+    # Calculate tenure in years
+    today = pd.Timestamp.now(tz='Europe/London')
+    result_df['DateTimeCreated'] = pd.to_datetime(result_df['DateTimeCreated'], utc=True)
+    result_df['Tenure (Years)'] = ((today - result_df['DateTimeCreated']).dt.days / 365.25).round(1)
+
+    # Format signup date
+    result_df['Signup Date'] = result_df['DateTimeCreated'].dt.strftime('%Y-%m-%d')
+
+    # Sort by 2025 Revenue descending
+    result_df = result_df.sort_values('2025 Revenue', ascending=False).reset_index(drop=True)
+
+    # Add rank
+    result_df['Rank'] = range(1, len(result_df) + 1)
+
+    # Select and order columns
+    output_cols = [
+        'Rank',
+        'AccountId',
+        'AccountName',
+        'Industry',
+        'Region',
+        'Tier',
+        'Signup Date',
+        'Tenure (Years)',
+        '2025 Revenue',
+        '2025 Fees',
+        '2025 Events',
+        'Lifetime Revenue'
+    ]
+
+    # Only include columns that exist
+    output_cols = [col for col in output_cols if col in result_df.columns]
+    result_df = result_df[output_cols]
+
+    # Rename for output
+    result_df = result_df.rename(columns={'AccountId': 'Account ID', 'AccountName': 'Account Name'})
+
+    # Format numeric columns
+    result_df['2025 Revenue'] = result_df['2025 Revenue'].round(2)
+    result_df['2025 Fees'] = result_df['2025 Fees'].round(2)
+    result_df['2025 Events'] = result_df['2025 Events'].astype(int)
+    result_df['Lifetime Revenue'] = result_df['Lifetime Revenue'].round(2)
+
+    # Save to CSV
+    output_path = get_output_path(base_name, None, '_top_5_percent_revenue.csv')
+    result_df.to_csv(output_path, index=False, float_format='%.2f')
+    output_files['top_5_percent_revenue'] = output_path
+    print(f"    ✓ Top 5% by revenue ({len(result_df)} accounts, threshold: £{top_5_pct_threshold:,.2f}): {output_path}")
+
+    return output_files
+
+
 def main():
     """Main execution function."""
     args = parse_args()
@@ -7835,6 +8274,16 @@ def main():
     avg_metrics_files = generate_average_transaction_metrics_csv(booking_df, accounts_df, account_tiers_current, output_file)
     if avg_metrics_files:
         print(f"  ✓ Average transaction metrics: {len(avg_metrics_files)} reports generated")
+
+    # Top accounts list (Key Account + High Value tiers)
+    top_accounts_files = generate_top_accounts_list_csv(booking_df, accounts_df, account_tiers_current, output_file)
+    if top_accounts_files:
+        print(f"  ✓ Top accounts list: {len(top_accounts_files)} reports generated")
+
+    # Top 5% by revenue (pure revenue ranking, not tier-based)
+    top_5_pct_files = generate_top_5_percent_revenue_csv(booking_df, accounts_df, account_tiers_current, output_file)
+    if top_5_pct_files:
+        print(f"  ✓ Top 5% by revenue: {len(top_5_pct_files)} reports generated")
 
     print(f"\n=== Report Complete ===")
 

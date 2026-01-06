@@ -7014,6 +7014,108 @@ def generate_gateway_migration_csv(booking_df: pd.DataFrame, accounts_df: pd.Dat
     return output_files
 
 
+def generate_monthly_performance_yoy_csv(booking_df: pd.DataFrame, output_file: str) -> dict:
+    """
+    Generate monthly performance YoY comparison (2024 vs 2025).
+
+    Creates a side-by-side comparison of key metrics for charting purposes:
+    - Live Accounts (unique accounts with sales)
+    - Events (unique events with sales)
+    - Tickets (total tickets sold)
+    - Revenue (total ticket revenue)
+    - Fees (total fees)
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    print("  Generating monthly performance YoY comparison...")
+
+    booking_df = booking_df.copy()
+
+    # Ensure TransactionDate is datetime
+    if not pd.api.types.is_datetime64_any_dtype(booking_df['TransactionDate']):
+        booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], utc=True)
+
+    # Add Year and Month columns
+    booking_df['Year'] = booking_df['TransactionDate'].dt.year
+    booking_df['Month'] = booking_df['TransactionDate'].dt.month
+
+    # Calculate metrics per month for 2024 and 2025
+    years_to_process = [2024, 2025]
+    monthly_data = []
+
+    for month in range(1, 13):
+        row = {'Month': month, 'Month Name': MONTH_NAME_MAP[month]}
+
+        for year in years_to_process:
+            # Filter to this year/month
+            month_df = booking_df[(booking_df['Year'] == year) & (booking_df['Month'] == month)]
+
+            # Calculate metrics
+            live_accounts = month_df['AccountId'].nunique() if 'AccountId' in month_df.columns else 0
+            events = month_df['EventId'].nunique() if 'EventId' in month_df.columns else 0
+            tickets = int(month_df['TicketQuantity'].sum()) if 'TicketQuantity' in month_df.columns else 0
+            revenue = round(month_df['PaymentReceived'].sum(), 2) if 'PaymentReceived' in month_df.columns else 0
+            fees = round(month_df['TotalFees'].sum(), 2) if 'TotalFees' in month_df.columns else 0
+
+            row[f'{year} Live Accounts'] = live_accounts
+            row[f'{year} Events'] = events
+            row[f'{year} Tickets'] = tickets
+            row[f'{year} Revenue'] = revenue
+            row[f'{year} Fees'] = fees
+
+        monthly_data.append(row)
+
+    # Create DataFrame
+    result_df = pd.DataFrame(monthly_data)
+
+    # Calculate YoY percentages
+    def calc_yoy(current, previous):
+        if previous == 0 or pd.isna(previous):
+            return None
+        return round((current - previous) / previous * 100, 1)
+
+    result_df['YoY Live Accounts %'] = result_df.apply(
+        lambda r: calc_yoy(r['2025 Live Accounts'], r['2024 Live Accounts']), axis=1
+    )
+    result_df['YoY Events %'] = result_df.apply(
+        lambda r: calc_yoy(r['2025 Events'], r['2024 Events']), axis=1
+    )
+    result_df['YoY Tickets %'] = result_df.apply(
+        lambda r: calc_yoy(r['2025 Tickets'], r['2024 Tickets']), axis=1
+    )
+    result_df['YoY Revenue %'] = result_df.apply(
+        lambda r: calc_yoy(r['2025 Revenue'], r['2024 Revenue']), axis=1
+    )
+    result_df['YoY Fees %'] = result_df.apply(
+        lambda r: calc_yoy(r['2025 Fees'], r['2024 Fees']), axis=1
+    )
+
+    # Reorder columns to match requested output
+    columns = [
+        'Month', 'Month Name',
+        '2024 Live Accounts', '2024 Events', '2024 Tickets', '2024 Revenue', '2024 Fees',
+        '2025 Live Accounts', '2025 Events', '2025 Tickets', '2025 Revenue', '2025 Fees',
+        'YoY Live Accounts %', 'YoY Events %', 'YoY Tickets %', 'YoY Revenue %', 'YoY Fees %'
+    ]
+    result_df = result_df[columns]
+
+    # Save to CSV
+    output_path = get_output_path(base_name, None, '_monthly_performance_yoy_comparison.csv')
+    result_df.to_csv(output_path, index=False, float_format='%.2f')
+    output_files['monthly_performance_yoy'] = output_path
+    print(f"    ✓ Monthly performance YoY comparison: {output_path}")
+
+    return output_files
+
+
 def main():
     """Main execution function."""
     args = parse_args()
@@ -7235,6 +7337,11 @@ def main():
     migration_files = generate_gateway_migration_csv(booking_df, accounts_df, output_file)
     if migration_files:
         print(f"  ✓ Gateway migration: {len(migration_files)} reports generated")
+
+    # Monthly performance YoY comparison (2024 vs 2025)
+    performance_yoy_files = generate_monthly_performance_yoy_csv(booking_df, output_file)
+    if performance_yoy_files:
+        print(f"  ✓ Monthly performance YoY: {len(performance_yoy_files)} reports generated")
 
     print(f"\n=== Report Complete ===")
 

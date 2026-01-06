@@ -6815,8 +6815,8 @@ def generate_fee_structure_analysis_csv(booking_df: pd.DataFrame, output_file: s
     # Classify as free or paid (vectorised)
     events['Event Type'] = np.where(events['PaymentReceived'] == 0, 'Free', 'Paid')
 
-    # Summary by industry
-    if 'Industry' in events.columns and events['Industry'].dtype == 'object':
+    # Summary by industry (check for object or category dtype)
+    if 'Industry' in events.columns and (events['Industry'].dtype == 'object' or events['Industry'].dtype.name == 'category'):
         industry_fee = events.groupby(['Industry', 'Event Type']).agg({
             'EventId': 'count',
             'TicketQuantity': 'sum',

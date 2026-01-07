@@ -7381,10 +7381,81 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
     accounts_df.loc[accounts_df['DaysToFirstSale'] < 0, 'DaysToFirstSale'] = None
     accounts_df.loc[accounts_df['DaysToFirstSale'] > 365, 'DaysToFirstSale'] = None
 
-    # Add tier information
+    # Add tier information (current snapshot - used for 2025 which doesn't have 12m data)
     tier_4_plus = {'Key Account', 'High Value', 'Tier 4'}
     accounts_df['Tier'] = accounts_df[account_id_col].map(account_tiers)
     accounts_df['IsT4Plus'] = accounts_df['Tier'].isin(tier_4_plus)
+
+    # === CALCULATE 12-MONTH TIER STATUS FOR 2024 COHORTS ===
+    # For fair comparison, calculate T4+ based on 12-month activity window from signup
+    # This is only done for 2024 cohorts which have full 12-month data
+    print("    Calculating 12-month T4+ status for 2024 cohorts...")
+
+    # Pre-calculate 12-month T4+ status for each 2024 month cohort
+    t4_plus_12m_by_month = {}
+
+    for month in range(1, 13):
+        # Get accounts created in this month of 2024
+        cohort_start = pd.Timestamp(f'2024-{month:02d}-01', tz='UTC')
+        if month == 12:
+            cohort_end = pd.Timestamp('2024-12-31 23:59:59', tz='UTC')
+        else:
+            cohort_end = pd.Timestamp(f'2024-{month+1:02d}-01', tz='UTC') - pd.Timedelta(seconds=1)
+
+        # 12-month window ends 12 months after cohort start
+        window_end = cohort_start + pd.DateOffset(months=12)
+
+        # Get account IDs for this cohort
+        cohort_accounts = accounts_df[
+            (accounts_df['Created_Year'] == 2024) &
+            (accounts_df['Created_Month'] == month)
+        ]
+
+        if len(cohort_accounts) == 0:
+            t4_plus_12m_by_month[month] = 0
+            continue
+
+        cohort_account_ids = cohort_accounts[account_id_col].tolist()
+
+        # Filter bookings to this cohort's 12-month window
+        cohort_bookings = booking_df[
+            (booking_df['AccountId'].isin(cohort_account_ids)) &
+            (booking_df['TransactionDate'] >= cohort_start) &
+            (booking_df['TransactionDate'] < window_end)
+        ]
+
+        if len(cohort_bookings) == 0:
+            t4_plus_12m_by_month[month] = 0
+            continue
+
+        # Calculate metrics for tier assignment within this 12-month window
+        # Aggregate fees and tickets per account
+        fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+        existing_fee_cols = [col for col in fee_cols if col in cohort_bookings.columns]
+        cohort_bookings_copy = cohort_bookings.copy()
+        for col in existing_fee_cols:
+            cohort_bookings_copy[col] = cohort_bookings_copy[col].fillna(0)
+        cohort_bookings_copy['total_fees'] = cohort_bookings_copy[existing_fee_cols].sum(axis=1) if existing_fee_cols else 0
+
+        account_metrics = cohort_bookings_copy.groupby('AccountId').agg({
+            'total_fees': 'sum',
+            'TicketQuantity': 'sum'
+        }).reset_index()
+
+        if len(account_metrics) == 0:
+            t4_plus_12m_by_month[month] = 0
+            continue
+
+        # Calculate percentiles within this cohort's activity
+        account_metrics['fees_pct'] = account_metrics['total_fees'].rank(pct=True) * 100
+        account_metrics['tickets_pct'] = account_metrics['TicketQuantity'].rank(pct=True) * 100
+
+        # Assign tiers based on percentiles (same logic as main tier calculation)
+        # T4+ = 75th percentile or above
+        account_metrics['max_pct'] = account_metrics[['fees_pct', 'tickets_pct']].max(axis=1)
+        t4_plus_count = (account_metrics['max_pct'] >= 75).sum()
+
+        t4_plus_12m_by_month[month] = t4_plus_count
 
     # === CALCULATE FUNNEL METRICS BY MONTH ===
     funnel_rows = []
@@ -7426,8 +7497,12 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
             activated_30d = (month_accounts['DaysToFirstEvent'] <= 30).sum() if 'DaysToFirstEvent' in month_accounts.columns else 0
             pct_activated_30d = round(activated_30d / total * 100, 1)
 
-            # T4+ accounts
-            t4_plus_count = month_accounts['IsT4Plus'].sum()
+            # T4+ accounts - use 12-month window for 2024, show None for 2025
+            if year == 2024:
+                t4_plus_count = t4_plus_12m_by_month.get(month, 0)
+            else:
+                # 2025 cohorts don't have 12 months of data yet
+                t4_plus_count = None
 
             funnel_rows.append({
                 'Month': month,
@@ -7444,7 +7519,7 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
                 'Avg Days to First Event': round(avg_days_to_event, 1) if avg_days_to_event and not pd.isna(avg_days_to_event) else None,
                 'Avg Days to First Sale': round(avg_days_to_sale, 1) if avg_days_to_sale and not pd.isna(avg_days_to_sale) else None,
                 'Activated Within 30 Days %': pct_activated_30d,
-                'Reached T4+': t4_plus_count
+                'Reached T4+ (12m)': t4_plus_count
             })
 
     # Create DataFrame
@@ -7475,7 +7550,12 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
             avg_days_event = year_accounts['DaysToFirstEvent'].dropna().mean()
             avg_days_sale = year_accounts['DaysToFirstSale'].dropna().mean()
             activated_30d = (year_accounts['DaysToFirstEvent'] <= 30).sum()
-            t4_plus = year_accounts['IsT4Plus'].sum()
+
+            # T4+ total - sum from monthly data for 2024, None for 2025
+            if year == 2024:
+                t4_plus = sum(t4_plus_12m_by_month.values())
+            else:
+                t4_plus = None
 
             total_row = pd.DataFrame([{
                 'Month': 99,  # Sort to end
@@ -7492,7 +7572,7 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
                 'Avg Days to First Event': round(avg_days_event, 1) if avg_days_event and not pd.isna(avg_days_event) else None,
                 'Avg Days to First Sale': round(avg_days_sale, 1) if avg_days_sale and not pd.isna(avg_days_sale) else None,
                 'Activated Within 30 Days %': round(activated_30d / total * 100, 1),
-                'Reached T4+': t4_plus
+                'Reached T4+ (12m)': t4_plus
             }])
             funnel_df = pd.concat([funnel_df, total_row], ignore_index=True)
 
@@ -7529,7 +7609,7 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
             'Avg Days to First Event': f"{calc_change(t25['Avg Days to First Event'], t24['Avg Days to First Event']):+.1f}" if calc_change(t25['Avg Days to First Event'], t24['Avg Days to First Event']) is not None else None,
             'Avg Days to First Sale': f"{calc_change(t25['Avg Days to First Sale'], t24['Avg Days to First Sale']):+.1f}" if calc_change(t25['Avg Days to First Sale'], t24['Avg Days to First Sale']) is not None else None,
             'Activated Within 30 Days %': f"{calc_change(t25['Activated Within 30 Days %'], t24['Activated Within 30 Days %']):+.1f}pp" if calc_change(t25['Activated Within 30 Days %'], t24['Activated Within 30 Days %']) is not None else None,
-            'Reached T4+': f"{calc_change(t25['Reached T4+'], t24['Reached T4+']):+,} ({calc_pct_change(t25['Reached T4+'], t24['Reached T4+']):+.1f}%)" if calc_change(t25['Reached T4+'], t24['Reached T4+']) is not None else None,
+            'Reached T4+ (12m)': None,  # Cannot compare: 2025 cohorts don't have 12 months of data yet
         }])
         funnel_df = pd.concat([funnel_df, change_row], ignore_index=True)
 
@@ -7541,7 +7621,7 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
         'Month Name', 'Year', 'Accounts Created', 'Created Any Event', 'Created Paid Event',
         'Sold Free Only', 'Sold Paid Tickets', 'Conversion Rate (Paid) %',
         '% Free Events', '% Paid Events', 'Avg Days to First Event', 'Avg Days to First Sale',
-        'Activated Within 30 Days %', 'Reached T4+'
+        'Activated Within 30 Days %', 'Reached T4+ (12m)'
     ]
     funnel_df = funnel_df[[c for c in columns if c in funnel_df.columns]]
 

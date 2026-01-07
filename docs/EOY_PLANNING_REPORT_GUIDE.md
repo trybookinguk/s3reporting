@@ -82,9 +82,11 @@ For accounts created in each month of 2024 and 2025:
 - Avg Days to First Event
 - Avg Days to First Sale
 - Activated Within 30 Days %
-- Reached T4+ (Tier 4 or above)
+- Reached T4+ (12m) - Accounts reaching Tier 4+ within 12 months of signup (2024 cohorts only; 2025 shows blank as insufficient data)
 
 Includes TOTAL rows for 2024 and 2025, plus CHANGE row showing differences.
+
+**Note:** The T4+ metric uses a 12-month activity window from signup for fair cohort comparison. 2025 cohorts do not yet have 12 months of data, so this column shows blank for 2025 rows.
 
 ### `_average_transaction_metrics_4yr.csv`
 **Average and median transaction metrics (2022-2025)**
@@ -477,6 +479,7 @@ Cohort-by-cohort gateway analysis:
 | Stretch Target | 10,000 NEW accounts in 2026 |
 | LTV | Lifetime Value (24-month horizon) |
 | T4+ | Tier 4 or above (Key Account, High Value, or Tier 4) |
+| T4+ (12m) | Accounts reaching T4+ within 12 months of signup (for fair cohort comparison) |
 
 ---
 

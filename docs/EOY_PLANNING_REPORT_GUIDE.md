@@ -81,7 +81,11 @@ For accounts created in each month of 2024 and 2025:
 - % Free Events / % Paid Events
 - Avg Days to First Event
 - Avg Days to First Sale
+- Activated Within 1 Day %
+- Activated Within 3 Days %
+- Activated Within 7 Days %
 - Activated Within 30 Days %
+- Activated Within 90 Days %
 - Reached T4+ (12m) - Accounts reaching Tier 4+ within 12 months of signup (2024 cohorts only; 2025 shows blank as insufficient data)
 
 Includes TOTAL rows for 2024 and 2025, plus CHANGE row showing differences.
@@ -451,6 +455,18 @@ Timing analysis showing:
 - Average days from signup to first ticket sale
 - Activation rate percentages
 - Identifies seasonal patterns in activation speed
+
+### Activation YoY Comparison (`cohorts/_activation_yoy_comparison.csv`)
+**YoY comparison of activation rates**
+
+Compares 2024 vs 2025 cohorts across activation windows:
+- % activated within 1/3/7/30/90 days (event creation)
+- % with sale within 1/3/7/30/90 days
+- Average days to first event
+- Average days to first sale
+- Total accounts created
+
+Shows change (pp) between years for each metric.
 
 ### Gateway Migration (`cohorts/_gateway_choice_by_cohort.csv`, `cohorts/_gateway_migration_patterns.csv`)
 **Gateway adoption and migration trends**

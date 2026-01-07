@@ -6956,15 +6956,19 @@ def generate_activation_by_month_csv(accounts_df: pd.DataFrame, booking_df: pd.D
         # Event activation metrics
         has_first_event = 'DaysToFirstEvent' in year_accounts.columns
         if has_first_event:
+            event_1d = (year_accounts['DaysToFirstEvent'] <= 1).sum()
+            event_3d = (year_accounts['DaysToFirstEvent'] <= 3).sum()
             event_7d = (year_accounts['DaysToFirstEvent'] <= 7).sum()
             event_30d = (year_accounts['DaysToFirstEvent'] <= 30).sum()
             event_90d = (year_accounts['DaysToFirstEvent'] <= 90).sum()
             avg_days_event = year_accounts['DaysToFirstEvent'].dropna().mean()
         else:
-            event_7d = event_30d = event_90d = 0
+            event_1d = event_3d = event_7d = event_30d = event_90d = 0
             avg_days_event = None
 
         # Sale activation metrics
+        sale_1d = (year_accounts['DaysToFirstSale'] <= 1).sum()
+        sale_3d = (year_accounts['DaysToFirstSale'] <= 3).sum()
         sale_7d = (year_accounts['DaysToFirstSale'] <= 7).sum()
         sale_30d = (year_accounts['DaysToFirstSale'] <= 30).sum()
         sale_90d = (year_accounts['DaysToFirstSale'] <= 90).sum()
@@ -6973,6 +6977,10 @@ def generate_activation_by_month_csv(accounts_df: pd.DataFrame, booking_df: pd.D
         activation_yoy_rows.append({
             'Year': year,
             'Total_Accounts': total,
+            'Event_1d': event_1d,
+            'Event_1d_%': round(event_1d / total * 100, 1) if total > 0 else 0,
+            'Event_3d': event_3d,
+            'Event_3d_%': round(event_3d / total * 100, 1) if total > 0 else 0,
             'Event_7d': event_7d,
             'Event_7d_%': round(event_7d / total * 100, 1) if total > 0 else 0,
             'Event_30d': event_30d,
@@ -6980,6 +6988,10 @@ def generate_activation_by_month_csv(accounts_df: pd.DataFrame, booking_df: pd.D
             'Event_90d': event_90d,
             'Event_90d_%': round(event_90d / total * 100, 1) if total > 0 else 0,
             'Avg_Days_Event': round(avg_days_event, 1) if avg_days_event else None,
+            'Sale_1d': sale_1d,
+            'Sale_1d_%': round(sale_1d / total * 100, 1) if total > 0 else 0,
+            'Sale_3d': sale_3d,
+            'Sale_3d_%': round(sale_3d / total * 100, 1) if total > 0 else 0,
             'Sale_7d': sale_7d,
             'Sale_7d_%': round(sale_7d / total * 100, 1) if total > 0 else 0,
             'Sale_30d': sale_30d,
@@ -6999,6 +7011,18 @@ def generate_activation_by_month_csv(accounts_df: pd.DataFrame, booking_df: pd.D
             return round(v_2025 - v_2024, 1)
 
         activation_comparison = pd.DataFrame([
+            {
+                'Metric': '% activated within 1 day (event)',
+                '2024': data_2024['Event_1d_%'],
+                '2025': data_2025['Event_1d_%'],
+                'Change': calc_change(data_2025['Event_1d_%'], data_2024['Event_1d_%'])
+            },
+            {
+                'Metric': '% activated within 3 days (event)',
+                '2024': data_2024['Event_3d_%'],
+                '2025': data_2025['Event_3d_%'],
+                'Change': calc_change(data_2025['Event_3d_%'], data_2024['Event_3d_%'])
+            },
             {
                 'Metric': '% activated within 7 days (event)',
                 '2024': data_2024['Event_7d_%'],
@@ -7022,6 +7046,18 @@ def generate_activation_by_month_csv(accounts_df: pd.DataFrame, booking_df: pd.D
                 '2024': data_2024['Avg_Days_Event'],
                 '2025': data_2025['Avg_Days_Event'],
                 'Change': calc_change(data_2025['Avg_Days_Event'], data_2024['Avg_Days_Event'])
+            },
+            {
+                'Metric': '% with sale within 1 day',
+                '2024': data_2024['Sale_1d_%'],
+                '2025': data_2025['Sale_1d_%'],
+                'Change': calc_change(data_2025['Sale_1d_%'], data_2024['Sale_1d_%'])
+            },
+            {
+                'Metric': '% with sale within 3 days',
+                '2024': data_2024['Sale_3d_%'],
+                '2025': data_2025['Sale_3d_%'],
+                'Change': calc_change(data_2025['Sale_3d_%'], data_2024['Sale_3d_%'])
             },
             {
                 'Metric': '% with sale within 7 days',
@@ -7493,9 +7529,19 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
             avg_days_to_event = month_accounts['DaysToFirstEvent'].dropna().mean()
             avg_days_to_sale = month_accounts['DaysToFirstSale'].dropna().mean()
 
-            # Activated within 30 days
-            activated_30d = (month_accounts['DaysToFirstEvent'] <= 30).sum() if 'DaysToFirstEvent' in month_accounts.columns else 0
+            # Activation windows (event creation)
+            has_days_to_event = 'DaysToFirstEvent' in month_accounts.columns
+            activated_1d = (month_accounts['DaysToFirstEvent'] <= 1).sum() if has_days_to_event else 0
+            activated_3d = (month_accounts['DaysToFirstEvent'] <= 3).sum() if has_days_to_event else 0
+            activated_7d = (month_accounts['DaysToFirstEvent'] <= 7).sum() if has_days_to_event else 0
+            activated_30d = (month_accounts['DaysToFirstEvent'] <= 30).sum() if has_days_to_event else 0
+            activated_90d = (month_accounts['DaysToFirstEvent'] <= 90).sum() if has_days_to_event else 0
+
+            pct_activated_1d = round(activated_1d / total * 100, 1)
+            pct_activated_3d = round(activated_3d / total * 100, 1)
+            pct_activated_7d = round(activated_7d / total * 100, 1)
             pct_activated_30d = round(activated_30d / total * 100, 1)
+            pct_activated_90d = round(activated_90d / total * 100, 1)
 
             # T4+ accounts - use 12-month window for 2024, show None for 2025
             if year == 2024:
@@ -7518,7 +7564,11 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
                 '% Paid Events': pct_paid_events,
                 'Avg Days to First Event': round(avg_days_to_event, 1) if avg_days_to_event and not pd.isna(avg_days_to_event) else None,
                 'Avg Days to First Sale': round(avg_days_to_sale, 1) if avg_days_to_sale and not pd.isna(avg_days_to_sale) else None,
+                'Activated Within 1 Day %': pct_activated_1d,
+                'Activated Within 3 Days %': pct_activated_3d,
+                'Activated Within 7 Days %': pct_activated_7d,
                 'Activated Within 30 Days %': pct_activated_30d,
+                'Activated Within 90 Days %': pct_activated_90d,
                 'Reached T4+ (12m)': t4_plus_count
             })
 
@@ -7549,7 +7599,14 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
 
             avg_days_event = year_accounts['DaysToFirstEvent'].dropna().mean()
             avg_days_sale = year_accounts['DaysToFirstSale'].dropna().mean()
-            activated_30d = (year_accounts['DaysToFirstEvent'] <= 30).sum()
+
+            # Activation windows
+            has_days_to_event = 'DaysToFirstEvent' in year_accounts.columns
+            activated_1d = (year_accounts['DaysToFirstEvent'] <= 1).sum() if has_days_to_event else 0
+            activated_3d = (year_accounts['DaysToFirstEvent'] <= 3).sum() if has_days_to_event else 0
+            activated_7d = (year_accounts['DaysToFirstEvent'] <= 7).sum() if has_days_to_event else 0
+            activated_30d = (year_accounts['DaysToFirstEvent'] <= 30).sum() if has_days_to_event else 0
+            activated_90d = (year_accounts['DaysToFirstEvent'] <= 90).sum() if has_days_to_event else 0
 
             # T4+ total - sum from monthly data for 2024, None for 2025
             if year == 2024:
@@ -7571,7 +7628,11 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
                 '% Paid Events': pct_paid,
                 'Avg Days to First Event': round(avg_days_event, 1) if avg_days_event and not pd.isna(avg_days_event) else None,
                 'Avg Days to First Sale': round(avg_days_sale, 1) if avg_days_sale and not pd.isna(avg_days_sale) else None,
+                'Activated Within 1 Day %': round(activated_1d / total * 100, 1),
+                'Activated Within 3 Days %': round(activated_3d / total * 100, 1),
+                'Activated Within 7 Days %': round(activated_7d / total * 100, 1),
                 'Activated Within 30 Days %': round(activated_30d / total * 100, 1),
+                'Activated Within 90 Days %': round(activated_90d / total * 100, 1),
                 'Reached T4+ (12m)': t4_plus
             }])
             funnel_df = pd.concat([funnel_df, total_row], ignore_index=True)
@@ -7608,7 +7669,11 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
             '% Paid Events': f"{calc_change(t25['% Paid Events'], t24['% Paid Events']):+.1f}pp" if calc_change(t25['% Paid Events'], t24['% Paid Events']) is not None else None,
             'Avg Days to First Event': f"{calc_change(t25['Avg Days to First Event'], t24['Avg Days to First Event']):+.1f}" if calc_change(t25['Avg Days to First Event'], t24['Avg Days to First Event']) is not None else None,
             'Avg Days to First Sale': f"{calc_change(t25['Avg Days to First Sale'], t24['Avg Days to First Sale']):+.1f}" if calc_change(t25['Avg Days to First Sale'], t24['Avg Days to First Sale']) is not None else None,
+            'Activated Within 1 Day %': f"{calc_change(t25['Activated Within 1 Day %'], t24['Activated Within 1 Day %']):+.1f}pp" if calc_change(t25['Activated Within 1 Day %'], t24['Activated Within 1 Day %']) is not None else None,
+            'Activated Within 3 Days %': f"{calc_change(t25['Activated Within 3 Days %'], t24['Activated Within 3 Days %']):+.1f}pp" if calc_change(t25['Activated Within 3 Days %'], t24['Activated Within 3 Days %']) is not None else None,
+            'Activated Within 7 Days %': f"{calc_change(t25['Activated Within 7 Days %'], t24['Activated Within 7 Days %']):+.1f}pp" if calc_change(t25['Activated Within 7 Days %'], t24['Activated Within 7 Days %']) is not None else None,
             'Activated Within 30 Days %': f"{calc_change(t25['Activated Within 30 Days %'], t24['Activated Within 30 Days %']):+.1f}pp" if calc_change(t25['Activated Within 30 Days %'], t24['Activated Within 30 Days %']) is not None else None,
+            'Activated Within 90 Days %': f"{calc_change(t25['Activated Within 90 Days %'], t24['Activated Within 90 Days %']):+.1f}pp" if calc_change(t25['Activated Within 90 Days %'], t24['Activated Within 90 Days %']) is not None else None,
             'Reached T4+ (12m)': None,  # Cannot compare: 2025 cohorts don't have 12 months of data yet
         }])
         funnel_df = pd.concat([funnel_df, change_row], ignore_index=True)
@@ -7621,7 +7686,8 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
         'Month Name', 'Year', 'Accounts Created', 'Created Any Event', 'Created Paid Event',
         'Sold Free Only', 'Sold Paid Tickets', 'Conversion Rate (Paid) %',
         '% Free Events', '% Paid Events', 'Avg Days to First Event', 'Avg Days to First Sale',
-        'Activated Within 30 Days %', 'Reached T4+ (12m)'
+        'Activated Within 1 Day %', 'Activated Within 3 Days %', 'Activated Within 7 Days %',
+        'Activated Within 30 Days %', 'Activated Within 90 Days %', 'Reached T4+ (12m)'
     ]
     funnel_df = funnel_df[[c for c in columns if c in funnel_df.columns]]
 

@@ -35,7 +35,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modules.utils.data_loader import load_booking_data, filter_successful_transactions
-from modules.utils.date_utils import get_latest_data_date
 
 
 def classify_sales_channel(payment_type) -> str:
@@ -177,17 +176,33 @@ def main():
     print(f"Analysis Year: {analysis_year}")
     print()
 
-    # Get latest data date
-    target_date = get_latest_data_date()
-    print(f"Target date: {target_date}")
+    # Load booking data (all historical + current month)
+    print("Loading booking data...")
+    booking_all_df = load_booking_data(data_type='BookingDataAll')
+    booking_current_df = load_booking_data(data_type='BookingData')
 
-    # Load booking data for the analysis year
-    print(f"Loading {analysis_year} booking data...")
-    booking_df = load_booking_data(target_date)
-
-    if booking_df is None or len(booking_df) == 0:
+    if booking_all_df is None and booking_current_df is None:
         print("ERROR: No booking data loaded")
         return
+
+    # Combine and deduplicate
+    dfs_to_concat = []
+    if booking_all_df is not None and len(booking_all_df) > 0:
+        dfs_to_concat.append(booking_all_df)
+    if booking_current_df is not None and len(booking_current_df) > 0:
+        dfs_to_concat.append(booking_current_df)
+
+    if not dfs_to_concat:
+        print("ERROR: No booking data loaded")
+        return
+
+    booking_df = pd.concat(dfs_to_concat, ignore_index=True)
+
+    # Deduplicate by BookingTransactionId
+    if 'BookingTransactionId' in booking_df.columns:
+        booking_df = booking_df.drop_duplicates(subset=['BookingTransactionId'])
+
+    print(f"  Loaded {len(booking_df):,} total transactions")
 
     # Filter to successful transactions only
     booking_df = filter_successful_transactions(booking_df)
@@ -200,7 +215,7 @@ def main():
         print(f"ERROR: No transactions found for {analysis_year}")
         return
 
-    print(f"  Loaded {len(booking_df):,} transactions for {analysis_year}")
+    print(f"  Filtered to {len(booking_df):,} transactions for {analysis_year}")
 
     # Ensure required columns exist
     required_cols = ['PaymentReceived', 'TicketQuantity', 'TransactionDate']

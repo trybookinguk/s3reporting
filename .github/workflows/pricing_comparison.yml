@@ -32,7 +32,7 @@ jobs:
         run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Cache S3 files
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: .cache
           key: s3-cache-${{ runner.os }}-${{ steps.date.outputs.date }}-pricing
@@ -48,7 +48,7 @@ jobs:
         run: python pricing_model_comparison.py
 
       - name: Upload output files
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: pricing-comparison-${{ steps.date.outputs.date }}
           path: output/pricing_*.csv

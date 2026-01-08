@@ -27,6 +27,7 @@ Environment Variables:
 """
 
 import pandas as pd
+import numpy as np
 from datetime import datetime
 import os
 import sys
@@ -37,131 +38,106 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modules.utils.data_loader import load_booking_data, filter_successful_transactions
 
 
-def classify_sales_channel(payment_type) -> str:
-    """Classify payment type as Box Office or Online."""
-    if pd.isna(payment_type):
-        return 'Online'
-    payment_type_upper = str(payment_type).upper().strip()
-    if 'CARD PRESENT' in payment_type_upper or payment_type_upper == 'CASH':
-        return 'Box Office'
-    return 'Online'
+def classify_transactions(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Classify transactions using vectorised operations.
 
+    Adds columns:
+    - Sales_Channel: 'Box Office' or 'Online'
+    - BO_Type: 'Cash', 'Card', or None
+    - Gateway_Normalised: 'Stripe Connect', 'Stripe', 'PayPal', 'Default', or 'Unknown'
+    """
+    # Normalise PaymentType to uppercase
+    payment_upper = df['PaymentType'].fillna('').str.upper().str.strip()
 
-def classify_box_office_type(payment_type) -> str:
-    """Classify Box Office transactions as Cash or Card."""
-    if pd.isna(payment_type):
-        return None
-    payment_type_upper = str(payment_type).upper().strip()
-    if payment_type_upper == 'CASH':
-        return 'Cash'
-    elif 'CARD PRESENT' in payment_type_upper:
-        return 'Card'
-    return None
+    # Sales Channel classification
+    is_box_office = payment_upper.str.contains('CARD PRESENT', na=False) | (payment_upper == 'CASH')
+    df['Sales_Channel'] = np.where(is_box_office, 'Box Office', 'Online')
 
+    # Box Office Type classification
+    df['BO_Type'] = np.where(
+        payment_upper == 'CASH', 'Cash',
+        np.where(payment_upper.str.contains('CARD PRESENT', na=False), 'Card', None)
+    )
 
-def normalise_gateway(gateway_value) -> str:
-    """Normalise gateway names."""
-    if pd.isna(gateway_value):
-        return 'Unknown'
-    gateway_str = str(gateway_value).strip()
-    if 'stripe connect' in gateway_str.lower():
-        return 'Stripe Connect'
-    elif 'stripe' in gateway_str.lower():
-        return 'Stripe'
-    elif 'paypal' in gateway_str.lower():
-        return 'PayPal'
+    # Gateway normalisation
+    gateway_col = None
+    for col in ['GatewayName', 'Gateway Group', 'GatewayGroup']:
+        if col in df.columns:
+            gateway_col = col
+            break
+
+    if gateway_col:
+        gateway_lower = df[gateway_col].fillna('').str.lower().str.strip()
+        df['Gateway_Normalised'] = np.select(
+            [
+                gateway_lower.str.contains('stripe connect', na=False),
+                gateway_lower.str.contains('stripe', na=False),
+                gateway_lower.str.contains('paypal', na=False),
+                gateway_lower == ''
+            ],
+            ['Stripe Connect', 'Stripe', 'PayPal', 'Unknown'],
+            default='Default'
+        )
     else:
-        return 'Default'
+        df['Gateway_Normalised'] = 'Default'
+
+    return df
 
 
-def calculate_current_fees_ex_vat(row: pd.Series) -> dict:
+def calculate_fees_vectorised(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Calculate current fees converted to ex VAT.
+    Calculate current and proposed fees using vectorised operations.
 
-    Current fees in data are inc VAT, so divide by 1.2.
+    Current Structure (inc VAT) - converted to ex VAT:
+    - All fee columns summed and divided by 1.2
+
+    Proposed Structure (ex VAT):
+    - Online (Default/PayPal): 4% processing + 20p per ticket
+    - Online (Stripe): 75p per ticket only
+    - Box Office Cash: Free
+    - Box Office Card: 3% processing + 20p per ticket
     """
-    booking_fee = row.get('BookingFee', 0) or 0
-    card_fee = row.get('CardFee', 0) or 0
-    processing_fee = row.get('ProcessingFee', 0) or 0
-    ticket_fee = row.get('TicketFee', 0) or 0
+    # Ensure numeric columns, fill NaN with 0
+    payment_received = df['PaymentReceived'].fillna(0)
+    ticket_quantity = df['TicketQuantity'].fillna(0)
+    booking_fee = df['BookingFee'].fillna(0) if 'BookingFee' in df.columns else 0
+    card_fee = df['CardFee'].fillna(0) if 'CardFee' in df.columns else 0
+    processing_fee = df['ProcessingFee'].fillna(0) if 'ProcessingFee' in df.columns else 0
+    ticket_fee = df['TicketFee'].fillna(0) if 'TicketFee' in df.columns else 0
 
-    total_fee_inc_vat = booking_fee + card_fee + processing_fee + ticket_fee
-    total_fee_ex_vat = total_fee_inc_vat / 1.2
+    # Current fees (convert inc VAT to ex VAT)
+    df['current_fee_inc_vat'] = booking_fee + card_fee + processing_fee + ticket_fee
+    df['current_fee_ex_vat'] = df['current_fee_inc_vat'] / 1.2
 
-    return {
-        'current_fee_inc_vat': total_fee_inc_vat,
-        'current_fee_ex_vat': total_fee_ex_vat
-    }
+    # Create condition masks
+    is_free = payment_received == 0
+    is_bo_cash = (df['Sales_Channel'] == 'Box Office') & (df['BO_Type'] == 'Cash')
+    is_bo_card = (df['Sales_Channel'] == 'Box Office') & (df['BO_Type'] == 'Card')
+    is_stripe = df['Gateway_Normalised'].isin(['Stripe Connect', 'Stripe'])
+    is_online_default = (df['Sales_Channel'] == 'Online') & ~is_stripe
 
+    # Calculate proposed processing fee
+    df['proposed_processing_fee'] = np.select(
+        [is_free, is_bo_cash, is_bo_card, is_stripe, is_online_default],
+        [0, 0, payment_received * 0.03, 0, payment_received * 0.04],
+        default=0
+    )
 
-def calculate_proposed_fees(row: pd.Series) -> dict:
-    """
-    Calculate proposed fees (all ex VAT).
+    # Calculate proposed ticket fee
+    df['proposed_ticket_fee'] = np.select(
+        [is_free, is_bo_cash, is_bo_card, is_stripe, is_online_default],
+        [0, 0, ticket_quantity * 0.20, ticket_quantity * 0.75, ticket_quantity * 0.20],
+        default=0
+    )
 
-    Proposed Structure:
-    - Online (Default/PayPal gateway):
-        - Processing fee: 4% of PaymentReceived
-        - Ticket fee: 20p per ticket
-    - Online (Stripe gateway):
-        - Processing fee: 0 (they pay Stripe directly)
-        - Ticket fee: 75p per ticket
-    - Box Office Cash:
-        - Free (no fees)
-    - Box Office Card:
-        - Processing fee: 3% of PaymentReceived
-        - Ticket fee: 20p per ticket
-    """
-    payment_received = row.get('PaymentReceived', 0) or 0
-    ticket_quantity = row.get('TicketQuantity', 0) or 0
-    sales_channel = row.get('Sales_Channel', 'Online')
-    bo_type = row.get('BO_Type')
-    gateway = row.get('Gateway_Normalised', 'Default')
+    # Total proposed fee
+    df['proposed_total_fee'] = df['proposed_processing_fee'] + df['proposed_ticket_fee']
 
-    # Free tickets have no fees
-    if payment_received == 0:
-        return {
-            'proposed_processing_fee': 0,
-            'proposed_ticket_fee': 0,
-            'proposed_total_fee': 0
-        }
+    # Fee difference
+    df['fee_difference'] = df['proposed_total_fee'] - df['current_fee_ex_vat']
 
-    # Box Office transactions
-    if sales_channel == 'Box Office':
-        if bo_type == 'Cash':
-            # Box Office Cash = Free
-            return {
-                'proposed_processing_fee': 0,
-                'proposed_ticket_fee': 0,
-                'proposed_total_fee': 0
-            }
-        else:
-            # Box Office Card = 3% + 20p per ticket
-            processing_fee = payment_received * 0.03
-            ticket_fee = ticket_quantity * 0.20
-            return {
-                'proposed_processing_fee': processing_fee,
-                'proposed_ticket_fee': ticket_fee,
-                'proposed_total_fee': processing_fee + ticket_fee
-            }
-
-    # Online transactions
-    if gateway in ['Stripe Connect', 'Stripe']:
-        # Stripe = 75p per ticket only (no processing fee)
-        ticket_fee = ticket_quantity * 0.75
-        return {
-            'proposed_processing_fee': 0,
-            'proposed_ticket_fee': ticket_fee,
-            'proposed_total_fee': ticket_fee
-        }
-    else:
-        # Default/PayPal = 4% + 20p per ticket
-        processing_fee = payment_received * 0.04
-        ticket_fee = ticket_quantity * 0.20
-        return {
-            'proposed_processing_fee': processing_fee,
-            'proposed_ticket_fee': ticket_fee,
-            'proposed_total_fee': processing_fee + ticket_fee
-        }
+    return df
 
 
 def main():
@@ -224,53 +200,28 @@ def main():
             print(f"ERROR: Missing required column: {col}")
             return
 
-    # Add classification columns
+    # Classify transactions (vectorised)
     print("Classifying transactions...")
-    booking_df['Sales_Channel'] = booking_df['PaymentType'].apply(classify_sales_channel)
-    booking_df['BO_Type'] = booking_df['PaymentType'].apply(classify_box_office_type)
-
-    # Normalise gateway
-    gateway_col = None
-    for col in ['GatewayName', 'Gateway Group', 'GatewayGroup']:
-        if col in booking_df.columns:
-            gateway_col = col
-            break
-
-    if gateway_col:
-        booking_df['Gateway_Normalised'] = booking_df[gateway_col].apply(normalise_gateway)
-    else:
-        booking_df['Gateway_Normalised'] = 'Default'
+    booking_df = classify_transactions(booking_df)
 
     # Add month column (TransactionDate already converted to datetime above)
     booking_df['Month'] = booking_df['TransactionDate'].dt.to_period('M')
 
-    # Calculate fees for each transaction
+    # Calculate fees (vectorised)
     print("Calculating fees...")
-
-    # Current fees (convert to ex VAT)
-    current_fees = booking_df.apply(calculate_current_fees_ex_vat, axis=1, result_type='expand')
-    booking_df = pd.concat([booking_df, current_fees], axis=1)
-
-    # Proposed fees
-    proposed_fees = booking_df.apply(calculate_proposed_fees, axis=1, result_type='expand')
-    booking_df = pd.concat([booking_df, proposed_fees], axis=1)
-
-    # Calculate difference
-    booking_df['fee_difference'] = booking_df['proposed_total_fee'] - booking_df['current_fee_ex_vat']
+    booking_df = calculate_fees_vectorised(booking_df)
 
     # === SUMMARY BY CATEGORY ===
     print("\n" + "=" * 60)
     print(f"SUMMARY BY CATEGORY ({analysis_year} Full Year)")
     print("=" * 60)
 
-    # Create category column
-    def get_category(row):
-        if row['Sales_Channel'] == 'Box Office':
-            return f"Box Office - {row['BO_Type'] or 'Unknown'}"
-        else:
-            return f"Online - {row['Gateway_Normalised']}"
-
-    booking_df['Category'] = booking_df.apply(get_category, axis=1)
+    # Create category column (vectorised)
+    booking_df['Category'] = np.where(
+        booking_df['Sales_Channel'] == 'Box Office',
+        'Box Office - ' + booking_df['BO_Type'].fillna('Unknown'),
+        'Online - ' + booking_df['Gateway_Normalised']
+    )
 
     # Aggregate by category
     category_summary = booking_df.groupby('Category').agg({

@@ -60,9 +60,9 @@ def classify_transactions(df: pd.DataFrame) -> pd.DataFrame:
         np.where(payment_upper.str.contains('CARD PRESENT', na=False), 'Card', None)
     )
 
-    # Gateway normalisation
+    # Gateway normalisation - use Gateway Group (account-level), not GatewayName (transaction-level)
     gateway_col = None
-    for col in ['GatewayName', 'Gateway Group', 'GatewayGroup']:
+    for col in ['Gateway Group', 'GatewayGroup']:
         if col in df.columns:
             gateway_col = col
             break
@@ -72,12 +72,11 @@ def classify_transactions(df: pd.DataFrame) -> pd.DataFrame:
         df['Gateway_Normalised'] = np.select(
             [
                 gateway_lower.str.contains('stripe connect', na=False),
-                gateway_lower.str.contains('stripe', na=False),
                 gateway_lower.str.contains('paypal', na=False),
-                gateway_lower == ''
+                gateway_lower.str.contains('default', na=False),  # Default (All) = TryBooking gateway
             ],
-            ['Stripe Connect', 'Stripe', 'PayPal', 'Unknown'],
-            default='Default'
+            ['Stripe Connect', 'PayPal', 'Default'],
+            default='Unknown'
         )
     else:
         df['Gateway_Normalised'] = 'Default'
@@ -110,24 +109,23 @@ def calculate_fees_vectorised(df: pd.DataFrame) -> pd.DataFrame:
     df['current_fee_inc_vat'] = booking_fee + card_fee + processing_fee + ticket_fee
     df['current_fee_ex_vat'] = df['current_fee_inc_vat'] / 1.2
 
-    # Create condition masks
-    is_free = payment_received == 0
+    # Create condition masks (free tickets already filtered out)
     is_bo_cash = (df['Sales_Channel'] == 'Box Office') & (df['BO_Type'] == 'Cash')
     is_bo_card = (df['Sales_Channel'] == 'Box Office') & (df['BO_Type'] == 'Card')
-    is_stripe = df['Gateway_Normalised'].isin(['Stripe Connect', 'Stripe'])
+    is_stripe = df['Gateway_Normalised'] == 'Stripe Connect'
     is_online_default = (df['Sales_Channel'] == 'Online') & ~is_stripe
 
     # Calculate proposed processing fee
     df['proposed_processing_fee'] = np.select(
-        [is_free, is_bo_cash, is_bo_card, is_stripe, is_online_default],
-        [0, 0, payment_received * 0.03, 0, payment_received * 0.04],
+        [is_bo_cash, is_bo_card, is_stripe, is_online_default],
+        [0, payment_received * 0.03, 0, payment_received * 0.04],
         default=0
     )
 
     # Calculate proposed ticket fee
     df['proposed_ticket_fee'] = np.select(
-        [is_free, is_bo_cash, is_bo_card, is_stripe, is_online_default],
-        [0, 0, ticket_quantity * 0.20, ticket_quantity * 0.75, ticket_quantity * 0.20],
+        [is_bo_cash, is_bo_card, is_stripe, is_online_default],
+        [0, ticket_quantity * 0.20, ticket_quantity * 0.75, ticket_quantity * 0.20],
         default=0
     )
 
@@ -199,6 +197,11 @@ def main():
         if col not in booking_df.columns:
             print(f"ERROR: Missing required column: {col}")
             return
+
+    # Filter out free tickets (PaymentReceived = 0) - they don't generate fees in either model
+    free_count = (booking_df['PaymentReceived'].fillna(0) == 0).sum()
+    booking_df = booking_df[booking_df['PaymentReceived'].fillna(0) > 0]
+    print(f"  Excluded {free_count:,} free tickets, {len(booking_df):,} paid transactions remaining")
 
     # Classify transactions (vectorised)
     print("Classifying transactions...")

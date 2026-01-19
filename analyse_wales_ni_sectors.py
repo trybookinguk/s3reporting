@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 """
-Quick analysis: Industry sectors for clients from Wales and Northern Ireland.
+Regional Industry Analysis Report for TryBooking UK.
+
+Analyses industry sectors for clients in specific regions (Wales, Northern Ireland, etc.).
+Outputs CSV files with account counts, fees, and revenue by industry for each region.
+
+Usage:
+    python3 analyse_wales_ni_sectors.py
 """
+import os
 import pandas as pd
+from datetime import datetime
+from modules.utils.config import UK_TZ
 from modules.utils.data_loader import load_accounts, load_booking_data, filter_successful_transactions
 from modules.uk_regional_segmentation import (
     extract_postcode_areas_vectorized,

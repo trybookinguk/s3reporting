@@ -377,12 +377,17 @@ def extract_keywords(event_name: str, min_length: int = 3) -> List[str]:
     return keywords
 
 
-def _aggregate_events(booking_df: pd.DataFrame) -> pd.DataFrame:
+def _aggregate_events(booking_df: pd.DataFrame, include_industry: bool = False) -> pd.DataFrame:
     """
     Aggregate booking data to event level for efficient processing.
 
+    Args:
+        booking_df: Booking DataFrame with transaction-level data
+        include_industry: If True, include Industry column in aggregation
+
     Returns DataFrame with one row per event containing:
     - EventId, EventName, total_revenue, total_tickets, total_fees, event_date, first_sale
+    - Industry (if include_industry=True and column exists)
     """
     # Ensure required columns exist
     required_cols = ['EventId', 'EventName']
@@ -416,6 +421,10 @@ def _aggregate_events(booking_df: pd.DataFrame) -> pd.DataFrame:
         agg_dict['EventDate'] = 'first'
     if 'TransactionDate' in booking_df.columns:
         agg_dict['TransactionDate'] = 'min'  # First sale
+    if include_industry and 'Industry' in booking_df.columns:
+        agg_dict['Industry'] = 'first'
+    if include_industry and 'SubIndustry' in booking_df.columns:
+        agg_dict['SubIndustry'] = 'first'
 
     events_df = booking_df.groupby('EventId').agg(agg_dict).reset_index()
 
@@ -851,4 +860,517 @@ def generate_keyword_analysis_csvs(booking_df: pd.DataFrame, output_file: str, o
         output_files['summary'] = summary_file
         print(f"    Saved: {summary_file}")
 
+    # 5. Keyword by industry breakdown
+    if 'Industry' in booking_df.columns:
+        print("  Analysing keywords by industry...")
+        industry_df = analyse_keywords_by_industry(booking_df, top_n=100)
+        if len(industry_df) > 0:
+            industry_file = f"{base_name}_keywords_by_industry.csv"
+            industry_df.to_csv(industry_file, index=False, float_format='%.2f')
+            output_files['keyword_industry'] = industry_file
+            print(f"    Saved: {industry_file}")
+
+    # 6. Enhanced temporal with session and on-sale months
+    print("  Analysing detailed temporal patterns...")
+    detailed_temporal_df = analyse_detailed_temporal_patterns(booking_df, top_n=100)
+    if len(detailed_temporal_df) > 0:
+        detailed_file = f"{base_name}_keywords_detailed_temporal.csv"
+        detailed_temporal_df.to_csv(detailed_file, index=False, float_format='%.2f')
+        output_files['detailed_temporal'] = detailed_file
+        print(f"    Saved: {detailed_file}")
+
+    # 7. Monthly event popularity (by session and on-sale month)
+    print("  Analysing monthly event popularity...")
+    monthly_popularity = analyse_monthly_event_popularity(booking_df, top_n=30)
+    if 'by_session_month' in monthly_popularity:
+        session_file = f"{base_name}_popularity_by_session_month.csv"
+        monthly_popularity['by_session_month'].to_csv(session_file, index=False, float_format='%.2f')
+        output_files['popularity_session'] = session_file
+        print(f"    Saved: {session_file}")
+    if 'by_onsale_month' in monthly_popularity:
+        onsale_file = f"{base_name}_popularity_by_onsale_month.csv"
+        monthly_popularity['by_onsale_month'].to_csv(onsale_file, index=False, float_format='%.2f')
+        output_files['popularity_onsale'] = onsale_file
+        print(f"    Saved: {onsale_file}")
+
     return output_files
+
+
+def analyse_keywords_by_industry(booking_df: pd.DataFrame, top_n: int = 100) -> pd.DataFrame:
+    """
+    Analyse which industries/sectors specific keywords come from.
+
+    For each keyword, shows breakdown by Industry with event counts, fees, and revenue.
+    Useful for understanding which sectors drive specific event types (e.g., balls, concerts).
+
+    Args:
+        booking_df: Booking DataFrame with EventName, Industry, fee columns
+        top_n: Number of top keywords to analyse
+
+    Returns:
+        DataFrame with keyword-industry breakdown
+    """
+    # Aggregate to event level with industry
+    events_df = _aggregate_events(booking_df, include_industry=True)
+
+    if len(events_df) == 0 or 'Industry' not in events_df.columns:
+        return pd.DataFrame()
+
+    # Extract keywords
+    events_df['keywords'] = events_df['EventName'].apply(extract_keywords)
+
+    # Get top keywords by fees first
+    keyword_fees = defaultdict(float)
+    for _, row in events_df.iterrows():
+        fees = row.get('total_fees', 0) or 0
+        for keyword in row['keywords']:
+            keyword_fees[keyword] += fees
+
+    top_keywords = sorted(keyword_fees.keys(), key=lambda k: keyword_fees[k], reverse=True)[:top_n]
+
+    # Build keyword-industry breakdown
+    results = []
+
+    for keyword in top_keywords:
+        # Get events containing this keyword
+        mask = events_df['keywords'].apply(lambda kws: keyword in kws)
+        keyword_events = events_df[mask]
+
+        if len(keyword_events) == 0:
+            continue
+
+        # Group by industry
+        for industry, group in keyword_events.groupby('Industry', dropna=False):
+            industry_name = industry if pd.notna(industry) else 'Unspecified'
+
+            results.append({
+                'Keyword': keyword,
+                'Industry': industry_name,
+                'Event Count': len(group),
+                'Total Fees': round(group['total_fees'].sum() if 'total_fees' in group.columns else 0, 2),
+                'Total Revenue': round(group['total_revenue'].sum() if 'total_revenue' in group.columns else 0, 2),
+                'Total Tickets': int(group['total_tickets'].sum() if 'total_tickets' in group.columns else 0),
+                'Keyword Total Fees': round(keyword_fees[keyword], 2),
+                '% of Keyword Fees': round(
+                    (group['total_fees'].sum() / keyword_fees[keyword] * 100)
+                    if keyword_fees[keyword] > 0 and 'total_fees' in group.columns else 0, 1
+                ),
+            })
+
+    df = pd.DataFrame(results)
+    if len(df) > 0:
+        # Sort by keyword total fees, then by industry contribution
+        df = df.sort_values(['Keyword Total Fees', '% of Keyword Fees'], ascending=[False, False])
+
+    return df
+
+
+def analyse_detailed_temporal_patterns(booking_df: pd.DataFrame, top_n: int = 100) -> pd.DataFrame:
+    """
+    Analyse temporal patterns with both session date and first sale (on-sale) date.
+
+    Provides:
+    - Peak months by session date (when events take place)
+    - Peak months by first sale date (when tickets go on sale)
+    - Lead time statistics
+    - Useful for understanding marketing timing vs event timing
+
+    Args:
+        booking_df: Booking DataFrame with EventName, EventDate, TransactionDate
+        top_n: Number of top keywords to analyse
+
+    Returns:
+        DataFrame with detailed temporal analysis
+    """
+    # Aggregate to event level with industry
+    events_df = _aggregate_events(booking_df, include_industry=True)
+
+    if len(events_df) == 0:
+        return pd.DataFrame()
+
+    # Extract keywords
+    events_df['keywords'] = events_df['EventName'].apply(extract_keywords)
+
+    # Check available date columns
+    has_event_date = 'EventDate' in events_df.columns
+    has_first_sale = 'first_sale' in events_df.columns
+    has_industry = 'Industry' in events_df.columns
+
+    # Parse dates and extract months
+    if has_event_date:
+        events_df['event_date_parsed'] = pd.to_datetime(events_df['EventDate'], errors='coerce')
+        events_df['session_month'] = events_df['event_date_parsed'].dt.month
+
+    if has_first_sale:
+        events_df['first_sale_parsed'] = pd.to_datetime(events_df['first_sale'], errors='coerce')
+        events_df['onsale_month'] = events_df['first_sale_parsed'].dt.month
+
+    if has_event_date and has_first_sale:
+        events_df['lead_days'] = (events_df['event_date_parsed'] - events_df['first_sale_parsed']).dt.days
+
+    # Get top keywords by fees
+    keyword_fees = defaultdict(float)
+    for _, row in events_df.iterrows():
+        fees = row.get('total_fees', 0) or 0
+        for keyword in row['keywords']:
+            keyword_fees[keyword] += fees
+
+    top_keywords = sorted(keyword_fees.keys(), key=lambda k: keyword_fees[k], reverse=True)[:top_n]
+
+    # Analyse each keyword
+    results = []
+
+    for keyword in top_keywords:
+        mask = events_df['keywords'].apply(lambda kws: keyword in kws)
+        keyword_events = events_df[mask]
+
+        if len(keyword_events) == 0:
+            continue
+
+        event_count = len(keyword_events)
+        total_fees = keyword_fees[keyword]
+
+        # Session month analysis (when events happen)
+        if has_event_date:
+            session_months = keyword_events['session_month'].dropna().astype(int)
+            if len(session_months) > 0:
+                session_month_counts = session_months.value_counts()
+                top_session_months = session_month_counts.head(3)
+                session_peak = calendar.month_abbr[top_session_months.index[0]]
+                session_primary = ', '.join([calendar.month_abbr[m] for m in top_session_months.index])
+            else:
+                session_peak = 'N/A'
+                session_primary = 'N/A'
+        else:
+            session_peak = 'N/A'
+            session_primary = 'N/A'
+
+        # On-sale month analysis (when tickets go on sale)
+        if has_first_sale:
+            onsale_months = keyword_events['onsale_month'].dropna().astype(int)
+            if len(onsale_months) > 0:
+                onsale_month_counts = onsale_months.value_counts()
+                top_onsale_months = onsale_month_counts.head(3)
+                onsale_peak = calendar.month_abbr[top_onsale_months.index[0]]
+                onsale_primary = ', '.join([calendar.month_abbr[m] for m in top_onsale_months.index])
+            else:
+                onsale_peak = 'N/A'
+                onsale_primary = 'N/A'
+        else:
+            onsale_peak = 'N/A'
+            onsale_primary = 'N/A'
+
+        # Lead time analysis
+        if 'lead_days' in keyword_events.columns:
+            valid_leads = keyword_events['lead_days'].dropna()
+            valid_leads = valid_leads[(valid_leads >= 0) & (valid_leads <= 365)]
+
+            if len(valid_leads) > 0:
+                avg_lead = round(valid_leads.mean())
+                median_lead = round(valid_leads.median())
+                p25_lead = round(valid_leads.quantile(0.25))
+                p75_lead = round(valid_leads.quantile(0.75))
+                recommended_lead_weeks = round((p75_lead + 14) / 7, 1)
+            else:
+                avg_lead = None
+                median_lead = None
+                p25_lead = None
+                p75_lead = None
+                recommended_lead_weeks = None
+        else:
+            avg_lead = None
+            median_lead = None
+            p25_lead = None
+            p75_lead = None
+            recommended_lead_weeks = None
+
+        # Top industries for this keyword
+        if has_industry:
+            industry_counts = keyword_events['Industry'].value_counts().head(3)
+            top_industries = ', '.join([str(ind) for ind in industry_counts.index if pd.notna(ind)])
+        else:
+            top_industries = 'N/A'
+
+        results.append({
+            'Keyword': keyword,
+            'Event Count': event_count,
+            'Total Fees': round(total_fees, 2),
+            'Session Peak Month': session_peak,
+            'Session Primary Months': session_primary,
+            'On-Sale Peak Month': onsale_peak,
+            'On-Sale Primary Months': onsale_primary,
+            'Avg Lead Time (days)': avg_lead,
+            'Median Lead Time (days)': median_lead,
+            'Lead Time 25th %ile (days)': p25_lead,
+            'Lead Time 75th %ile (days)': p75_lead,
+            'Recommended Lead (weeks)': recommended_lead_weeks,
+            'Top Industries': top_industries,
+        })
+
+    return pd.DataFrame(results)
+
+
+def generate_focused_keyword_report(
+    booking_df: pd.DataFrame,
+    keywords: List[str],
+    output_file: str = None
+) -> Dict[str, pd.DataFrame]:
+    """
+    Generate a focused analysis report for specific keywords.
+
+    Provides detailed breakdown for specified keywords including:
+    - Industry sector breakdown
+    - Monthly distribution by session date
+    - Monthly distribution by on-sale date
+    - Lead time statistics
+    - Year-over-year comparison if data spans multiple years
+
+    Args:
+        booking_df: Booking DataFrame
+        keywords: List of keywords to analyse (e.g., ['ball', 'concert', 'musical'])
+        output_file: Optional base filename for CSV output
+
+    Returns:
+        Dictionary with DataFrames:
+        - 'summary': Overview of each keyword
+        - 'by_industry': Industry breakdown for each keyword
+        - 'by_session_month': Events by session month for each keyword
+        - 'by_onsale_month': Events by on-sale month for each keyword
+    """
+    # Aggregate to event level with industry
+    events_df = _aggregate_events(booking_df, include_industry=True)
+
+    if len(events_df) == 0:
+        return {}
+
+    # Extract keywords
+    events_df['keywords'] = events_df['EventName'].apply(extract_keywords)
+
+    # Normalise input keywords to match extraction
+    keywords_normalised = [simple_stem(normalise_synonym(k.lower())) for k in keywords]
+
+    # Check available columns
+    has_event_date = 'EventDate' in events_df.columns
+    has_first_sale = 'first_sale' in events_df.columns
+    has_industry = 'Industry' in events_df.columns
+
+    # Parse dates
+    if has_event_date:
+        events_df['event_date_parsed'] = pd.to_datetime(events_df['EventDate'], errors='coerce')
+        events_df['session_month'] = events_df['event_date_parsed'].dt.month
+        events_df['session_year'] = events_df['event_date_parsed'].dt.year
+
+    if has_first_sale:
+        events_df['first_sale_parsed'] = pd.to_datetime(events_df['first_sale'], errors='coerce')
+        events_df['onsale_month'] = events_df['first_sale_parsed'].dt.month
+
+    if has_event_date and has_first_sale:
+        events_df['lead_days'] = (events_df['event_date_parsed'] - events_df['first_sale_parsed']).dt.days
+
+    results = {
+        'summary': [],
+        'by_industry': [],
+        'by_session_month': [],
+        'by_onsale_month': [],
+    }
+
+    for keyword, keyword_norm in zip(keywords, keywords_normalised):
+        # Find events containing this keyword
+        mask = events_df['keywords'].apply(lambda kws: keyword_norm in kws)
+        keyword_events = events_df[mask]
+
+        if len(keyword_events) == 0:
+            print(f"  Warning: No events found for keyword '{keyword}'")
+            continue
+
+        event_count = len(keyword_events)
+        total_fees = keyword_events['total_fees'].sum() if 'total_fees' in keyword_events.columns else 0
+        total_revenue = keyword_events['total_revenue'].sum() if 'total_revenue' in keyword_events.columns else 0
+        total_tickets = keyword_events['total_tickets'].sum() if 'total_tickets' in keyword_events.columns else 0
+
+        # Lead time stats
+        if 'lead_days' in keyword_events.columns:
+            valid_leads = keyword_events['lead_days'].dropna()
+            valid_leads = valid_leads[(valid_leads >= 0) & (valid_leads <= 365)]
+            avg_lead = round(valid_leads.mean()) if len(valid_leads) > 0 else None
+            median_lead = round(valid_leads.median()) if len(valid_leads) > 0 else None
+        else:
+            avg_lead = None
+            median_lead = None
+
+        # Summary row
+        results['summary'].append({
+            'Keyword': keyword,
+            'Event Count': event_count,
+            'Total Fees': round(total_fees, 2),
+            'Total Revenue': round(total_revenue, 2),
+            'Total Tickets': int(total_tickets),
+            'Avg Lead Time (days)': avg_lead,
+            'Median Lead Time (days)': median_lead,
+        })
+
+        # Industry breakdown
+        if has_industry:
+            for industry, group in keyword_events.groupby('Industry', dropna=False):
+                industry_name = industry if pd.notna(industry) else 'Unspecified'
+                results['by_industry'].append({
+                    'Keyword': keyword,
+                    'Industry': industry_name,
+                    'Event Count': len(group),
+                    'Total Fees': round(group['total_fees'].sum() if 'total_fees' in group.columns else 0, 2),
+                    'Total Revenue': round(group['total_revenue'].sum() if 'total_revenue' in group.columns else 0, 2),
+                    '% of Keyword Events': round(len(group) / event_count * 100, 1),
+                })
+
+        # Session month breakdown
+        if has_event_date:
+            for month in range(1, 13):
+                month_events = keyword_events[keyword_events['session_month'] == month]
+                if len(month_events) > 0:
+                    results['by_session_month'].append({
+                        'Keyword': keyword,
+                        'Month': month,
+                        'Month Name': calendar.month_abbr[month],
+                        'Event Count': len(month_events),
+                        'Total Fees': round(month_events['total_fees'].sum() if 'total_fees' in month_events.columns else 0, 2),
+                        '% of Keyword Events': round(len(month_events) / event_count * 100, 1),
+                    })
+
+        # On-sale month breakdown
+        if has_first_sale:
+            for month in range(1, 13):
+                month_events = keyword_events[keyword_events['onsale_month'] == month]
+                if len(month_events) > 0:
+                    results['by_onsale_month'].append({
+                        'Keyword': keyword,
+                        'Month': month,
+                        'Month Name': calendar.month_abbr[month],
+                        'Event Count': len(month_events),
+                        'Total Fees': round(month_events['total_fees'].sum() if 'total_fees' in month_events.columns else 0, 2),
+                        '% of Keyword Events': round(len(month_events) / event_count * 100, 1),
+                    })
+
+    # Convert to DataFrames
+    output = {}
+    for key, rows in results.items():
+        if rows:
+            df = pd.DataFrame(rows)
+            output[key] = df
+
+            # Save to CSV if output_file specified
+            if output_file:
+                base_name = output_file.rsplit('.', 1)[0]
+                csv_file = f"{base_name}_focused_{key}.csv"
+                df.to_csv(csv_file, index=False, float_format='%.2f')
+                print(f"  Saved: {csv_file}")
+
+    return output
+
+
+def analyse_monthly_event_popularity(booking_df: pd.DataFrame, top_n: int = 50) -> Dict[str, pd.DataFrame]:
+    """
+    Analyse most popular events by month - both by session date and on-sale date.
+
+    Returns two analyses:
+    1. Most popular events by month the event takes place (session date)
+    2. Most popular events by month tickets go on sale (first transaction date)
+
+    Args:
+        booking_df: Booking DataFrame
+        top_n: Number of top keywords per month to include
+
+    Returns:
+        Dictionary with:
+        - 'by_session_month': Keywords ranked by popularity for each session month
+        - 'by_onsale_month': Keywords ranked by popularity for each on-sale month
+    """
+    events_df = _aggregate_events(booking_df, include_industry=False)
+
+    if len(events_df) == 0:
+        return {}
+
+    # Extract keywords
+    events_df['keywords'] = events_df['EventName'].apply(extract_keywords)
+
+    has_event_date = 'EventDate' in events_df.columns
+    has_first_sale = 'first_sale' in events_df.columns
+
+    if has_event_date:
+        events_df['session_month'] = pd.to_datetime(events_df['EventDate'], errors='coerce').dt.month
+
+    if has_first_sale:
+        events_df['onsale_month'] = pd.to_datetime(events_df['first_sale'], errors='coerce').dt.month
+
+    results = {}
+
+    # By session month
+    if has_event_date:
+        session_rows = []
+        for month in range(1, 13):
+            month_events = events_df[events_df['session_month'] == month]
+            if len(month_events) == 0:
+                continue
+
+            # Count keywords in this month
+            keyword_stats = defaultdict(lambda: {'count': 0, 'fees': 0.0, 'revenue': 0.0})
+            for _, row in month_events.iterrows():
+                fees = row.get('total_fees', 0) or 0
+                revenue = row.get('total_revenue', 0) or 0
+                for kw in row['keywords']:
+                    keyword_stats[kw]['count'] += 1
+                    keyword_stats[kw]['fees'] += fees
+                    keyword_stats[kw]['revenue'] += revenue
+
+            # Get top keywords for this month
+            top_kws = sorted(keyword_stats.keys(), key=lambda k: keyword_stats[k]['fees'], reverse=True)[:top_n]
+
+            for rank, kw in enumerate(top_kws, 1):
+                session_rows.append({
+                    'Month': month,
+                    'Month Name': calendar.month_name[month],
+                    'Rank': rank,
+                    'Keyword': kw,
+                    'Event Count': keyword_stats[kw]['count'],
+                    'Total Fees': round(keyword_stats[kw]['fees'], 2),
+                    'Total Revenue': round(keyword_stats[kw]['revenue'], 2),
+                })
+
+        if session_rows:
+            results['by_session_month'] = pd.DataFrame(session_rows)
+
+    # By on-sale month
+    if has_first_sale:
+        onsale_rows = []
+        for month in range(1, 13):
+            month_events = events_df[events_df['onsale_month'] == month]
+            if len(month_events) == 0:
+                continue
+
+            # Count keywords in this month
+            keyword_stats = defaultdict(lambda: {'count': 0, 'fees': 0.0, 'revenue': 0.0})
+            for _, row in month_events.iterrows():
+                fees = row.get('total_fees', 0) or 0
+                revenue = row.get('total_revenue', 0) or 0
+                for kw in row['keywords']:
+                    keyword_stats[kw]['count'] += 1
+                    keyword_stats[kw]['fees'] += fees
+                    keyword_stats[kw]['revenue'] += revenue
+
+            # Get top keywords for this month
+            top_kws = sorted(keyword_stats.keys(), key=lambda k: keyword_stats[k]['fees'], reverse=True)[:top_n]
+
+            for rank, kw in enumerate(top_kws, 1):
+                onsale_rows.append({
+                    'Month': month,
+                    'Month Name': calendar.month_name[month],
+                    'Rank': rank,
+                    'Keyword': kw,
+                    'Event Count': keyword_stats[kw]['count'],
+                    'Total Fees': round(keyword_stats[kw]['fees'], 2),
+                    'Total Revenue': round(keyword_stats[kw]['revenue'], 2),
+                })
+
+        if onsale_rows:
+            results['by_onsale_month'] = pd.DataFrame(onsale_rows)
+
+    return results

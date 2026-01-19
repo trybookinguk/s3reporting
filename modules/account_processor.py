@@ -277,7 +277,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         
         # Merge with metrics_df
         # Select only the data columns (Account_Name_Clean is already the index-turned-column)
-        data_columns = ['Industry', 'Postcode', 'DateTimeCreated', 'LastEventCreation']
+        data_columns = ['Industry', 'Postcode', 'DateTimeCreated', 'LastEventCreation', 'LastLogIn', 'AccountStatus']
         # Only select columns that actually exist in lookup_df
         available_columns = [col for col in data_columns if col in lookup_df.columns]
         available_columns.insert(0, 'Account_Name_Clean')  # Add Account_Name_Clean at the beginning
@@ -880,8 +880,9 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     metrics_df['retention_priority_score'] = priority_scores
     metrics_df['Retention_Priority'] = priority_categories
     
-    # Clear retention priority for churned accounts
-    metrics_df.loc[metrics_df['Rating'] == 'Churned', 'Retention_Priority'] = ''
+    # Clear retention priority for excluded accounts
+    excluded_ratings = ['Churned', 'Suspended or Closed', 'Unactivated', 'Never Logged In', 'Never Transacted']
+    metrics_df.loc[metrics_df['Rating'].isin(excluded_ratings), 'Retention_Priority'] = ''
     
     # Build final results DataFrame
     logger.debug("Building final results...")
@@ -939,12 +940,13 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                        for freq in ['Continuous', 'Regular', 'Seasonal', 'Annual', 'Inactive']}
         logger.info(f"Event frequency distribution: {freq_summary}")
         
-        # Activity rating summary
+        # Activity rating summary (hybrid AU/UK ratings)
         rating_counts = results_df['Rating'].value_counts()
-        rating_summary = {rating: rating_counts.get(rating, 0) 
-                         for rating in ['Active', 'Outreach', 'At Risk', 'Churned', 'Returned', 'New', 'Inactive']}
+        rating_summary = {rating: rating_counts.get(rating, 0)
+                         for rating in ['Active Paid', 'Active Free', 'Outreach', 'At Risk', 'Re-Activated',
+                                        'Churned', 'Suspended or Closed', 'Unactivated', 'Never Logged In', 'Never Transacted']}
         logger.info(f"Activity rating distribution: {rating_summary}")
-        
+
         # Retention Priority summary
         priority_counts = results_df['Retention_Priority'].value_counts()
         priority_summary = {}
@@ -953,12 +955,13 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             pct = (count / len(results_df) * 100) if len(results_df) > 0 else 0
             priority_summary[priority] = f"{count} ({pct:.1f}%)"
         logger.info(f"Retention priority distribution: {priority_summary}")
-        
-        # Churned accounts summary
-        churned_count = len(results_df[results_df['Rating'] == 'Churned'])
-        if churned_count > 0:
-            churned_pct = (churned_count / len(results_df) * 100)
-            logger.info(f"Churned accounts (excluded from priorities): {churned_count} ({churned_pct:.1f}%)")
+
+        # Excluded accounts summary
+        excluded_ratings = ['Churned', 'Suspended or Closed', 'Unactivated', 'Never Logged In', 'Never Transacted']
+        excluded_count = len(results_df[results_df['Rating'].isin(excluded_ratings)])
+        if excluded_count > 0:
+            excluded_pct = (excluded_count / len(results_df) * 100)
+            logger.info(f"Excluded accounts (no retention priority): {excluded_count} ({excluded_pct:.1f}%)")
         
         # Rapid Drop Alert summary
         if '_rapid_drop_alert' in results_df.columns:

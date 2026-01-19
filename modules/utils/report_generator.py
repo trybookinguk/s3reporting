@@ -183,19 +183,21 @@ def email_tier_updates_report(updates_df, csv_filename):
         logger.info(f"  Upgrades: {upgrades:,} accounts")
         logger.info(f"  Downgrades: {downgrades:,} accounts")
     
-    # Get top priority accounts (excluding churned accounts)
+    # Get top priority accounts (excluding inactive/churned accounts)
+    # Excluded ratings: Churned, Suspended or Closed, Unactivated, Never Logged In, Never Transacted
+    excluded_ratings = ['Churned', 'Suspended or Closed', 'Unactivated', 'Never Logged In', 'Never Transacted']
     logger.info("Identifying high-priority accounts...")
     very_high_accounts = updates_df[
-        (updates_df['Retention_Priority'] == 'Very High') & 
-        (updates_df['Rating'] != 'Churned')
+        (updates_df['Retention_Priority'] == 'Very High') &
+        (~updates_df['Rating'].isin(excluded_ratings))
     ].nlargest(10, '_retention_priority_score')
     high_accounts = updates_df[
-        (updates_df['Retention_Priority'] == 'High') & 
-        (updates_df['Rating'] != 'Churned')
+        (updates_df['Retention_Priority'] == 'High') &
+        (~updates_df['Rating'].isin(excluded_ratings))
     ].nlargest(10, '_retention_priority_score')
-    
-    # Count churned accounts (they have empty retention priority)
-    churned_count = len(updates_df[updates_df['Rating'] == 'Churned'])
+
+    # Count excluded accounts (they have empty retention priority)
+    churned_count = len(updates_df[updates_df['Rating'].isin(excluded_ratings)])
     
     action_required = priority_counts.get('Very High', 0) + priority_counts.get('High', 0)
     logger.info(f"Action required for {action_required:,} accounts (Very High + High priority)")
@@ -257,11 +259,11 @@ High: {priority_counts.get('High', 0):,} accounts
 Medium: {priority_counts.get('Medium', 0):,} accounts
 Low: {priority_counts.get('Low', 0):,} accounts
 
-Churned (No Priority): {churned_count:,} accounts - Excluded from CS workflows
+Excluded (No Priority): {churned_count:,} accounts - Churned/Suspended/Unactivated/Never Transacted
 
 Action required for {priority_counts.get('Very High', 0) + priority_counts.get('High', 0):,} accounts (Very High + High priority)
 
-Note: Churned accounts are excluded from standard CS workflows and priority scoring
+Note: Excluded accounts (Churned, Suspended, Unactivated, Never Logged In, Never Transacted) are excluded from CS workflows
 
 Best regards,
 TryBooking Reporting System
@@ -334,22 +336,22 @@ TryBooking Reporting System
 <th>Note</th>
 </tr>
 <tr>
-<td><span style="color: #9e9e9e;">Churned (No Priority)</span></td>
+<td><span style="color: #9e9e9e;">Excluded (No Priority)</span></td>
 <td>{churned_count:,}</td>
-<td>Retention Priority field is empty - Excluded from CS workflows</td>
+<td>Churned/Suspended/Unactivated/Never Transacted - Excluded from CS workflows</td>
 </tr>
 </table>
 
-<p style="margin-top: 10px;"><em>Total Churned Accounts: {churned_count:,}</em></p>
+<p style="margin-top: 10px;"><em>Total Excluded Accounts: {churned_count:,}</em></p>
 
 <p><strong>Action required for {priority_counts.get('Very High', 0) + priority_counts.get('High', 0):,} accounts</strong> (Very High + High priority)</p>
-<p style="font-size: 10pt; color: #666;">Note: Churned accounts are automatically excluded from standard CS workflows regardless of tier or revenue drop.</p>
+<p style="font-size: 10pt; color: #666;">Note: Excluded accounts (Churned, Suspended, Unactivated, Never Logged In, Never Transacted) are excluded from standard CS workflows.</p>
 """
     
     if very_high_table_html:
         body_html += f"""
 <h3>Top Very High Priority Accounts</h3>
-<p>These accounts require immediate attention (churned accounts excluded):</p>
+<p>These accounts require immediate attention (excluded accounts omitted):</p>
 {very_high_table_html}
 """
     

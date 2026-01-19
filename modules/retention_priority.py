@@ -43,12 +43,23 @@ def calculate_retention_priorities(df):
     }
     
     # Define rating severity (vectorized mapping)
+    # Hybrid AU/UK rating values
     rating_severity = {
+        # Excluded from priority scoring
         "Churned": -1,
-        "At Risk": 5,     # Reduced from 7
-        "Outreach": 3,    # Reduced from 4
-        "New": 2,         # Reduced from 3
-        "Returned": 1,
+        "Suspended or Closed": -1,
+        "Unactivated": -1,
+        "Never Logged In": -1,
+        "Never Transacted": -1,
+        # Active priority ratings
+        "At Risk": 5,
+        "Outreach": 3,
+        "Re-Activated": 2,  # Was "Returned" - renamed to match AU
+        "Active Paid": 0,
+        "Active Free": 0,
+        # Legacy values for backwards compatibility
+        "Returned": 2,
+        "New": 2,
         "Active": 0,
         "Inactive": 0
     }
@@ -194,7 +205,7 @@ def calculate_retention_priorities(df):
         (df['Event_Frequency_Current'] == 'Annual') &
         df['months_active_current'].notna() &
         (~df['has_event_creation_current']) &
-        (df['Rating'] != 'Churned')
+        (~df['Rating'].isin(['Churned', 'Suspended or Closed', 'Unactivated', 'Never Logged In', 'Never Transacted']))
     )
     
     if annual_mask.any():

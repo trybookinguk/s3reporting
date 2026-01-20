@@ -1,0 +1,57 @@
+name: Regional Industry Analysis
+
+on:
+  workflow_dispatch:      # Manual trigger only
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3 pandas requests pytz python-dateutil
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Cache S3 files
+        uses: actions/cache@v3
+        with:
+          path: .cache
+          key: s3-cache-${{ runner.os }}-${{ steps.date.outputs.date }}-regional
+          restore-keys: |
+            s3-cache-${{ runner.os }}-${{ steps.date.outputs.date }}-
+            s3-cache-${{ runner.os }}-
+
+      - name: Run Wales & NI Industry Analysis
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_KEY }}
+        run: |
+          python3 analyse_wales_ni_sectors.py
+
+      - name: List generated files
+        if: always()
+        run: |
+          echo "=== Generated report files ==="
+          ls -la wales_ni*.csv 2>/dev/null || echo "No Wales/NI files found"
+
+      - name: Upload Regional Analysis Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regional-analysis-${{ steps.date.outputs.date }}
+          path: |
+            wales_ni*.csv
+          retention-days: 90

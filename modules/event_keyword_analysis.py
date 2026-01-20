@@ -1136,6 +1136,7 @@ def generate_focused_keyword_report(
         - 'by_industry': Industry breakdown for each keyword
         - 'by_session_month': Events by session month for each keyword
         - 'by_onsale_month': Events by on-sale month for each keyword
+        - 'co_occurring_keywords': Words that appear alongside each targeted keyword
     """
     # Aggregate to event level with industry
     events_df = _aggregate_events(booking_df, include_industry=True)
@@ -1172,6 +1173,7 @@ def generate_focused_keyword_report(
         'by_industry': [],
         'by_session_month': [],
         'by_onsale_month': [],
+        'co_occurring_keywords': [],
     }
 
     for keyword, keyword_norm in zip(keywords, keywords_normalised):
@@ -1249,6 +1251,33 @@ def generate_focused_keyword_report(
                         'Total Fees': round(month_events['total_fees'].sum() if 'total_fees' in month_events.columns else 0, 2),
                         '% of Keyword Events': round(len(month_events) / event_count * 100, 1),
                     })
+
+        # Co-occurring keywords analysis - what other words appear with this keyword
+        co_occurring = defaultdict(lambda: {'count': 0, 'fees': 0.0, 'revenue': 0.0})
+        for _, row in keyword_events.iterrows():
+            event_keywords = row['keywords']
+            fees = row.get('total_fees', 0) or 0
+            revenue = row.get('total_revenue', 0) or 0
+
+            for other_kw in event_keywords:
+                # Skip the target keyword itself
+                if other_kw != keyword_norm:
+                    co_occurring[other_kw]['count'] += 1
+                    co_occurring[other_kw]['fees'] += fees
+                    co_occurring[other_kw]['revenue'] += revenue
+
+        # Sort by count and add top co-occurring keywords
+        sorted_co_occurring = sorted(co_occurring.items(), key=lambda x: x[1]['count'], reverse=True)
+        for rank, (other_kw, stats) in enumerate(sorted_co_occurring[:50], 1):
+            results['co_occurring_keywords'].append({
+                'Target Keyword': keyword,
+                'Rank': rank,
+                'Co-occurring Keyword': other_kw,
+                'Event Count': stats['count'],
+                'Total Fees': round(stats['fees'], 2),
+                'Total Revenue': round(stats['revenue'], 2),
+                '% of Target Events': round(stats['count'] / event_count * 100, 1),
+            })
 
     # Convert to DataFrames
     output = {}

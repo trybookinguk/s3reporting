@@ -10,18 +10,20 @@ Usage:
 """
 
 import os
-import pandas as pd
 from datetime import datetime
-from modules.utils.config import UK_TZ
-from modules.utils.data_loader import (
-    load_accounts,
-    load_booking_data,
-    filter_successful_transactions,
-)
+
+import pandas as pd
+
 from modules.uk_regional_segmentation import (
+    VALID_UK_POSTCODE_AREAS,
     extract_postcode_areas_vectorized,
     get_regions_vectorized,
-    VALID_UK_POSTCODE_AREAS,
+)
+from modules.utils.config import UK_TZ
+from modules.utils.data_loader import (
+    filter_successful_transactions,
+    load_accounts,
+    load_booking_data,
 )
 
 
@@ -278,10 +280,4 @@ def main():
 
 
 if __name__ == "__main__":
-        print("-" * 50)
-        for _, row in overall.iterrows():
-            print(f"  {row['Industry']:<35} {row['Accounts']:>5} accounts  £{row['Fees']:>10,.2f}")
-
-
-if __name__ == '__main__':
     main()

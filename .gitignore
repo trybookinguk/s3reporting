@@ -23,3 +23,6 @@ google-credentials.json
 # Report outputs
 ppc_report_*.csv
 /reports/
+
+# macOS
+.DS_Store

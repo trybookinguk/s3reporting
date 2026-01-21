@@ -103,14 +103,14 @@ def main():
             print(f"\nBy Industry (sorted by fees):")
             print("-" * 50)
 
-            industry_summary = region_accounts.groupby('Industry', dropna=False).agg({
+            industry_summary = region_accounts.groupby('Industry', dropna=False, observed=False).agg({
                 account_id_col: 'count',
                 'Total_Fees': 'sum',
                 'Total_Revenue': 'sum',
                 'Total_Tickets': 'sum'
             }).reset_index()
             industry_summary.columns = ['Industry', 'Accounts', 'Fees', 'Revenue', 'Tickets']
-            industry_summary['Industry'] = industry_summary['Industry'].fillna('Unspecified')
+            industry_summary['Industry'] = industry_summary['Industry'].astype(object).fillna('Unspecified')
             industry_summary = industry_summary.sort_values('Fees', ascending=False)
 
             total_fees = industry_summary['Fees'].sum()
@@ -130,14 +130,14 @@ def main():
     print("=" * 70)
 
     if 'Industry' in wales_ni.columns:
-        combined_summary = wales_ni.groupby(['Region', 'Industry'], dropna=False).agg({
+        combined_summary = wales_ni.groupby(['Region', 'Industry'], dropna=False, observed=False).agg({
             account_id_col: 'count',
             'Total_Fees': 'sum',
             'Total_Revenue': 'sum',
             'Total_Tickets': 'sum'
         }).reset_index()
         combined_summary.columns = ['Region', 'Industry', 'Accounts', 'Fees', 'Revenue', 'Tickets']
-        combined_summary['Industry'] = combined_summary['Industry'].fillna('Unspecified')
+        combined_summary['Industry'] = combined_summary['Industry'].astype(object).fillna('Unspecified')
         combined_summary = combined_summary.sort_values(['Region', 'Fees'], ascending=[True, False])
 
         # Save combined
@@ -145,12 +145,12 @@ def main():
         print("Saved: wales_ni_combined_industries.csv")
 
         # Print top 10 overall
-        overall = wales_ni.groupby('Industry', dropna=False).agg({
+        overall = wales_ni.groupby('Industry', dropna=False, observed=False).agg({
             account_id_col: 'count',
             'Total_Fees': 'sum',
         }).reset_index()
         overall.columns = ['Industry', 'Accounts', 'Fees']
-        overall['Industry'] = overall['Industry'].fillna('Unspecified')
+        overall['Industry'] = overall['Industry'].astype(object).fillna('Unspecified')
         overall = overall.sort_values('Fees', ascending=False).head(10)
 
         print("\nTop 10 Industries (Wales + NI combined, by fees):")

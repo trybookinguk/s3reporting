@@ -5,6 +5,9 @@ Regional Industry Analysis Report for TryBooking UK.
 Analyses industry sectors for clients in specific regions (Wales, Northern Ireland, etc.).
 Outputs CSV files with account counts, fees, and revenue by industry for each region.
 
+Filters to 2025 transactions only and uses both account postcodes and event postcodes
+to determine regional assignment.
+
 Usage:
     python3 analyse_wales_ni_sectors.py
 """
@@ -26,6 +29,9 @@ from modules.utils.data_loader import (
     load_booking_data,
 )
 
+# Year to filter transactions for
+TARGET_YEAR = 2025
+
 
 def main():
     print("Loading data...")
@@ -41,34 +47,108 @@ def main():
     if "BookingTransactionId" in booking_df.columns:
         booking_df = booking_df.drop_duplicates(subset=["BookingTransactionId"])
     booking_df = filter_successful_transactions(booking_df)
-    print(f"  Booking records loaded: {len(booking_df):,}")
+    print(f"  Booking records loaded (all time): {len(booking_df):,}")
 
-    # Add region to accounts based on postcode
+    # Filter to TARGET_YEAR transactions only
+    if "TransactionDate" in booking_df.columns:
+        booking_df["TransactionDate"] = pd.to_datetime(
+            booking_df["TransactionDate"], errors="coerce", utc=True
+        )
+        booking_df = booking_df[
+            booking_df["TransactionDate"].dt.year == TARGET_YEAR
+        ].copy()
+        print(f"  Booking records ({TARGET_YEAR} only): {len(booking_df):,}")
+
+    # === REGIONAL ASSIGNMENT ===
+    # We identify Wales/NI accounts using BOTH:
+    # 1. Account postcode (where the organiser is based)
+    # 2. Event postcode (where they run events)
+    # An account is included if EITHER postcode is in Wales/NI
+
+    # Get account ID column
+    account_id_col = "AccountId" if "AccountId" in accounts_df.columns else "Id"
+
+    # Step 1: Identify accounts with Wales/NI account postcodes
     postcode_col = (
         "Postcode" if "Postcode" in accounts_df.columns else "AccountPostcode"
     )
     if postcode_col not in accounts_df.columns:
-        print(f"  Warning: No postcode column found in accounts")
+        print("  Warning: No postcode column found in accounts")
         return
 
     accounts_df["PostcodeArea"] = extract_postcode_areas_vectorized(
         accounts_df[postcode_col]
     )
-    accounts_df["Region"] = get_regions_vectorized(accounts_df["PostcodeArea"])
+    accounts_df["Region_Account"] = get_regions_vectorized(accounts_df["PostcodeArea"])
 
     # Filter invalid UK postcodes
     accounts_df.loc[
-        ~accounts_df["PostcodeArea"].isin(VALID_UK_POSTCODE_AREAS), "Region"
+        ~accounts_df["PostcodeArea"].isin(VALID_UK_POSTCODE_AREAS), "Region_Account"
     ] = None
 
-    # Filter to Wales and Northern Ireland
-    wales_ni = accounts_df[
-        accounts_df["Region"].isin(["Wales", "Northern Ireland"])
-    ].copy()
-    print(f"\nAccounts in Wales & NI: {len(wales_ni):,}")
+    wales_ni_by_account = set(
+        accounts_df[accounts_df["Region_Account"].isin(["Wales", "Northern Ireland"])][
+            account_id_col
+        ].unique()
+    )
+    print(f"\n  Accounts with Wales/NI account postcode: {len(wales_ni_by_account):,}")
 
-    # Get account ID column
-    account_id_col = "AccountId" if "AccountId" in accounts_df.columns else "Id"
+    # Step 2: Identify accounts with Wales/NI event postcodes
+    wales_ni_by_event = set()
+    if "EventPostcode" in booking_df.columns:
+        booking_df["EventPostcodeArea"] = extract_postcode_areas_vectorized(
+            booking_df["EventPostcode"]
+        )
+        booking_df["Region_Event"] = get_regions_vectorized(
+            booking_df["EventPostcodeArea"]
+        )
+
+        # Filter invalid UK postcodes
+        booking_df.loc[
+            ~booking_df["EventPostcodeArea"].isin(VALID_UK_POSTCODE_AREAS),
+            "Region_Event",
+        ] = None
+
+        # Get accounts that have run events in Wales/NI
+        wales_ni_events = booking_df[
+            booking_df["Region_Event"].isin(["Wales", "Northern Ireland"])
+        ]
+        wales_ni_by_event = set(wales_ni_events["AccountId"].unique())
+        print(f"  Accounts with Wales/NI event postcodes: {len(wales_ni_by_event):,}")
+
+    # Step 3: Combine both sources
+    all_wales_ni_accounts = wales_ni_by_account | wales_ni_by_event
+    print(f"  Combined unique accounts: {len(all_wales_ni_accounts):,}")
+
+    # Filter accounts to Wales/NI
+    wales_ni = accounts_df[
+        accounts_df[account_id_col].isin(all_wales_ni_accounts)
+    ].copy()
+
+    # Determine the primary region for each account
+    # Priority: Account postcode > Event postcode (most common event region)
+    def get_primary_region(account_id, account_region):
+        """Get primary region, preferring account postcode over event postcode."""
+        if pd.notna(account_region) and account_region in ["Wales", "Northern Ireland"]:
+            return account_region
+        # Fall back to most common event region
+        if "Region_Event" in booking_df.columns:
+            account_events = booking_df[
+                (booking_df["AccountId"] == account_id)
+                & (booking_df["Region_Event"].isin(["Wales", "Northern Ireland"]))
+            ]
+            if len(account_events) > 0:
+                return account_events["Region_Event"].mode().iloc[0]
+        return "Unknown"
+
+    wales_ni["Region"] = wales_ni.apply(
+        lambda row: get_primary_region(row[account_id_col], row.get("Region_Account")),
+        axis=1,
+    )
+
+    # Filter out any that ended up with Unknown region (shouldn't happen but safety check)
+    wales_ni = wales_ni[wales_ni["Region"].isin(["Wales", "Northern Ireland"])].copy()
+    print(f"\nAccounts in Wales & NI (final): {len(wales_ni):,}")
 
     # Calculate fees per account from booking data
     fee_columns = ["BookingFee", "CardFee", "ProcessingFee", "TicketFee"]

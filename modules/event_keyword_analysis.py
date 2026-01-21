@@ -900,11 +900,11 @@ def analyse_keywords_by_industry(booking_df: pd.DataFrame, top_n: int = 100) -> 
     """
     Analyse which industries/sectors specific keywords come from.
 
-    For each keyword, shows breakdown by Industry with event counts, fees, and revenue.
+    For each keyword, shows breakdown by Industry and SubIndustry with event counts, fees, and revenue.
     Useful for understanding which sectors drive specific event types (e.g., balls, concerts).
 
     Args:
-        booking_df: Booking DataFrame with EventName, Industry, fee columns
+        booking_df: Booking DataFrame with EventName, Industry, SubIndustry, fee columns
         top_n: Number of top keywords to analyse
 
     Returns:
@@ -915,6 +915,8 @@ def analyse_keywords_by_industry(booking_df: pd.DataFrame, top_n: int = 100) -> 
 
     if len(events_df) == 0 or 'Industry' not in events_df.columns:
         return pd.DataFrame()
+
+    has_subindustry = 'SubIndustry' in events_df.columns
 
     # Extract keywords
     events_df['keywords'] = events_df['EventName'].apply(extract_keywords)
@@ -939,11 +941,18 @@ def analyse_keywords_by_industry(booking_df: pd.DataFrame, top_n: int = 100) -> 
         if len(keyword_events) == 0:
             continue
 
-        # Group by industry
-        for industry, group in keyword_events.groupby('Industry', dropna=False):
-            industry_name = industry if pd.notna(industry) else 'Unspecified'
+        # Group by industry (and subindustry if available)
+        group_cols = ['Industry', 'SubIndustry'] if has_subindustry else ['Industry']
+        for group_key, group in keyword_events.groupby(group_cols, dropna=False):
+            if has_subindustry:
+                industry, subindustry = group_key
+                industry_name = industry if pd.notna(industry) else 'Unspecified'
+                subindustry_name = subindustry if pd.notna(subindustry) else 'Unspecified'
+            else:
+                industry_name = group_key if pd.notna(group_key) else 'Unspecified'
+                subindustry_name = None
 
-            results.append({
+            row_data = {
                 'Keyword': keyword,
                 'Industry': industry_name,
                 'Event Count': len(group),
@@ -955,10 +964,23 @@ def analyse_keywords_by_industry(booking_df: pd.DataFrame, top_n: int = 100) -> 
                     (group['total_fees'].sum() / keyword_fees[keyword] * 100)
                     if keyword_fees[keyword] > 0 and 'total_fees' in group.columns else 0, 1
                 ),
-            })
+            }
+
+            if has_subindustry:
+                row_data['SubIndustry'] = subindustry_name
+
+            results.append(row_data)
 
     df = pd.DataFrame(results)
     if len(df) > 0:
+        # Reorder columns to put SubIndustry after Industry
+        if has_subindustry and 'SubIndustry' in df.columns:
+            cols = list(df.columns)
+            cols.remove('SubIndustry')
+            industry_idx = cols.index('Industry')
+            cols.insert(industry_idx + 1, 'SubIndustry')
+            df = df[cols]
+
         # Sort by keyword total fees, then by industry contribution
         df = df.sort_values(['Keyword Total Fees', '% of Keyword Fees'], ascending=[False, False])
 
@@ -1091,6 +1113,14 @@ def analyse_detailed_temporal_patterns(booking_df: pd.DataFrame, top_n: int = 10
         else:
             top_industries = 'N/A'
 
+        # Top subindustries for this keyword
+        has_subindustry = 'SubIndustry' in keyword_events.columns
+        if has_subindustry:
+            subindustry_counts = keyword_events['SubIndustry'].value_counts().head(3)
+            top_subindustries = ', '.join([str(sub) for sub in subindustry_counts.index if pd.notna(sub)])
+        else:
+            top_subindustries = 'N/A'
+
         results.append({
             'Keyword': keyword,
             'Event Count': event_count,
@@ -1105,6 +1135,7 @@ def analyse_detailed_temporal_patterns(booking_df: pd.DataFrame, top_n: int = 10
             'Lead Time 75th %ile (days)': p75_lead,
             'Recommended Lead (weeks)': recommended_lead_weeks,
             'Top Industries': top_industries,
+            'Top SubIndustries': top_subindustries,
         })
 
     return pd.DataFrame(results)
@@ -1119,11 +1150,13 @@ def generate_focused_keyword_report(
     Generate a focused analysis report for specific keywords.
 
     Provides detailed breakdown for specified keywords including:
-    - Industry sector breakdown
+    - Industry and SubIndustry sector breakdown
     - Monthly distribution by session date
     - Monthly distribution by on-sale date
     - Lead time statistics
     - Year-over-year comparison if data spans multiple years
+
+    Each keyword gets its own output folder when output_file is specified.
 
     Args:
         booking_df: Booking DataFrame
@@ -1138,6 +1171,8 @@ def generate_focused_keyword_report(
         - 'by_onsale_month': Events by on-sale month for each keyword
         - 'co_occurring_keywords': Words that appear alongside each targeted keyword
     """
+    import os
+
     # Aggregate to event level with industry
     events_df = _aggregate_events(booking_df, include_industry=True)
 
@@ -1154,6 +1189,7 @@ def generate_focused_keyword_report(
     has_event_date = 'EventDate' in events_df.columns
     has_first_sale = 'first_sale' in events_df.columns
     has_industry = 'Industry' in events_df.columns
+    has_subindustry = 'SubIndustry' in events_df.columns
 
     # Parse dates
     if has_event_date:
@@ -1176,6 +1212,9 @@ def generate_focused_keyword_report(
         'co_occurring_keywords': [],
     }
 
+    # Track per-keyword results for separate folder output
+    keyword_results = {}
+
     for keyword, keyword_norm in zip(keywords, keywords_normalised):
         # Find events containing this keyword
         mask = events_df['keywords'].apply(lambda kws: keyword_norm in kws)
@@ -1184,6 +1223,15 @@ def generate_focused_keyword_report(
         if len(keyword_events) == 0:
             print(f"  Warning: No events found for keyword '{keyword}'")
             continue
+
+        # Initialise per-keyword storage
+        keyword_results[keyword] = {
+            'summary': [],
+            'by_industry': [],
+            'by_session_month': [],
+            'by_onsale_month': [],
+            'co_occurring_keywords': [],
+        }
 
         event_count = len(keyword_events)
         total_fees = keyword_events['total_fees'].sum() if 'total_fees' in keyword_events.columns else 0
@@ -1201,7 +1249,7 @@ def generate_focused_keyword_report(
             median_lead = None
 
         # Summary row
-        results['summary'].append({
+        summary_row = {
             'Keyword': keyword,
             'Event Count': event_count,
             'Total Fees': round(total_fees, 2),
@@ -1209,48 +1257,68 @@ def generate_focused_keyword_report(
             'Total Tickets': int(total_tickets),
             'Avg Lead Time (days)': avg_lead,
             'Median Lead Time (days)': median_lead,
-        })
+        }
+        results['summary'].append(summary_row)
+        keyword_results[keyword]['summary'].append(summary_row)
 
-        # Industry breakdown
+        # Industry breakdown (with SubIndustry if available)
         if has_industry:
-            for industry, group in keyword_events.groupby('Industry', dropna=False):
-                industry_name = industry if pd.notna(industry) else 'Unspecified'
-                results['by_industry'].append({
+            group_cols = ['Industry', 'SubIndustry'] if has_subindustry else ['Industry']
+            for group_key, group in keyword_events.groupby(group_cols, dropna=False):
+                if has_subindustry:
+                    industry, subindustry = group_key
+                    industry_name = industry if pd.notna(industry) else 'Unspecified'
+                    subindustry_name = subindustry if pd.notna(subindustry) else 'Unspecified'
+                else:
+                    industry_name = group_key if pd.notna(group_key) else 'Unspecified'
+                    subindustry_name = None
+
+                row_data = {
                     'Keyword': keyword,
                     'Industry': industry_name,
                     'Event Count': len(group),
                     'Total Fees': round(group['total_fees'].sum() if 'total_fees' in group.columns else 0, 2),
                     'Total Revenue': round(group['total_revenue'].sum() if 'total_revenue' in group.columns else 0, 2),
                     '% of Keyword Events': round(len(group) / event_count * 100, 1),
-                })
+                }
+
+                if has_subindustry:
+                    row_data['SubIndustry'] = subindustry_name
+
+                results['by_industry'].append(row_data)
+                keyword_results[keyword]['by_industry'].append(row_data)
 
         # Session month breakdown
         if has_event_date:
             for month in range(1, 13):
                 month_events = keyword_events[keyword_events['session_month'] == month]
                 if len(month_events) > 0:
-                    results['by_session_month'].append({
+                    row_data = {
                         'Keyword': keyword,
                         'Month': month,
                         'Month Name': calendar.month_abbr[month],
                         'Event Count': len(month_events),
                         'Total Fees': round(month_events['total_fees'].sum() if 'total_fees' in month_events.columns else 0, 2),
                         '% of Keyword Events': round(len(month_events) / event_count * 100, 1),
-                    })
+                    }
+                    results['by_session_month'].append(row_data)
+                    keyword_results[keyword]['by_session_month'].append(row_data)
 
         # On-sale month breakdown
         if has_first_sale:
             for month in range(1, 13):
                 month_events = keyword_events[keyword_events['onsale_month'] == month]
                 if len(month_events) > 0:
-                    results['by_onsale_month'].append({
+                    row_data = {
                         'Keyword': keyword,
                         'Month': month,
                         'Month Name': calendar.month_abbr[month],
                         'Event Count': len(month_events),
                         'Total Fees': round(month_events['total_fees'].sum() if 'total_fees' in month_events.columns else 0, 2),
                         '% of Keyword Events': round(len(month_events) / event_count * 100, 1),
-                    })
+                    }
+                    results['by_onsale_month'].append(row_data)
+                    keyword_results[keyword]['by_onsale_month'].append(row_data)
 
         # Co-occurring keywords analysis - what other words appear with this keyword
         co_occurring = defaultdict(lambda: {'count': 0, 'fees': 0.0, 'revenue': 0.0})
@@ -1269,7 +1337,7 @@ def generate_focused_keyword_report(
         # Sort by count and add top co-occurring keywords
         sorted_co_occurring = sorted(co_occurring.items(), key=lambda x: x[1]['count'], reverse=True)
         for rank, (other_kw, stats) in enumerate(sorted_co_occurring[:50], 1):
-            results['co_occurring_keywords'].append({
+            row_data = {
                 'Target Keyword': keyword,
                 'Rank': rank,
                 'Co-occurring Keyword': other_kw,
@@ -1277,21 +1345,54 @@ def generate_focused_keyword_report(
                 'Total Fees': round(stats['fees'], 2),
                 'Total Revenue': round(stats['revenue'], 2),
                 '% of Target Events': round(stats['count'] / event_count * 100, 1),
-            })
+            }
+            results['co_occurring_keywords'].append(row_data)
+            keyword_results[keyword]['co_occurring_keywords'].append(row_data)
 
     # Convert to DataFrames
     output = {}
     for key, rows in results.items():
         if rows:
             df = pd.DataFrame(rows)
+
+            # Reorder columns to put SubIndustry after Industry for industry breakdown
+            if key == 'by_industry' and has_subindustry and 'SubIndustry' in df.columns:
+                cols = list(df.columns)
+                cols.remove('SubIndustry')
+                industry_idx = cols.index('Industry')
+                cols.insert(industry_idx + 1, 'SubIndustry')
+                df = df[cols]
+
             output[key] = df
 
-            # Save to CSV if output_file specified
-            if output_file:
-                base_name = output_file.rsplit('.', 1)[0]
-                csv_file = f"{base_name}_focused_{key}.csv"
-                df.to_csv(csv_file, index=False, float_format='%.2f')
-                print(f"  Saved: {csv_file}")
+    # Save to separate folders per keyword if output_file specified
+    if output_file:
+        base_name = output_file.rsplit('.', 1)[0]
+        base_dir = os.path.dirname(base_name) or '.'
+
+        for keyword, kw_results in keyword_results.items():
+            # Create folder for this keyword
+            keyword_folder = os.path.join(base_dir, f"keyword_{keyword.lower().replace(' ', '_')}")
+            os.makedirs(keyword_folder, exist_ok=True)
+
+            print(f"\n  Keyword: {keyword}")
+            print(f"  Folder: {keyword_folder}/")
+
+            for key, rows in kw_results.items():
+                if rows:
+                    df = pd.DataFrame(rows)
+
+                    # Reorder columns to put SubIndustry after Industry for industry breakdown
+                    if key == 'by_industry' and has_subindustry and 'SubIndustry' in df.columns:
+                        cols = list(df.columns)
+                        cols.remove('SubIndustry')
+                        industry_idx = cols.index('Industry')
+                        cols.insert(industry_idx + 1, 'SubIndustry')
+                        df = df[cols]
+
+                    csv_file = os.path.join(keyword_folder, f"{key}.csv")
+                    df.to_csv(csv_file, index=False, float_format='%.2f')
+                    print(f"    - {key}.csv")
 
     return output
 

@@ -1,17 +1,17 @@
 name: Keyword Analysis Report
 
 on:
-  workflow_dispatch:      # Manual trigger only
+  workflow_dispatch: # Manual trigger only
     inputs:
       keywords:
-        description: 'Comma-separated keywords for focused analysis (leave empty for full report)'
+        description: "Comma-separated keywords for focused analysis (leave empty for full report)"
         required: false
-        default: ''
+        default: ""
         type: string
       top_n:
-        description: 'Number of top keywords to analyse'
+        description: "Number of top keywords to analyse"
         required: false
-        default: '100'
+        default: "100"
         type: string
 
 jobs:
@@ -25,7 +25,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -74,6 +74,14 @@ jobs:
           ls -la *_focused_*.csv 2>/dev/null || echo "No focused report files found"
           ls -la *_keywords_*.csv 2>/dev/null || echo "No keyword CSV files found"
           ls -la *_popularity_*.csv 2>/dev/null || echo "No popularity files found"
+          echo "=== Keyword folders (focused analysis) ==="
+          ls -la keyword_*/ 2>/dev/null || echo "No keyword folders found"
+          for dir in keyword_*/; do
+            if [ -d "$dir" ]; then
+              echo "--- $dir ---"
+              ls -la "$dir"
+            fi
+          done 2>/dev/null || true
 
       - name: Upload Keyword Analysis Report
         uses: actions/upload-artifact@v4
@@ -85,4 +93,5 @@ jobs:
             *_keywords_*.csv
             *_popularity_*.csv
             *_focused_*.csv
+            keyword_*/
           retention-days: 90

@@ -19,7 +19,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install boto3 pandas requests
+        run: pip install boto3 pandas requests pytz
 
       - name: Get current date
         id: date

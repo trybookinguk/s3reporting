@@ -2116,43 +2116,43 @@ def generate_focused_keyword_report(
             month_names = {m: calendar.month_abbr[m] for m in range(1, 13)}
             month_names["Total"] = "Total"
 
-            # Session month crosstab
+            # Session month crosstab (industry rows x month columns)
             if has_event_date:
                 ct = pd.crosstab(
-                    kw_events_copy["session_month"],
                     kw_events_copy["_industry_label"],
+                    kw_events_copy["session_month"],
                     margins=True,
                     margins_name="Total",
                 )
-                ct.index = ct.index.map(lambda x: month_names.get(x, x))
-                ct.index.name = "Month"
-                # Sort columns by total descending (excluding Total column)
-                col_order = (
-                    ct.loc["Total"]
+                ct.columns = ct.columns.map(lambda x: month_names.get(x, x))
+                ct.index.name = "Industry"
+                # Sort rows by total descending (excluding Total row)
+                row_order = (
+                    ct["Total"]
                     .drop("Total")
                     .sort_values(ascending=False)
                     .index.tolist()
                 )
-                ct = ct[col_order + ["Total"]]
+                ct = ct.loc[row_order + ["Total"]]
                 keyword_results[keyword]["by_session_month_by_industry"] = ct
 
-            # On-sale month crosstab
+            # On-sale month crosstab (industry rows x month columns)
             if has_first_sale:
                 ct = pd.crosstab(
-                    kw_events_copy["onsale_month"],
                     kw_events_copy["_industry_label"],
+                    kw_events_copy["onsale_month"],
                     margins=True,
                     margins_name="Total",
                 )
-                ct.index = ct.index.map(lambda x: month_names.get(x, x))
-                ct.index.name = "Month"
-                col_order = (
-                    ct.loc["Total"]
+                ct.columns = ct.columns.map(lambda x: month_names.get(x, x))
+                ct.index.name = "Industry"
+                row_order = (
+                    ct["Total"]
                     .drop("Total")
                     .sort_values(ascending=False)
                     .index.tolist()
                 )
-                ct = ct[col_order + ["Total"]]
+                ct = ct.loc[row_order + ["Total"]]
                 keyword_results[keyword]["by_onsale_month_by_industry"] = ct
 
         # Co-occurring keywords analysis - what other words appear with this keyword

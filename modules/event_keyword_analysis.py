@@ -2102,16 +2102,16 @@ def generate_focused_keyword_report(
         if industry_filters and has_industry:
             # Build industry label for each event
             kw_events_copy = keyword_events.copy()
+            ind = kw_events_copy["Industry"].astype(str).replace("nan", "Unspecified")
             if has_subindustry:
-                kw_events_copy["_industry_label"] = (
-                    kw_events_copy["Industry"].fillna("Unspecified")
-                    + " > "
-                    + kw_events_copy["SubIndustry"].fillna("Unspecified")
+                subind = (
+                    kw_events_copy["SubIndustry"]
+                    .astype(str)
+                    .replace("nan", "Unspecified")
                 )
+                kw_events_copy["_industry_label"] = ind + " > " + subind
             else:
-                kw_events_copy["_industry_label"] = kw_events_copy["Industry"].fillna(
-                    "Unspecified"
-                )
+                kw_events_copy["_industry_label"] = ind
 
             month_names = {m: calendar.month_abbr[m] for m in range(1, 13)}
             month_names["Total"] = "Total"

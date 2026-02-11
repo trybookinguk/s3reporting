@@ -34,7 +34,6 @@ from datetime import datetime
 import pandas as pd
 
 from modules.event_keyword_analysis import (
-    KEYWORD_INDUSTRY_FILTERS,
     analyse_detailed_temporal_patterns,
     analyse_keywords_by_industry,
     analyse_monthly_event_popularity,
@@ -171,13 +170,11 @@ def main():
         print(f"Generating focused report for keywords: {', '.join(keywords)}")
         print("-" * 70)
 
-        industry_filters = KEYWORD_INDUSTRY_FILTERS if args.industry_filter else None
-
         results = generate_focused_keyword_report(
             booking_df,
             keywords=keywords,
             output_file=output_file,
-            industry_filters=industry_filters,
+            industry_filters=args.industry_filter,
         )
 
         if results:

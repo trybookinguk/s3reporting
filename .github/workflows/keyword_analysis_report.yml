@@ -13,6 +13,11 @@ on:
         required: false
         default: "100"
         type: string
+      industry_filter:
+        description: "Enable industry-filtered temporal analysis for focused keywords"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   generate-report:
@@ -62,6 +67,11 @@ jobs:
             CMD="$CMD --keywords \"$KEYWORDS\""
           else
             echo "Running full keyword analysis report..."
+          fi
+
+          if [ "${{ github.event.inputs.industry_filter }}" == "true" ]; then
+            echo "Industry-filtered temporal analysis enabled"
+            CMD="$CMD --industry-filter"
           fi
 
           eval $CMD

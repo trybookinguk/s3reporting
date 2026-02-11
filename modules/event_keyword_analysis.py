@@ -797,52 +797,16 @@ _PHRASE_PATTERNS = [
 YEAR_PATTERN = re.compile(r"^(19|20)\d{2}$")
 NON_ALPHA_PATTERN = re.compile(r"[^a-z\s]")
 
-# Industry filter configuration for focused keyword analysis.
-# Maps keyword names to lists of industry groups for targeted temporal analysis.
-# Each group defines a label and the Industry/SubIndustry values that constitute it.
-# If 'sub_industries' is None, all SubIndustries for that Industry are included.
-KEYWORD_INDUSTRY_FILTERS = {
-    "concert": [
-        {
-            "label": "Education > Independent",
-            "industry": "Education",
-            "sub_industries": ["Independent", "Grammar", "Prep", "Senior"],
-        },
-        {
-            "label": "Music > Choir",
-            "industry": "Music",
-            "sub_industries": ["Choir"],
-        },
-        {
-            "label": "Music > Unspecified",
-            "industry": "Music",
-            "sub_industries": ["Unspecified"],
-        },
-    ],
-    "musical": [
-        {
-            "label": "Education > Independent",
-            "industry": "Education",
-            "sub_industries": ["Independent", "Grammar", "Prep", "Senior"],
-        },
-        {
-            "label": "Education > State",
-            "industry": "Education",
-            "sub_industries": ["State", "Grammar", "Primary", "Secondary"],
-        },
-    ],
-    "ball": [
-        {
-            "label": "Education > Independent",
-            "industry": "Education",
-            "sub_industries": ["Independent", "Grammar", "Prep", "Senior"],
-        },
-        {
-            "label": "Charity",
-            "industry": "Charity",
-            "sub_industries": None,  # All sub-industries
-        },
-    ],
+# Industry label clustering for temporal crosstabs.
+# Maps exact "Industry > SubIndustry" labels to a consolidated label.
+# Any label not listed here is kept as-is.
+INDUSTRY_LABEL_CLUSTERS = {
+    "Education > Independent - Grammar": "Education > Independent",
+    "Education > Independent School - Prep": "Education > Independent",
+    "Education > Independent School - Senior": "Education > Independent",
+    "Education > State School - Grammar": "Education > State",
+    "Education > State School - Primary": "Education > State",
+    "Education > State School - Secondary": "Education > State",
 }
 
 
@@ -2109,7 +2073,9 @@ def generate_focused_keyword_report(
                     .astype(str)
                     .replace("nan", "Unspecified")
                 )
-                kw_events_copy["_industry_label"] = ind + " > " + subind
+                kw_events_copy["_industry_label"] = (ind + " > " + subind).replace(
+                    INDUSTRY_LABEL_CLUSTERS
+                )
             else:
                 kw_events_copy["_industry_label"] = ind
 

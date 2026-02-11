@@ -1948,10 +1948,6 @@ def generate_focused_keyword_report(
         "co_occurring_keywords": [],
     }
 
-    if industry_filters:
-        results["by_session_month_by_industry"] = []
-        results["by_onsale_month_by_industry"] = []
-
     # Track per-keyword results for separate folder output
     keyword_results = {}
 
@@ -1972,9 +1968,8 @@ def generate_focused_keyword_report(
             "by_onsale_month": [],
             "co_occurring_keywords": [],
         }
-        if industry_filters:
-            keyword_results[keyword]["by_session_month_by_industry"] = []
-            keyword_results[keyword]["by_onsale_month_by_industry"] = []
+        # Crosstab entries (by_session_month_by_industry, by_onsale_month_by_industry)
+        # are added as DataFrames directly later if industry_filters is True
 
         event_count = len(keyword_events)
         total_fees = (
@@ -2103,121 +2098,62 @@ def generate_focused_keyword_report(
                     results["by_onsale_month"].append(row_data)
                     keyword_results[keyword]["by_onsale_month"].append(row_data)
 
-        # Industry-specific temporal analysis (by session month and on-sale month
-        # for each Industry/SubIndustry pair)
+        # Industry-specific temporal crosstabs (month rows x industry columns)
         if industry_filters and has_industry:
-            group_cols = (
-                ["Industry", "SubIndustry"] if has_subindustry else ["Industry"]
-            )
-
-            for group_key, filtered_events in keyword_events.groupby(
-                group_cols, dropna=False
-            ):
-                if has_subindustry:
-                    industry_val, subindustry_val = group_key
-                    industry_name = (
-                        industry_val if pd.notna(industry_val) else "Unspecified"
-                    )
-                    subindustry_name = (
-                        subindustry_val if pd.notna(subindustry_val) else "Unspecified"
-                    )
-                    group_label = f"{industry_name} > {subindustry_name}"
-                else:
-                    industry_name = group_key if pd.notna(group_key) else "Unspecified"
-                    group_label = industry_name
-
-                filtered_count = len(filtered_events)
-                filtered_fees = (
-                    filtered_events["total_fees"].sum()
-                    if "total_fees" in filtered_events.columns
-                    else 0
+            # Build industry label for each event
+            kw_events_copy = keyword_events.copy()
+            if has_subindustry:
+                kw_events_copy["_industry_label"] = (
+                    kw_events_copy["Industry"].fillna("Unspecified")
+                    + " > "
+                    + kw_events_copy["SubIndustry"].fillna("Unspecified")
+                )
+            else:
+                kw_events_copy["_industry_label"] = kw_events_copy["Industry"].fillna(
+                    "Unspecified"
                 )
 
-                # Session month breakdown for this industry group
-                if has_event_date:
-                    for month in range(1, 13):
-                        month_events = filtered_events[
-                            filtered_events["session_month"] == month
-                        ]
-                        if len(month_events) > 0:
-                            row_data = {
-                                "Keyword": keyword,
-                                "Industry": industry_name,
-                            }
-                            if has_subindustry:
-                                row_data["SubIndustry"] = subindustry_name
-                            row_data.update(
-                                {
-                                    "Month": month,
-                                    "Month Name": calendar.month_abbr[month],
-                                    "Event Count": len(month_events),
-                                    "Total Fees": round(
-                                        month_events["total_fees"].sum()
-                                        if "total_fees" in month_events.columns
-                                        else 0,
-                                        2,
-                                    ),
-                                    "Total Revenue": round(
-                                        month_events["total_revenue"].sum()
-                                        if "total_revenue" in month_events.columns
-                                        else 0,
-                                        2,
-                                    ),
-                                    "% of Group Events": round(
-                                        len(month_events) / filtered_count * 100,
-                                        1,
-                                    ),
-                                    "Group Total Events": filtered_count,
-                                    "Group Total Fees": round(filtered_fees, 2),
-                                }
-                            )
-                            results["by_session_month_by_industry"].append(row_data)
-                            keyword_results[keyword][
-                                "by_session_month_by_industry"
-                            ].append(row_data)
+            month_names = {m: calendar.month_abbr[m] for m in range(1, 13)}
+            month_names["Total"] = "Total"
 
-                # On-sale month breakdown for this industry group
-                if has_first_sale:
-                    for month in range(1, 13):
-                        month_events = filtered_events[
-                            filtered_events["onsale_month"] == month
-                        ]
-                        if len(month_events) > 0:
-                            row_data = {
-                                "Keyword": keyword,
-                                "Industry": industry_name,
-                            }
-                            if has_subindustry:
-                                row_data["SubIndustry"] = subindustry_name
-                            row_data.update(
-                                {
-                                    "Month": month,
-                                    "Month Name": calendar.month_abbr[month],
-                                    "Event Count": len(month_events),
-                                    "Total Fees": round(
-                                        month_events["total_fees"].sum()
-                                        if "total_fees" in month_events.columns
-                                        else 0,
-                                        2,
-                                    ),
-                                    "Total Revenue": round(
-                                        month_events["total_revenue"].sum()
-                                        if "total_revenue" in month_events.columns
-                                        else 0,
-                                        2,
-                                    ),
-                                    "% of Group Events": round(
-                                        len(month_events) / filtered_count * 100,
-                                        1,
-                                    ),
-                                    "Group Total Events": filtered_count,
-                                    "Group Total Fees": round(filtered_fees, 2),
-                                }
-                            )
-                            results["by_onsale_month_by_industry"].append(row_data)
-                            keyword_results[keyword][
-                                "by_onsale_month_by_industry"
-                            ].append(row_data)
+            # Session month crosstab
+            if has_event_date:
+                ct = pd.crosstab(
+                    kw_events_copy["session_month"],
+                    kw_events_copy["_industry_label"],
+                    margins=True,
+                    margins_name="Total",
+                )
+                ct.index = ct.index.map(lambda x: month_names.get(x, x))
+                ct.index.name = "Month"
+                # Sort columns by total descending (excluding Total column)
+                col_order = (
+                    ct.loc["Total"]
+                    .drop("Total")
+                    .sort_values(ascending=False)
+                    .index.tolist()
+                )
+                ct = ct[col_order + ["Total"]]
+                keyword_results[keyword]["by_session_month_by_industry"] = ct
+
+            # On-sale month crosstab
+            if has_first_sale:
+                ct = pd.crosstab(
+                    kw_events_copy["onsale_month"],
+                    kw_events_copy["_industry_label"],
+                    margins=True,
+                    margins_name="Total",
+                )
+                ct.index = ct.index.map(lambda x: month_names.get(x, x))
+                ct.index.name = "Month"
+                col_order = (
+                    ct.loc["Total"]
+                    .drop("Total")
+                    .sort_values(ascending=False)
+                    .index.tolist()
+                )
+                ct = ct[col_order + ["Total"]]
+                keyword_results[keyword]["by_onsale_month_by_industry"] = ct
 
         # Co-occurring keywords analysis - what other words appear with this keyword
         co_occurring = defaultdict(lambda: {"count": 0, "fees": 0.0, "revenue": 0.0})
@@ -2281,11 +2217,17 @@ def generate_focused_keyword_report(
             print(f"\n  Keyword: {keyword}")
             print(f"  Folder: {keyword_folder}/")
 
-            for key, rows in kw_results.items():
-                if rows:
-                    df = pd.DataFrame(rows)
+            for key, value in kw_results.items():
+                # Crosstab results are already DataFrames
+                if isinstance(value, pd.DataFrame):
+                    df = value
+                    csv_file = os.path.join(keyword_folder, f"{key}.csv")
+                    df.to_csv(csv_file, float_format="%.2f")
+                    print(f"    - {key}.csv")
+                elif value:
+                    df = pd.DataFrame(value)
 
-                    # Reorder columns to put SubIndustry after Industry for industry breakdown
+                    # Reorder columns to put SubIndustry after Industry
                     if (
                         key == "by_industry"
                         and has_subindustry
@@ -2300,9 +2242,6 @@ def generate_focused_keyword_report(
                     csv_file = os.path.join(keyword_folder, f"{key}.csv")
                     df.to_csv(csv_file, index=False, float_format="%.2f")
                     print(f"    - {key}.csv")
-
-            # Save industry-specific temporal files (already handled by
-            # the main loop above since keys are in kw_results)
 
     return output
 

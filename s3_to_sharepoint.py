@@ -22,11 +22,13 @@ from pathlib import Path
 import msal
 import requests
 
-# Use existing S3 config and client
-from modules.utils.config import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET
-from modules.utils.data_loader import get_s3_client
-
 # === Configuration ===
+
+# AWS — match the credential lookup pattern from modules/utils/config.py
+# without importing it (which pulls in pytz, pandas, etc.)
+AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY")
+AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_KEY")
+S3_BUCKET = "produk-rdsextracts-438255373632"
 
 # Azure / Microsoft Graph
 AZURE_TENANT_ID = os.environ.get("AZURE_TENANT_ID")
@@ -86,6 +88,21 @@ def graph_headers(token):
 
 
 # === S3 Operations ===
+
+def get_s3_client():
+    """Create and return a boto3 S3 client."""
+    import boto3
+
+    if not all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]):
+        print("ERROR: AWS credentials not set. Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY")
+        sys.exit(1)
+
+    return boto3.client(
+        "s3",
+        aws_access_key_id=AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    )
+
 
 def list_s3_objects(s3_client, bucket):
     """List all objects in the S3 bucket, returning a dict of {key: etag}."""

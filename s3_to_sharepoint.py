@@ -279,7 +279,6 @@ def upload_large_file(token, drive_id, folder, key, file_path, file_size):
     body = {
         "item": {
             "@microsoft.graph.conflictBehavior": "replace",
-            "fileSize": file_size,
         }
     }
 

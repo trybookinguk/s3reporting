@@ -13,18 +13,31 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import sys
 import tempfile
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 
 import msal
 import requests
 
+# === Logging ===
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("s3-sharepoint-sync")
+
 # === Configuration ===
 
-# AWS — match the credential lookup pattern from modules/utils/config.py
+# AWS - match the credential lookup pattern from modules/utils/config.py
 # without importing it (which pulls in pytz, pandas, etc.)
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_KEY")
@@ -52,9 +65,33 @@ UPLOAD_CHUNK_SIZE = 3932160  # 3.75 MB (must be multiple of 320 KiB)
 MAX_RETRIES = 3
 RETRY_BACKOFF = 2  # seconds, doubled each retry
 
+# Concurrency - Graph API allows up to 20 concurrent requests per app
+MAX_WORKERS = int(os.environ.get("SYNC_MAX_WORKERS", "15"))
+
 # Manifest
 MANIFEST_DIR = Path(".sync_manifest")
 MANIFEST_FILE = MANIFEST_DIR / "s3_etags.json"
+
+
+def _fmt_size(size_bytes):
+    """Format a byte count as a human-readable string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+def _fmt_duration(seconds):
+    """Format seconds as a human-readable duration."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    secs = seconds % 60
+    return f"{minutes}m {secs:.0f}s"
 
 
 # === Authentication ===
@@ -62,7 +99,7 @@ MANIFEST_FILE = MANIFEST_DIR / "s3_etags.json"
 def authenticate_graph():
     """Authenticate to Microsoft Graph using client credentials and return an access token."""
     if not all([AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET]):
-        print("ERROR: Azure credentials not set. Required: AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET")
+        log.error("Azure credentials not set. Required: AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET")
         sys.exit(1)
 
     authority = f"https://login.microsoftonline.com/{AZURE_TENANT_ID}"
@@ -75,10 +112,10 @@ def authenticate_graph():
     result = app.acquire_token_for_client(scopes=GRAPH_SCOPE)
 
     if "access_token" not in result:
-        print(f"ERROR: Failed to authenticate: {result.get('error_description', result.get('error', 'Unknown error'))}")
+        log.error("Failed to authenticate: %s", result.get('error_description', result.get('error', 'Unknown error')))
         sys.exit(1)
 
-    print("Authenticated to Microsoft Graph successfully.")
+    log.info("Authenticated to Microsoft Graph.")
     return result["access_token"]
 
 
@@ -94,7 +131,7 @@ def get_s3_client():
     import boto3
 
     if not all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]):
-        print("ERROR: AWS credentials not set. Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY")
+        log.error("AWS credentials not set. Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY")
         sys.exit(1)
 
     return boto3.client(
@@ -105,16 +142,38 @@ def get_s3_client():
 
 
 def list_s3_objects(s3_client, bucket):
-    """List all objects in the S3 bucket, returning a dict of {key: etag}."""
+    """List all objects in the S3 bucket, returning a dict of {key: (etag, size)}.
+
+    For BookingDataAll files, only the latest one is included since each
+    contains all historical data up to that point (older ones are redundant).
+    """
     objects = {}
+    booking_data_all = {}
+    total_size = 0
     paginator = s3_client.get_paginator("list_objects_v2")
 
-    print(f"Listing objects in s3://{bucket}/ ...")
+    log.info("Listing objects in s3://%s/ ...", bucket)
     for page in paginator.paginate(Bucket=bucket):
         for obj in page.get("Contents", []):
-            objects[obj["Key"]] = obj["ETag"]
+            key = obj["Key"]
+            size = obj["Size"]
+            if "BookingDataAll-TBUK.csv" in key:
+                booking_data_all[key] = (obj["ETag"], size)
+            else:
+                objects[key] = (obj["ETag"], size)
+                total_size += size
 
-    print(f"  Found {len(objects)} objects in S3.")
+    # Keep only the latest BookingDataAll (filename sorts chronologically)
+    if booking_data_all:
+        latest_key = sorted(booking_data_all.keys())[-1]
+        etag, size = booking_data_all[latest_key]
+        objects[latest_key] = (etag, size)
+        total_size += size
+        skipped = len(booking_data_all) - 1
+        log.info("BookingDataAll: keeping latest (%s, %s), skipping %d older files.",
+                 latest_key, _fmt_size(size), skipped)
+
+    log.info("Found %d objects to sync (%s total).", len(objects), _fmt_size(total_size))
     return objects
 
 
@@ -127,7 +186,8 @@ def download_s3_file(s3_client, bucket, key, dest_path):
         except Exception as e:
             if attempt < MAX_RETRIES - 1:
                 wait = RETRY_BACKOFF * (2 ** attempt)
-                print(f"  Retry {attempt + 1}/{MAX_RETRIES} for S3 download of {key} (waiting {wait}s): {e}")
+                log.warning("Retry %d/%d for S3 download of %s (waiting %ds): %s",
+                            attempt + 1, MAX_RETRIES, key, wait, e)
                 time.sleep(wait)
             else:
                 raise
@@ -140,10 +200,10 @@ def load_manifest():
     if MANIFEST_FILE.exists():
         with open(MANIFEST_FILE, "r") as f:
             manifest = json.load(f)
-        print(f"Loaded manifest with {len(manifest)} entries.")
+        log.info("Loaded manifest with %d entries.", len(manifest))
         return manifest
 
-    print("No existing manifest found — all files will be uploaded.")
+    log.info("No existing manifest found - all files will be uploaded.")
     return {}
 
 
@@ -152,7 +212,7 @@ def save_manifest(manifest):
     MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
     with open(MANIFEST_FILE, "w") as f:
         json.dump(manifest, f, indent=2)
-    print(f"Saved manifest with {len(manifest)} entries.")
+    log.info("Saved manifest with %d entries.", len(manifest))
 
 
 # === SharePoint Upload Operations ===
@@ -166,13 +226,13 @@ def _request_with_retry(method, url, **kwargs):
             # Retry on throttling (429) or server errors (5xx)
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", RETRY_BACKOFF * (2 ** attempt)))
-                print(f"  Throttled by Graph API, waiting {retry_after}s...")
+                log.warning("Throttled by Graph API, waiting %ds...", retry_after)
                 time.sleep(retry_after)
                 continue
             if response.status_code >= 500:
                 if attempt < MAX_RETRIES - 1:
                     wait = RETRY_BACKOFF * (2 ** attempt)
-                    print(f"  Server error {response.status_code}, retrying in {wait}s...")
+                    log.warning("Server error %d, retrying in %ds...", response.status_code, wait)
                     time.sleep(wait)
                     continue
 
@@ -181,7 +241,7 @@ def _request_with_retry(method, url, **kwargs):
         except requests.exceptions.RequestException as e:
             if attempt < MAX_RETRIES - 1:
                 wait = RETRY_BACKOFF * (2 ** attempt)
-                print(f"  Request failed, retrying in {wait}s: {e}")
+                log.warning("Request failed, retrying in %ds: %s", wait, e)
                 time.sleep(wait)
             else:
                 raise
@@ -190,8 +250,7 @@ def _request_with_retry(method, url, **kwargs):
 
 
 def upload_small_file(token, drive_id, folder, key, data):
-    """Upload a file ≤ 4MB using a simple PUT request."""
-    # Build the path: folder/key (preserving S3 directory structure)
+    """Upload a file <= 4MB using a simple PUT request."""
     path = f"{folder}/{key}" if folder else key
     url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{path}:/content"
 
@@ -203,7 +262,7 @@ def upload_small_file(token, drive_id, folder, key, data):
     if response.status_code in (200, 201):
         return True
 
-    print(f"  ERROR uploading {key}: {response.status_code} — {response.text[:200]}")
+    log.error("Upload failed for %s: %d - %s", key, response.status_code, response.text[:200])
     return False
 
 
@@ -224,7 +283,7 @@ def upload_large_file(token, drive_id, folder, key, file_path, file_size):
     response = _request_with_retry(requests.post, url, headers=headers, json=body)
 
     if response.status_code not in (200, 201):
-        print(f"  ERROR creating upload session for {key}: {response.status_code} — {response.text[:200]}")
+        log.error("Upload session failed for %s: %d - %s", key, response.status_code, response.text[:200])
         return False
 
     upload_url = response.json()["uploadUrl"]
@@ -232,10 +291,13 @@ def upload_large_file(token, drive_id, folder, key, file_path, file_size):
     # Upload in chunks
     with open(file_path, "rb") as f:
         offset = 0
+        chunk_num = 0
+        total_chunks = (file_size + UPLOAD_CHUNK_SIZE - 1) // UPLOAD_CHUNK_SIZE
         while offset < file_size:
             chunk_end = min(offset + UPLOAD_CHUNK_SIZE, file_size) - 1
             chunk_data = f.read(UPLOAD_CHUNK_SIZE)
             chunk_length = len(chunk_data)
+            chunk_num += 1
 
             chunk_headers = {
                 "Content-Length": str(chunk_length),
@@ -247,8 +309,12 @@ def upload_large_file(token, drive_id, folder, key, file_path, file_size):
             )
 
             if chunk_response.status_code not in (200, 201, 202):
-                print(f"  ERROR uploading chunk for {key}: {chunk_response.status_code} — {chunk_response.text[:200]}")
+                log.error("Chunk upload failed for %s (chunk %d/%d): %d - %s",
+                          key, chunk_num, total_chunks, chunk_response.status_code, chunk_response.text[:200])
                 return False
+
+            pct = int((chunk_end + 1) / file_size * 100)
+            log.debug("  %s: chunk %d/%d (%d%%)", key, chunk_num, total_chunks, pct)
 
             offset += chunk_length
 
@@ -265,11 +331,11 @@ def delete_sharepoint_file(token, drive_id, folder, key):
     if response.status_code in (200, 204):
         return True
 
-    # 404 means already gone — not an error
+    # 404 means already gone - not an error
     if response.status_code == 404:
         return True
 
-    print(f"  ERROR deleting {key}: {response.status_code} — {response.text[:200]}")
+    log.error("Delete failed for %s: %d - %s", key, response.status_code, response.text[:200])
     return False
 
 
@@ -277,9 +343,11 @@ def delete_sharepoint_file(token, drive_id, folder, key):
 
 def sync(dry_run=False):
     """Main sync: compare S3 ETags to manifest, upload changed files to SharePoint."""
+    sync_start = time.time()
+
     if not all([SHAREPOINT_SITE_ID, SHAREPOINT_DRIVE_ID]):
-        print("ERROR: SHAREPOINT_SITE_ID and SHAREPOINT_DRIVE_ID must be set.")
-        print("Run with --setup to discover these values.")
+        log.error("SHAREPOINT_SITE_ID and SHAREPOINT_DRIVE_ID must be set.")
+        log.error("Run with --setup to discover these values.")
         sys.exit(1)
 
     # Authenticate
@@ -294,10 +362,12 @@ def sync(dry_run=False):
     to_upload = []
     to_delete = []
     unchanged = 0
+    upload_size = 0
 
-    for key, etag in s3_objects.items():
+    for key, (etag, size) in s3_objects.items():
         if manifest.get(key) != etag:
-            to_upload.append(key)
+            to_upload.append((key, size))
+            upload_size += size
         else:
             unchanged += 1
 
@@ -305,88 +375,133 @@ def sync(dry_run=False):
         if key not in s3_objects:
             to_delete.append(key)
 
-    print(f"\nSync summary:")
-    print(f"  Unchanged: {unchanged}")
-    print(f"  To upload:  {len(to_upload)}")
-    print(f"  To delete:  {len(to_delete)}")
+    log.info("Sync summary: %d unchanged, %d to upload (%s), %d to delete.",
+             unchanged, len(to_upload), _fmt_size(upload_size), len(to_delete))
 
     if dry_run:
         if to_upload:
-            print("\nFiles to upload:")
-            for key in sorted(to_upload):
-                print(f"  + {key}")
+            log.info("Files to upload:")
+            for key, size in sorted(to_upload):
+                log.info("  + %s (%s)", key, _fmt_size(size))
         if to_delete:
-            print("\nFiles to delete:")
+            log.info("Files to delete:")
             for key in sorted(to_delete):
-                print(f"  - {key}")
-        print("\nDry run complete — no changes made.")
+                log.info("  - %s", key)
+        log.info("Dry run complete - no changes made.")
         return
 
     if not to_upload and not to_delete:
-        print("Nothing to do.")
+        log.info("Nothing to do.")
         return
 
-    # Process uploads
-    uploaded = 0
-    failed = 0
+    # Thread-safe state
+    lock = threading.Lock()
     new_manifest = dict(manifest)
+    uploaded = 0
+    uploaded_bytes = 0
+    failed = 0
+    deleted = 0
 
-    for i, key in enumerate(to_upload, 1):
-        print(f"[{i}/{len(to_upload)}] Uploading {key} ...")
-
+    def _upload_one(key, expected_size):
+        """Download from S3 and upload to SharePoint. Returns (key, success, file_size)."""
         with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp:
             tmp_path = tmp.name
 
         try:
+            t0 = time.time()
             download_s3_file(s3_client, S3_BUCKET, key, tmp_path)
             file_size = os.path.getsize(tmp_path)
+            dl_time = time.time() - t0
 
+            t1 = time.time()
             if file_size <= SMALL_FILE_LIMIT:
                 with open(tmp_path, "rb") as f:
                     data = f.read()
                 success = upload_small_file(token, SHAREPOINT_DRIVE_ID, SHAREPOINT_FOLDER, key, data)
             else:
                 success = upload_large_file(token, SHAREPOINT_DRIVE_ID, SHAREPOINT_FOLDER, key, tmp_path, file_size)
+            ul_time = time.time() - t1
 
             if success:
-                new_manifest[key] = s3_objects[key]
-                uploaded += 1
-            else:
-                failed += 1
+                log.debug("  %s: S3 download %.1fs, SharePoint upload %.1fs", key, dl_time, ul_time)
+
+            return key, success, file_size
 
         except Exception as e:
-            print(f"  ERROR: {e}")
-            failed += 1
+            log.error("Failed %s: %s", key, e)
+            return key, False, 0
         finally:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
 
-    # Process deletions
-    deleted = 0
-    for i, key in enumerate(to_delete, 1):
-        print(f"[{i}/{len(to_delete)}] Deleting {key} from SharePoint ...")
-        if delete_sharepoint_file(token, SHAREPOINT_DRIVE_ID, SHAREPOINT_FOLDER, key):
-            new_manifest.pop(key, None)
-            deleted += 1
-        else:
-            failed += 1
+    def _delete_one(key):
+        """Delete a file from SharePoint. Returns (key, success)."""
+        return key, delete_sharepoint_file(token, SHAREPOINT_DRIVE_ID, SHAREPOINT_FOLDER, key)
+
+    # Process uploads in parallel
+    log.info("Uploading %d files (%s) with %d workers...", len(to_upload), _fmt_size(upload_size), MAX_WORKERS)
+    upload_start = time.time()
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        futures = {pool.submit(_upload_one, key, size): key for key, size in to_upload}
+        for i, future in enumerate(as_completed(futures), 1):
+            key, success, file_size = future.result()
+            if success:
+                with lock:
+                    new_manifest[key] = s3_objects[key][0]  # store etag only
+                    uploaded += 1
+                    uploaded_bytes += file_size
+                log.info("[%d/%d] OK %s (%s)", i, len(to_upload), key, _fmt_size(file_size))
+            else:
+                with lock:
+                    failed += 1
+                log.error("[%d/%d] FAILED %s", i, len(to_upload), key)
+
+            # Progress summary every 50 files
+            if i % 50 == 0:
+                elapsed = time.time() - upload_start
+                rate = uploaded_bytes / elapsed if elapsed > 0 else 0
+                log.info("Progress: %d/%d done, %s uploaded, %s/s",
+                         i, len(to_upload), _fmt_size(uploaded_bytes), _fmt_size(rate))
+
+    upload_elapsed = time.time() - upload_start
+
+    # Process deletions in parallel
+    if to_delete:
+        log.info("Deleting %d files with %d workers...", len(to_delete), MAX_WORKERS)
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            futures = {pool.submit(_delete_one, key): key for key in to_delete}
+            for i, future in enumerate(as_completed(futures), 1):
+                key, success = future.result()
+                if success:
+                    with lock:
+                        new_manifest.pop(key, None)
+                        deleted += 1
+                    log.info("[%d/%d] Deleted %s", i, len(to_delete), key)
+                else:
+                    with lock:
+                        failed += 1
+                    log.error("[%d/%d] Delete FAILED %s", i, len(to_delete), key)
 
     # Save updated manifest
     save_manifest(new_manifest)
 
     # Final summary
-    print(f"\n{'=' * 40}")
-    print(f"Sync complete:")
-    print(f"  Uploaded: {uploaded}")
-    print(f"  Deleted:  {deleted}")
-    print(f"  Failed:   {failed}")
-    print(f"  Skipped:  {unchanged}")
-    print(f"{'=' * 40}")
+    total_elapsed = time.time() - sync_start
+    avg_rate = uploaded_bytes / upload_elapsed if upload_elapsed > 0 else 0
+
+    log.info("=" * 50)
+    log.info("Sync complete in %s", _fmt_duration(total_elapsed))
+    log.info("  Uploaded: %d files (%s at %s/s)", uploaded, _fmt_size(uploaded_bytes), _fmt_size(avg_rate))
+    log.info("  Deleted:  %d files", deleted)
+    log.info("  Failed:   %d files", failed)
+    log.info("  Skipped:  %d files (unchanged)", unchanged)
+    log.info("=" * 50)
 
     if failed > 0:
-        print(f"\nWARNING: {failed} operation(s) failed. These files will be retried on the next run.")
+        log.warning("%d operation(s) failed. These files will be retried on the next run.", failed)
 
 
 # === Setup Mode ===
@@ -417,7 +532,7 @@ def _list_folders(headers, drive_id, path="root"):
     response = requests.get(url, headers=headers)
 
     if response.status_code != 200:
-        # Filter may not be supported on all tenants — fall back to unfiltered
+        # Filter may not be supported on all tenants - fall back to unfiltered
         if path == "root":
             url = f"{GRAPH_BASE}/drives/{drive_id}/root/children?$select=name,id,folder,webUrl"
         else:
@@ -425,7 +540,7 @@ def _list_folders(headers, drive_id, path="root"):
         response = requests.get(url, headers=headers)
 
     if response.status_code != 200:
-        print(f"  ERROR listing folders: {response.status_code} — {response.text[:300]}")
+        log.error("Listing folders failed: %d - %s", response.status_code, response.text[:300])
         return []
 
     items = response.json().get("value", [])
@@ -484,7 +599,7 @@ def _browse_folders(headers, drive_id):
 
 def setup():
     """Interactive setup to discover SharePoint site and drive IDs, and browse for the target folder."""
-    print("=== S3 to SharePoint Sync — Setup ===\n")
+    print("=== S3 to SharePoint Sync - Setup ===\n")
 
     token = authenticate_graph()
     headers = graph_headers(token)
@@ -494,7 +609,7 @@ def setup():
     response = requests.get(f"{GRAPH_BASE}/sites?search=*", headers=headers)
 
     if response.status_code != 200:
-        print(f"ERROR fetching sites: {response.status_code} — {response.text[:300]}")
+        log.error("Fetching sites failed: %d - %s", response.status_code, response.text[:300])
         sys.exit(1)
 
     sites = response.json().get("value", [])
@@ -518,7 +633,7 @@ def setup():
     response = requests.get(f"{GRAPH_BASE}/sites/{site_id}/drives", headers=headers)
 
     if response.status_code != 200:
-        print(f"ERROR fetching drives: {response.status_code} — {response.text[:300]}")
+        log.error("Fetching drives failed: %d - %s", response.status_code, response.text[:300])
         sys.exit(1)
 
     drives = response.json().get("value", [])
@@ -556,7 +671,7 @@ def setup():
     if folder_path:
         print(f"  SHAREPOINT_FOLDER   = {folder_path}")
     else:
-        print(f"  SHAREPOINT_FOLDER   = (leave empty or omit — files go to the library root)")
+        print(f"  SHAREPOINT_FOLDER   = (leave empty or omit - files go to the library root)")
     print()
     print("The SHAREPOINT_FOLDER value is the exact path within the document")
     print("library. S3 file paths will be appended to it, e.g.:")
@@ -573,7 +688,11 @@ def main():
     parser = argparse.ArgumentParser(description="Sync S3 bucket to SharePoint via Microsoft Graph API")
     parser.add_argument("--setup", action="store_true", help="Discover SharePoint site and drive IDs")
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without uploading")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
 
     if args.setup:
         setup()

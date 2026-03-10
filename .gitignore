@@ -19,6 +19,7 @@ google-credentials.json
 # Environment files
 .env
 .env.local
+.envrc
 
 # Report outputs
 ppc_report_*.csv

@@ -59,14 +59,14 @@ GRAPH_SCOPE = ["https://graph.microsoft.com/.default"]
 
 # Upload thresholds
 SMALL_FILE_LIMIT = 4 * 1024 * 1024  # 4 MB
-UPLOAD_CHUNK_SIZE = 3932160  # 3.75 MB (must be multiple of 320 KiB)
+UPLOAD_CHUNK_SIZE = 32 * 320 * 1024  # 10 MiB — optimal per Graph API docs (multiple of 320 KiB)
 
 # Retry settings
 MAX_RETRIES = 3
 RETRY_BACKOFF = 2  # seconds, doubled each retry
 
 # Concurrency - Graph API allows up to 20 concurrent requests per app
-MAX_WORKERS = int(os.environ.get("SYNC_MAX_WORKERS", "15"))
+MAX_WORKERS = int(os.environ.get("SYNC_MAX_WORKERS", "10"))
 
 # Manifest
 MANIFEST_DIR = Path(".sync_manifest")
@@ -129,6 +129,7 @@ def graph_headers(token):
 def get_s3_client():
     """Create and return a boto3 S3 client."""
     import boto3
+    from botocore.config import Config
 
     if not all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]):
         log.error("AWS credentials not set. Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY")
@@ -138,6 +139,7 @@ def get_s3_client():
         "s3",
         aws_access_key_id=AWS_ACCESS_KEY_ID,
         aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        config=Config(max_pool_connections=MAX_WORKERS),
     )
 
 
@@ -277,6 +279,7 @@ def upload_large_file(token, drive_id, folder, key, file_path, file_size):
     body = {
         "item": {
             "@microsoft.graph.conflictBehavior": "replace",
+            "fileSize": file_size,
         }
     }
 
@@ -288,11 +291,13 @@ def upload_large_file(token, drive_id, folder, key, file_path, file_size):
 
     upload_url = response.json()["uploadUrl"]
 
-    # Upload in chunks
+    # Upload in chunks — log progress at INFO level for large files (>100 MB)
+    is_large = file_size > 100 * 1024 * 1024
     with open(file_path, "rb") as f:
         offset = 0
         chunk_num = 0
         total_chunks = (file_size + UPLOAD_CHUNK_SIZE - 1) // UPLOAD_CHUNK_SIZE
+        chunk_start_time = time.time()
         while offset < file_size:
             chunk_end = min(offset + UPLOAD_CHUNK_SIZE, file_size) - 1
             chunk_data = f.read(UPLOAD_CHUNK_SIZE)
@@ -314,7 +319,13 @@ def upload_large_file(token, drive_id, folder, key, file_path, file_size):
                 return False
 
             pct = int((chunk_end + 1) / file_size * 100)
-            log.debug("  %s: chunk %d/%d (%d%%)", key, chunk_num, total_chunks, pct)
+            if is_large and (chunk_num % 10 == 0 or pct == 100):
+                elapsed = time.time() - chunk_start_time
+                rate = (offset + chunk_length) / elapsed if elapsed > 0 else 0
+                log.info("  %s: %d%% (%s/%s, %s/s)",
+                         key, pct, _fmt_size(offset + chunk_length), _fmt_size(file_size), _fmt_size(rate))
+            else:
+                log.debug("  %s: chunk %d/%d (%d%%)", key, chunk_num, total_chunks, pct)
 
             offset += chunk_length
 

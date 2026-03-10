@@ -285,6 +285,14 @@ def upload_large_file(token, drive_id, folder, key, file_path, file_size):
 
     response = _request_with_retry(requests.post, url, headers=headers, json=body)
 
+    # 409 = stale upload session still active from a previous run; delete the file and retry
+    if response.status_code == 409:
+        log.warning("Stale upload session for %s, deleting existing file and retrying...", key)
+        delete_url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{path}"
+        _request_with_retry(requests.delete, delete_url, headers=graph_headers(token))
+        time.sleep(2)
+        response = _request_with_retry(requests.post, url, headers=headers, json=body)
+
     if response.status_code not in (200, 201):
         log.error("Upload session failed for %s: %d - %s", key, response.status_code, response.text[:200])
         return False

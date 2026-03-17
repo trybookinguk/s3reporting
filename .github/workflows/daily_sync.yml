@@ -59,6 +59,23 @@ jobs:
           restore-keys: |
             s3-cache-${{ runner.os }}-
 
+      # --- Dashboard Data Generation ---
+      - name: Generate dashboard data
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_KEY }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
+          DASHBOARD_SHAREPOINT_FOLDER: ${{ secrets.DASHBOARD_SHAREPOINT_FOLDER }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python generate_dashboard_data.py --dry-run --local-dir ./dashboard_output
+          else
+            python generate_dashboard_data.py
+          fi
+
       # --- S3 → SharePoint Sync ---
       - name: Run S3 to SharePoint sync
         env:

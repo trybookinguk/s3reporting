@@ -1,7 +1,23 @@
 {
   "description": "Account acquisition targets for TryBooking UK",
-  "updated": "2025-01-29",
+  "updated": "2026-03-17",
   "targets": {
+    "2026": {
+      "monthly": {
+        "January": "400",
+        "February": "500",
+        "March": "500",
+        "April": "500",
+        "May": "500",
+        "June": "500",
+        "July": "450",
+        "August": "300",
+        "September": "650",
+        "October": "650",
+        "November": "700",
+        "December": "350"
+      }
+    },
     "2025": {
       "monthly": {
         "January": "350",

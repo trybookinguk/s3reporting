@@ -1,0 +1,17 @@
+name: Export GA4 Creds
+on:
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Export GA4 Property ID
+        run: echo "$GA4_PROPERTY_ID"
+        env:
+          GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
+
+      - name: Export GA4 Service Account Key
+        run: echo "$GA4_SERVICE_ACCOUNT_KEY" | base64
+        env:
+          GA4_SERVICE_ACCOUNT_KEY: ${{ secrets.GA4_SERVICE_ACCOUNT_KEY }}

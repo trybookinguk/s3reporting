@@ -1,9 +1,9 @@
-name: Update Tiers, Ratings & Annual Events
+name: Daily Sync & Updates
 
 on:
   schedule:
-    - cron: '0 4 * * 1-5'  # Monday-Friday at 4:00 AM UTC
-  workflow_dispatch:      # Manual trigger
+    - cron: '0 2 * * 1-5'  # Monday-Friday at 02:00 UTC
+  workflow_dispatch:
     inputs:
       test_mode:
         description: 'Run in test mode (no Zoho updates)'
@@ -13,9 +13,18 @@ on:
         options:
           - 'true'
           - 'false'
+      dry_run:
+        description: 'Preview changes without uploading (SharePoint sync)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 jobs:
-  update-tiers:
+  daily-sync:
+    name: Daily Sync & Updates
     runs-on: ubuntu-latest
 
     steps:
@@ -30,22 +39,55 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install boto3 pandas requests pytz numpy scipy
+          pip install boto3 msal requests pandas pytz numpy scipy
 
       - name: Get current date
         id: date
         run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
+      - name: Restore sync manifest cache
+        uses: actions/cache@v3
+        with:
+          path: .sync_manifest
+          key: sharepoint-sync-manifest
+
       - name: Cache S3 files
         uses: actions/cache@v3
         with:
           path: .cache
-          # Cache key includes date to ensure fresh data each day
-          key: s3-cache-${{ runner.os }}-${{ steps.date.outputs.date }}-${{ hashFiles('**/zoho_tiers.py') }}
+          key: s3-cache-${{ runner.os }}-${{ steps.date.outputs.date }}
           restore-keys: |
-            s3-cache-${{ runner.os }}-${{ steps.date.outputs.date }}-
             s3-cache-${{ runner.os }}-
 
+      # --- S3 → SharePoint Sync ---
+      - name: Run S3 to SharePoint sync
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_KEY }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SHAREPOINT_SITE_ID: ${{ secrets.SHAREPOINT_SITE_ID }}
+          SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
+          SHAREPOINT_FOLDER: ${{ secrets.SHAREPOINT_FOLDER }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python s3_to_sharepoint.py --dry-run
+          else
+            python s3_to_sharepoint.py
+          fi
+
+      # --- Zoho Industry Sync ---
+      - name: Run Zoho Industry Sync
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_KEY }}
+          ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
+          ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
+          ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
+        run: python zoho_industry.py
+
+      # --- Zoho Tiers Update ---
       - name: Run Tier Update Script
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
@@ -58,7 +100,7 @@ jobs:
           MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
           TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
         run: python zoho_tiers.py
-      
+
       - name: List generated files
         if: always()
         run: |
@@ -67,7 +109,7 @@ jobs:
           echo ""
           echo "=== Industry revenue report files ==="
           ls -la industry_summary_*.csv *_current_*.csv *_current_new_*.csv 2>/dev/null || echo "No industry revenue files found"
-      
+
       - name: Upload Tier Report CSV
         uses: actions/upload-artifact@v4
         if: always()
@@ -75,7 +117,7 @@ jobs:
           name: tier-report
           path: tier_updates_*.csv
           retention-days: 30
-      
+
       - name: Upload Annual Events Report
         uses: actions/upload-artifact@v4
         if: always()
@@ -83,7 +125,7 @@ jobs:
           name: annual-events-report
           path: upcoming_annual_events_*.csv
           retention-days: 30
-      
+
       - name: Upload Industry Revenue Reports
         uses: actions/upload-artifact@v4
         if: always()

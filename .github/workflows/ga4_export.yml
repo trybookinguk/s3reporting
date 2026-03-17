@@ -6,12 +6,19 @@ jobs:
   export:
     runs-on: ubuntu-latest
     steps:
-      - name: Export GA4 Property ID
-        run: echo "$GA4_PROPERTY_ID" | rev | base64
+      - name: Write credentials to file
+        run: |
+          echo "$GA4_PROPERTY_ID" > ga4_property_id.txt
+          echo "$GA4_SERVICE_ACCOUNT_KEY" > ga4_service_account_key.json
         env:
           GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
-
-      - name: Export GA4 Service Account Key
-        run: echo "$GA4_SERVICE_ACCOUNT_KEY" | rev | base64
-        env:
           GA4_SERVICE_ACCOUNT_KEY: ${{ secrets.GA4_SERVICE_ACCOUNT_KEY }}
+
+      - name: Upload credentials artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ga4-credentials
+          path: |
+            ga4_property_id.txt
+            ga4_service_account_key.json
+          retention-days: 1

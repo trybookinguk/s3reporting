@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install boto3 msal requests pandas pytz numpy scipy
+          pip install boto3 msal requests pandas pytz numpy scipy google-analytics-data
 
       - name: Get current date
         id: date
@@ -69,6 +69,8 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
           DASHBOARD_SHAREPOINT_FOLDER: ${{ secrets.DASHBOARD_SHAREPOINT_FOLDER }}
+          GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
+          GA4_SERVICE_ACCOUNT_KEY: ${{ secrets.GA4_SERVICE_ACCOUNT_KEY }}
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             python generate_dashboard_data.py --dry-run --local-dir ./dashboard_output

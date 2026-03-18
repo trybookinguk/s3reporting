@@ -21,7 +21,7 @@ Output files (uploaded to SharePoint `Dashboard Data/` folder):
   - cohort_curves.json         — revenue trajectory by signup cohort and month-of-life
   - expansion_revenue.json     — revenue by account lifecycle stage (monthly)
   - concentration.json         — revenue/fee concentration by tier
-  - account_monthly.json       — per-account per-month aggregates (for date-range tier calc)
+  - account_daily.json         — compact per-account daily aggregates (for day-exact tier calc)
   - account_targets.json       — monthly acquisition targets
   - metadata.json              — generation timestamp and record counts
 
@@ -1383,43 +1383,62 @@ def build_concentration(bookings_df, accounts_df):
     return result
 
 
-def build_account_monthly(bookings_df):
+def build_account_daily(bookings_df):
     """
-    Build per-account per-month aggregates for arbitrary date-range tier calculation.
+    Build compact per-account daily aggregates for day-exact tier calculation.
 
-    Only includes months where the account had at least one transaction.
-    Fees are VAT-exclusive (stripped in _prepare_bookings).
+    Uses a sparse columnar format to minimise file size:
+      {
+        "epoch": "2014-07-18",
+        "12345": {"d": [0, 15, 42], "f": [45.20, 120.50, 89.00], "t": [12, 45, 30]}
+      }
 
-    Returns a list of dicts: [{account_id, year_month, fees, revenue, tickets,
-                               transactions, events}, ...]
+    Where:
+      - epoch: the earliest transaction date (day 0)
+      - d: array of integer day offsets from epoch (only days with transactions)
+      - f: fees ex-VAT for that day (matching index in d)
+      - t: tickets sold for that day (matching index in d)
+
+    The browser picks a reference date, calculates the 365-day window,
+    filters each account's d array to that range, and sums f and t.
+
+    Returns a dict (not a list) for direct JSON serialisation.
     """
-    log.info("Building account_monthly.json...")
+    log.info("Building account_daily.json...")
 
     bk = _prepare_bookings(bookings_df)
     bk["AccountId_int"] = pd.to_numeric(bk["AccountId"], errors="coerce")
     bk = bk[bk["AccountId_int"].notna()]
     bk["AccountId_int"] = bk["AccountId_int"].astype(int)
-    bk["year_month"] = pd.to_datetime(bk["txn_date"]).dt.to_period("M").astype(str)
 
-    grouped = bk.groupby(["AccountId_int", "year_month"]).agg(
+    # Aggregate to account-day level
+    grouped = bk.groupby(["AccountId_int", "txn_date"]).agg(
         fees=("TotalFees", "sum"),
-        revenue=("PaymentReceived", "sum"),
         tickets=("TicketQuantity", "sum"),
-        transactions=("TotalFees", "count"),
-        events=("EventId", "nunique"),
     ).reset_index()
 
-    grouped["fees"] = grouped["fees"].round(2)  # Already ex-VAT from _prepare_bookings
-    grouped["revenue"] = grouped["revenue"].round(2)
+    grouped["fees"] = grouped["fees"].round(2)
     grouped["tickets"] = grouped["tickets"].astype(int)
-    grouped["transactions"] = grouped["transactions"].astype(int)
-    grouped["events"] = grouped["events"].astype(int)
-    grouped = grouped.rename(columns={"AccountId_int": "account_id"})
 
-    records = grouped.to_dict("records")
-    log.info("  %d records across %d accounts",
-             len(records), grouped["account_id"].nunique())
-    return records
+    # Determine epoch (earliest transaction date)
+    epoch = grouped["txn_date"].min()
+    epoch_str = str(epoch)
+
+    # Build compact structure
+    result = {"epoch": epoch_str}
+
+    for aid, grp in grouped.groupby("AccountId_int"):
+        grp_sorted = grp.sort_values("txn_date")
+        days = [(d - epoch).days for d in grp_sorted["txn_date"]]
+        fees = [round(f, 2) for f in grp_sorted["fees"]]
+        tickets = [int(t) for t in grp_sorted["tickets"]]
+        result[str(aid)] = {"d": days, "f": fees, "t": tickets}
+
+    n_accounts = len(result) - 1  # Exclude the epoch key
+    n_entries = len(grouped)
+    log.info("  %d account-day entries across %d accounts (epoch: %s)",
+             n_entries, n_accounts, epoch_str)
+    return result
 
 
 def _fetch_ppc_ga4_data(bookings_df):
@@ -2350,7 +2369,7 @@ def generate(dry_run=False, local_dir=None):
         combined_bookings, accounts_df
     )
 
-    outputs["account_monthly.json"] = build_account_monthly(combined_bookings)
+    outputs["account_daily.json"] = build_account_daily(combined_bookings)
 
     outputs["account_targets.json"] = load_account_targets()
 

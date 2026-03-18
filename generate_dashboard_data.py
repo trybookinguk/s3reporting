@@ -327,7 +327,7 @@ def build_daily_metrics(accounts_df, bookings_df, start_date, end_date):
             bookings_df[col] = pd.to_numeric(bookings_df[col], errors="coerce").fillna(0)
     existing_fee_cols = [c for c in fee_cols if c in bookings_df.columns]
     if existing_fee_cols:
-        bookings_df["TotalFees"] = bookings_df[existing_fee_cols].sum(axis=1)
+        bookings_df["TotalFees"] = bookings_df[existing_fee_cols].sum(axis=1) / 1.20  # Ex-VAT
 
     # Daily account counts
     id_col = "Id" if "Id" in accounts_df.columns else "AccountId"
@@ -457,7 +457,7 @@ def build_daily_by_gateway(bookings_df, start_date, end_date):
             bookings_df[col] = pd.to_numeric(bookings_df[col], errors="coerce").fillna(0)
     existing = [c for c in fee_cols if c in bookings_df.columns]
     if existing:
-        bookings_df["TotalFees"] = bookings_df[existing].sum(axis=1)
+        bookings_df["TotalFees"] = bookings_df[existing].sum(axis=1) / 1.20  # Ex-VAT
 
     grouped = (
         bookings_df
@@ -522,7 +522,7 @@ def build_daily_by_industry(bookings_df, accounts_df, start_date, end_date):
             bookings_df[col] = pd.to_numeric(bookings_df[col], errors="coerce").fillna(0)
     existing = [c for c in fee_cols if c in bookings_df.columns]
     if existing:
-        bookings_df["TotalFees"] = bookings_df[existing].sum(axis=1)
+        bookings_df["TotalFees"] = bookings_df[existing].sum(axis=1) / 1.20  # Ex-VAT
 
     grouped = (
         bookings_df
@@ -588,7 +588,7 @@ def build_daily_by_region(bookings_df, start_date, end_date):
             bookings_df[col] = pd.to_numeric(bookings_df[col], errors="coerce").fillna(0)
     existing = [c for c in fee_cols if c in bookings_df.columns]
     if existing:
-        bookings_df["TotalFees"] = bookings_df[existing].sum(axis=1)
+        bookings_df["TotalFees"] = bookings_df[existing].sum(axis=1) / 1.20  # Ex-VAT
 
     # Map postcode area to named region
     bookings_df["named_region"] = bookings_df["region"].apply(postcode_area_to_region)
@@ -692,7 +692,7 @@ def _prepare_bookings(bookings_df):
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     existing = [c for c in fee_cols if c in df.columns]
     if existing:
-        df["TotalFees"] = df[existing].sum(axis=1)
+        df["TotalFees"] = df[existing].sum(axis=1) / 1.20  # Strip VAT — all fees ex-VAT
 
     return df
 
@@ -1301,10 +1301,7 @@ def build_concentration(bookings_df, accounts_df):
     metrics = lifetime.join(current, how="left").fillna(0)
     metrics = metrics[metrics["tickets_lifetime"] > 0]
 
-    # Strip VAT from revenue (matching tier_calculator_v2 logic)
-    VAT_RATE = 1.20
-    metrics["revenue_current"] = (metrics["revenue_current"] / VAT_RATE).round(2)
-    metrics["revenue_lifetime"] = (metrics["revenue_lifetime"] / VAT_RATE).round(2)
+    # Fees are already ex-VAT from _prepare_bookings — no further stripping needed
 
     # Activation mask
     activated = (metrics["tickets_current"] >= MIN_TICKETS_FOR_ACTIVE)
@@ -1391,7 +1388,7 @@ def build_account_monthly(bookings_df):
     Build per-account per-month aggregates for arbitrary date-range tier calculation.
 
     Only includes months where the account had at least one transaction.
-    Fees are VAT-inclusive (consistent with account_metrics.json).
+    Fees are VAT-exclusive (stripped in _prepare_bookings).
 
     Returns a list of dicts: [{account_id, year_month, fees, revenue, tickets,
                                transactions, events}, ...]
@@ -1412,7 +1409,7 @@ def build_account_monthly(bookings_df):
         events=("EventId", "nunique"),
     ).reset_index()
 
-    grouped["fees"] = grouped["fees"].round(2)
+    grouped["fees"] = grouped["fees"].round(2)  # Already ex-VAT from _prepare_bookings
     grouped["revenue"] = grouped["revenue"].round(2)
     grouped["tickets"] = grouped["tickets"].astype(int)
     grouped["transactions"] = grouped["transactions"].astype(int)
@@ -1977,10 +1974,9 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
     numeric_cols = metrics.select_dtypes(include="number").columns
     metrics[numeric_cols] = metrics[numeric_cols].fillna(0)
 
-    # Strip VAT from fee-based revenue (matching tier_calculator_v2)
-    VAT_RATE = 1.20
-    fees_ex_vat_current = (metrics["fees_current"] / VAT_RATE).round(2)
-    fees_ex_vat_lifetime = (metrics["fees_lifetime"] / VAT_RATE).round(2)
+    # Fees are already ex-VAT from _prepare_bookings — use directly for tier scoring
+    fees_ex_vat_current = metrics["fees_current"]
+    fees_ex_vat_lifetime = metrics["fees_lifetime"]
 
     # --- Composite tier scoring (v2) ---
     activated = metrics["tickets_current"] >= MIN_TICKETS_FOR_ACTIVE
@@ -2110,7 +2106,7 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
             row["signup_cohort"] = ""
             row["signup_year"] = None
 
-        # Metrics — current period (last 365 days)
+        # Metrics — current period (last 365 days), fees already ex-VAT from _prepare_bookings
         row["fees_current"] = round(float(metrics.at[aid, "fees_current"]), 2)
         row["revenue_current"] = round(float(metrics.at[aid, "revenue_current"]), 2)
         row["tickets_current"] = int(metrics.at[aid, "tickets_current"])

@@ -1128,23 +1128,36 @@ def build_expansion_revenue(bookings_df, accounts_df):
     accts["DateTimeCreated"] = pd.to_datetime(accts["DateTimeCreated"], errors="coerce", utc=True)
     accts["_id"] = _normalise_id(accts[id_col])
 
-    # Build account creation lookup
-    acct_created = accts.set_index("_id")["DateTimeCreated"].to_dict()
-
+    # Build account creation lookup — vectorised
     bk["_acct_id"] = _normalise_id(bk["AccountId"])
-    bk["txn_period"] = pd.to_datetime(bk["TransactionDate"]).dt.to_period("M")
+    acct_created_series = accts.set_index("_id")["DateTimeCreated"]
 
-    # Classify lifecycle stage
-    def _classify_row(row):
-        created = acct_created.get(row["_acct_id"])
-        if created is None or pd.isna(created):
-            return "Unknown"
-        txn_period = row["txn_period"]
-        created_period = created.to_period("M") if hasattr(created, "to_period") else pd.Period(str(created)[:7], freq="M")
-        months = (txn_period.year - created_period.year) * 12 + (txn_period.month - created_period.month)
-        return classify_lifecycle_stage(max(0, months))
+    # Map creation date to each booking row
+    bk["_created"] = bk["_acct_id"].map(acct_created_series)
 
-    bk["lifecycle_stage"] = bk.apply(_classify_row, axis=1)
+    # Vectorised month difference
+    txn_months = pd.to_datetime(bk["TransactionDate"]).dt.to_period("M")
+    created_months = pd.to_datetime(bk["_created"]).dt.to_period("M")
+    bk["_months_since"] = (
+        (txn_months.dt.year - created_months.dt.year) * 12 +
+        (txn_months.dt.month - created_months.dt.month)
+    ).clip(lower=0)
+
+    # Vectorised lifecycle stage classification
+    conditions = [
+        bk["_created"].isna(),
+        bk["_months_since"] == 0,
+        bk["_months_since"] <= 3,
+        bk["_months_since"] <= 12,
+    ]
+    choices = [
+        "Unknown",
+        "New Account (Month 0)",
+        "Ramping (Months 1-3)",
+        "First Year (Months 4-12)",
+    ]
+    bk["lifecycle_stage"] = np.select(conditions, choices, default="Mature (Year 2+)")
+    bk = bk.drop(columns=["_created", "_months_since"])
 
     # Also classify sales channel if available
     has_channel = "PaymentType" in bk.columns
@@ -1203,29 +1216,28 @@ def build_cohort_curves(bookings_df, accounts_df):
     accts["DateTimeCreated"] = pd.to_datetime(accts["DateTimeCreated"], errors="coerce", utc=True)
     accts["_id"] = _normalise_id(accts[id_col])
 
-    # Assign cohort quarter
+    # Assign cohort quarter and creation date — vectorised
     accts["cohort_q"] = pd.to_datetime(accts["DateTimeCreated"]).dt.to_period("Q").astype(str)
-    cohort_lookup = accts.set_index("_id")["cohort_q"].to_dict()
-    created_lookup = accts.set_index("_id")["DateTimeCreated"].to_dict()
+    cohort_series = accts.set_index("_id")["cohort_q"]
+    created_series = accts.set_index("_id")["DateTimeCreated"]
 
     # Total accounts per cohort (for activation rate)
     cohort_sizes = accts.groupby("cohort_q")["_id"].nunique().to_dict()
 
-    bk["cohort"] = bk["_acct_id"].map(cohort_lookup)
+    bk["cohort"] = bk["_acct_id"].map(cohort_series)
     bk = bk[bk["cohort"].notna()]
 
-    # Calculate month-of-life
-    def _month_of_life(row):
-        created = created_lookup.get(row["_acct_id"])
-        if created is None or pd.isna(created):
-            return None
-        txn_period = pd.to_datetime(row["TransactionDate"]).to_period("M")
-        created_period = created.to_period("M") if hasattr(created, "to_period") else pd.Period(str(created)[:7], freq="M")
-        return (txn_period.year - created_period.year) * 12 + (txn_period.month - created_period.month)
-
-    bk["month_of_life"] = bk.apply(_month_of_life, axis=1)
+    # Vectorised month-of-life calculation
+    bk["_created"] = bk["_acct_id"].map(created_series)
+    txn_periods = pd.to_datetime(bk["TransactionDate"]).dt.to_period("M")
+    created_periods = pd.to_datetime(bk["_created"]).dt.to_period("M")
+    bk["month_of_life"] = (
+        (txn_periods.dt.year - created_periods.dt.year) * 12 +
+        (txn_periods.dt.month - created_periods.dt.month)
+    )
     bk = bk[bk["month_of_life"].notna() & (bk["month_of_life"] >= 0) & (bk["month_of_life"] <= 24)]
     bk["month_of_life"] = bk["month_of_life"].astype(int)
+    bk = bk.drop(columns=["_created"])
 
     if len(bk) == 0:
         log.warning("No valid cohort data — skipping")
@@ -1862,6 +1874,7 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
     bk = bk[bk["AccountId_int"].notna()]
     bk["AccountId_int"] = bk["AccountId_int"].astype(int)
     bk["txn_dt"] = pd.to_datetime(bk["txn_date"])
+    bk["_txn_year"] = bk["txn_dt"].dt.year
 
     # --- Lifetime aggregates per account ---
     lifetime = bk.groupby("AccountId_int").agg(
@@ -1872,7 +1885,7 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
         events_lifetime=("EventId", "nunique"),
         first_txn=("TransactionDate", "min"),
         last_txn=("TransactionDate", "max"),
-        years_active=("txn_date", lambda x: x.apply(lambda d: d.year).nunique()),
+        years_active=("_txn_year", "nunique"),
     )
 
     # --- Current period (last 365 days) ---

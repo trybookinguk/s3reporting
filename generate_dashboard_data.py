@@ -213,12 +213,39 @@ def normalise_gateway(value):
     return s
 
 
+def normalise_gateway_series(series):
+    """Vectorised gateway normalisation for a pandas Series."""
+    s = pd.Series(series.astype(str).values, index=series.index).fillna("Unknown")
+    mask_default = s.str.contains("Default", case=False, na=False)
+    mask_stripe = s.str.contains("Stripe Connect", case=False, na=False)
+    s.loc[mask_default] = "TryBooking Gateway"
+    s.loc[mask_stripe] = "Stripe"
+    return s
+
+
 def extract_postcode_area(postcode):
     """Extract the letter prefix from a UK postcode (e.g. 'SW1A 1AA' → 'SW')."""
     if pd.isna(postcode):
         return None
     m = POSTCODE_AREA_RE.match(str(postcode).strip())
     return m.group(1).upper() if m else None
+
+
+def extract_postcode_area_series(series):
+    """Vectorised postcode area extraction for a pandas Series."""
+    s = pd.Series(series.values, index=series.index, dtype="object").fillna("").astype(str).str.strip().str.upper()
+    extracted = s.str.extract(r"^([A-Z]{1,2})\d", expand=False)
+    return extracted
+
+
+def classify_sales_channel_series(series):
+    """Vectorised sales channel classification for a pandas Series."""
+    s = pd.Series(series.values, index=series.index, dtype="object").fillna("").astype(str).str.upper().str.strip()
+    is_box_office = s.str.contains("CARD PRESENT", na=False) | (s == "CASH")
+    return pd.Series(
+        np.where(is_box_office, "Box Office", "Online"),
+        index=series.index,
+    )
 
 
 def _normalise_id(series):
@@ -444,7 +471,7 @@ def build_daily_by_gateway(bookings_df, start_date, end_date):
     # Handle categorical
     if bookings_df[gateway_col].dtype.name == "category":
         bookings_df[gateway_col] = bookings_df[gateway_col].astype(str)
-    bookings_df["gateway"] = bookings_df[gateway_col].apply(normalise_gateway)
+    bookings_df["gateway"] = normalise_gateway_series(bookings_df[gateway_col])
 
     # Ensure numeric
     for col in ["PaymentReceived"]:
@@ -572,7 +599,7 @@ def build_daily_by_region(bookings_df, start_date, end_date):
     if bookings_df["EventPostcode"].dtype.name == "category":
         bookings_df["EventPostcode"] = bookings_df["EventPostcode"].astype(str)
 
-    bookings_df["region"] = bookings_df["EventPostcode"].apply(extract_postcode_area)
+    bookings_df["region"] = extract_postcode_area_series(bookings_df["EventPostcode"])
 
     # Drop rows with no valid region
     bookings_df = bookings_df[bookings_df["region"].notna()]
@@ -591,7 +618,7 @@ def build_daily_by_region(bookings_df, start_date, end_date):
         bookings_df["TotalFees"] = bookings_df[existing].sum(axis=1) / 1.20  # Ex-VAT
 
     # Map postcode area to named region
-    bookings_df["named_region"] = bookings_df["region"].apply(postcode_area_to_region)
+    bookings_df["named_region"] = bookings_df["region"].str.upper().map(POSTCODE_TO_REGION).fillna("Unknown")
 
     grouped = (
         bookings_df
@@ -709,7 +736,7 @@ def build_daily_by_channel(bookings_df, start_date, end_date):
 
     if df["PaymentType"].dtype.name == "category":
         df["PaymentType"] = df["PaymentType"].astype(str)
-    df["channel"] = df["PaymentType"].apply(classify_sales_channel)
+    df["channel"] = classify_sales_channel_series(df["PaymentType"])
 
     grouped = (
         df
@@ -1162,7 +1189,7 @@ def build_expansion_revenue(bookings_df, accounts_df):
     # Also classify sales channel if available
     has_channel = "PaymentType" in bk.columns
     if has_channel:
-        bk["channel"] = bk["PaymentType"].apply(classify_sales_channel)
+        bk["channel"] = classify_sales_channel_series(bk["PaymentType"])
 
     # Aggregate
     agg_cols = {
@@ -1927,7 +1954,7 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
     if gateway_col:
         if bk[gateway_col].dtype.name == "category":
             bk[gateway_col] = bk[gateway_col].astype(str)
-        bk["_gw"] = bk[gateway_col].apply(normalise_gateway)
+        bk["_gw"] = normalise_gateway_series(bk[gateway_col])
         gw_counts = bk.groupby(["AccountId_int", "_gw"]).size().reset_index(name="n")
         dominant_gw = gw_counts.loc[gw_counts.groupby("AccountId_int")["n"].idxmax()]
         gw_lookup = dominant_gw.set_index("AccountId_int")["_gw"].to_dict()
@@ -1938,7 +1965,7 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
     if "PaymentType" in bk.columns:
         if bk["PaymentType"].dtype.name == "category":
             bk["PaymentType"] = bk["PaymentType"].astype(str)
-        bk["_channel"] = bk["PaymentType"].apply(classify_sales_channel)
+        bk["_channel"] = classify_sales_channel_series(bk["PaymentType"])
         channel_counts = bk.groupby(["AccountId_int", "_channel"]).size().unstack(fill_value=0)
         if "Box Office" in channel_counts.columns:
             total_txns = channel_counts.sum(axis=1)

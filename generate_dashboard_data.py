@@ -77,7 +77,7 @@ AZURE_CLIENT_SECRET = os.environ.get("AZURE_CLIENT_SECRET")
 
 # SharePoint
 SHAREPOINT_DRIVE_ID = os.environ.get("SHAREPOINT_DRIVE_ID")
-SHAREPOINT_FOLDER = os.environ.get("DASHBOARD_SHAREPOINT_FOLDER", "Platform Data/Dashboard Data")
+SHAREPOINT_FOLDER = "Platform Data/Dashboard Data"
 
 # Graph API
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"

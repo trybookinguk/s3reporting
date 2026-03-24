@@ -68,7 +68,6 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
-          DASHBOARD_SHAREPOINT_FOLDER: ${{ secrets.DASHBOARD_SHAREPOINT_FOLDER }}
           GA4_PROPERTY_ID: ${{ secrets.GA4_PROPERTY_ID }}
           GA4_SERVICE_ACCOUNT_KEY: ${{ secrets.GA4_SERVICE_ACCOUNT_KEY }}
         run: |
@@ -88,7 +87,6 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           SHAREPOINT_SITE_ID: ${{ secrets.SHAREPOINT_SITE_ID }}
           SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
-          SHAREPOINT_FOLDER: ${{ secrets.SHAREPOINT_FOLDER }}
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             python s3_to_sharepoint.py --dry-run

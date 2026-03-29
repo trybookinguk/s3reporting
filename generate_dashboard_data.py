@@ -190,13 +190,17 @@ def upload_to_sharepoint(token, filename, data_bytes):
         "Content-Type": "application/json",
     }
 
+    log.info("Uploading %s to SharePoint path: %s", filename, path)
     response = _request_with_retry(requests.put, url, headers=headers, data=data_bytes)
 
     if response.status_code in (200, 201):
-        log.info("Uploaded %s (%d bytes)", filename, len(data_bytes))
+        resp_data = response.json()
+        web_url = resp_data.get("webUrl", "unknown")
+        parent_path = resp_data.get("parentReference", {}).get("path", "unknown")
+        log.info("Uploaded %s (%d bytes) → %s (parent: %s)", filename, len(data_bytes), web_url, parent_path)
         return True
 
-    log.error("Upload failed for %s: %d - %s", filename, response.status_code, response.text[:200])
+    log.error("Upload failed for %s: %d - %s", filename, response.status_code, response.text[:500])
     return False
 
 
@@ -2478,6 +2482,17 @@ def generate(dry_run=False, local_dir=None):
         if failed:
             log.error("%d file(s) failed to upload", failed)
             sys.exit(1)
+
+        # Verify uploads by listing the SharePoint folder contents
+        verify_url = f"{GRAPH_BASE}/drives/{SHAREPOINT_DRIVE_ID}/root:/{SHAREPOINT_FOLDER}:/children?$select=name,size,lastModifiedDateTime"
+        verify_resp = requests.get(verify_url, headers={"Authorization": f"Bearer {token}"})
+        if verify_resp.status_code == 200:
+            items = verify_resp.json().get("value", [])
+            log.info("SharePoint folder '%s' contents after upload:", SHAREPOINT_FOLDER)
+            for item in items:
+                log.info("  %s (%s bytes, modified %s)", item["name"], item.get("size", "?"), item.get("lastModifiedDateTime", "?"))
+        else:
+            log.warning("Could not list SharePoint folder: %d - %s", verify_resp.status_code, verify_resp.text[:200])
 
     total_time = time.time() - start_time
     log.info("Dashboard data generation complete in %.1fs", total_time)

@@ -144,6 +144,8 @@ def try_load_with_fallback(s3_client, bucket: str, primary_key: str,
         df = load_func(s3_client, primary_key)
         if df is not None and not df.empty:
             return df
+    except pd.errors.EmptyDataError:
+        pass  # Treat empty files the same as missing files — fall through to fallback
     except Exception as e:
         error_str = str(e)
         if 'NoSuchKey' not in error_str and '404' not in error_str and 'Not Found' not in error_str:
@@ -218,6 +220,8 @@ def yield_chunks_with_fallback(s3_client, bucket: str, primary_key: str,
             yield chunk
         if found_primary:
             return  # Successfully loaded primary file
+    except pd.errors.EmptyDataError:
+        pass  # Treat empty files the same as missing files — fall through to fallback
     except Exception as e:
         error_str = str(e)
         if 'NoSuchKey' not in error_str and '404' not in error_str and 'Not Found' not in error_str:
@@ -488,6 +492,9 @@ class UnifiedDataLoader:
                 df = pd.concat(non_empty_chunks, ignore_index=True)
             else:
                 df = pd.DataFrame()
+        except pd.errors.EmptyDataError:
+            logger.warning(f"CSV file is empty (no columns): {key}")
+            raise
         except Exception as e:
             logger.error(f"Failed to read CSV file {key}: {e}")
             # Try reading without dtype optimization as fallback

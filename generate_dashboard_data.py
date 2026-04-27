@@ -59,6 +59,12 @@ from modules.utils.industry_utils import filter_valid_industries
 from modules.tier_calculator import determine_tier_from_percentiles
 from modules.uk_regional_segmentation import POSTCODE_TO_REGION
 from mailshake_acquisition import build_acquisition_report, records_to_csv_bytes
+from modules.box_office import (
+    check_box_office_consistency,
+    load_hires as load_box_office_hires,
+    load_inventory as load_box_office_inventory,
+    summarise as summarise_box_office,
+)
 
 # === Logging ===
 
@@ -2383,14 +2389,18 @@ def generate(dry_run=False, local_dir=None):
         ppc_matched, ppc_unmatched, accounts_df, combined_bookings
     )
 
+    # Authenticate to Graph once for any SharePoint reads/writes.
+    # Used by Mailshake (overlay files) and Box Office (read-only consistency check).
+    # Even in --dry-run we still want the read access so the report previews accurately.
+    graph_token = authenticate_graph() if SHAREPOINT_DRIVE_ID else None
+
     # Mailshake acquisitions — reuses the just-built account_metrics in memory.
     # Skipped gracefully if MAILSHAKE_API_KEY is not set.
     # Graph token (when available) is passed so the report can overlay the
     # frontend-recorded mailshake_match_decisions.json / mailshake_exclusions.json.
-    mailshake_token = None if dry_run else authenticate_graph()
     mailshake_records, _ = build_acquisition_report(
         users_df, accounts_df, outputs["account_metrics.json"],
-        graph_token=mailshake_token,
+        graph_token=graph_token,
     )
     outputs["mailshake_acquisition.json"] = mailshake_records
     mailshake_csv_bytes = records_to_csv_bytes(mailshake_records) if mailshake_records else b""
@@ -2454,6 +2464,22 @@ def generate(dry_run=False, local_dir=None):
             return total if total > 0 else len(v)
         return 0
 
+    # Box Office hires / inventory consistency check (read-only).
+    # Both files are written entirely by the dashboard frontend; we just
+    # surface warnings on metadata.json for the UI to display.
+    box_office_summary = None
+    box_office_warnings = []
+    if graph_token and SHAREPOINT_DRIVE_ID:
+        bo_inventory = load_box_office_inventory(graph_token, SHAREPOINT_DRIVE_ID)
+        bo_hires = load_box_office_hires(graph_token, SHAREPOINT_DRIVE_ID)
+        box_office_warnings = check_box_office_consistency(bo_inventory, bo_hires)
+        box_office_summary = summarise_box_office(bo_inventory, bo_hires, box_office_warnings)
+        log.info("Box Office: %d hires, %d inventory items, %d warnings (%d errors).",
+                 box_office_summary["hires_count"],
+                 box_office_summary["inventory_count"],
+                 box_office_summary["warning_count"],
+                 box_office_summary["error_count"])
+
     outputs["metadata.json"] = {
         "last_updated": datetime.now(timezone.utc).isoformat(),
         "data_from": str(data_start),
@@ -2464,6 +2490,8 @@ def generate(dry_run=False, local_dir=None):
             for name, data in outputs.items()
             if name != "metadata.json"
         },
+        "box_office_summary": box_office_summary,
+        "box_office_warnings": box_office_warnings,
     }
 
     # Serialise to JSON
@@ -2496,7 +2524,7 @@ def generate(dry_run=False, local_dir=None):
             log.error("SHAREPOINT_DRIVE_ID not set — cannot upload to SharePoint")
             sys.exit(1)
 
-        token = authenticate_graph()
+        token = graph_token or authenticate_graph()
         if not token:
             log.error("Authentication failed — cannot upload to SharePoint")
             sys.exit(1)

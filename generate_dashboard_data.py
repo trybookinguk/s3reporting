@@ -58,6 +58,7 @@ from modules.utils.date_utils import get_latest_data_date
 from modules.utils.industry_utils import filter_valid_industries
 from modules.tier_calculator import determine_tier_from_percentiles
 from modules.uk_regional_segmentation import POSTCODE_TO_REGION
+from mailshake_acquisition import build_acquisition_report, records_to_csv_bytes
 
 # === Logging ===
 
@@ -1433,7 +1434,8 @@ def build_account_daily(bookings_df):
     Uses a sparse columnar format to minimise file size:
       {
         "epoch": "2014-07-18",
-        "12345": {"d": [0, 15, 42], "f": [45.20, 120.50, 89.00], "t": [12, 45, 30]}
+        "12345": {"d": [0, 15, 42], "f": [45.20, 120.50, 89.00], "t": [12, 45, 30],
+                  "r": [5000.00, 8000.00, 2000.00], "e": [2, 3, 1]}
       }
 
     Where:
@@ -1441,9 +1443,11 @@ def build_account_daily(bookings_df):
       - d: array of integer day offsets from epoch (only days with transactions)
       - f: fees ex-VAT for that day (matching index in d)
       - t: tickets sold for that day (matching index in d)
+      - r: revenue (total ticket sales including VAT) for that day (matching index in d)
+      - e: distinct events with transactions for that day (matching index in d)
 
     The browser picks a reference date, calculates the 365-day window,
-    filters each account's d array to that range, and sums f and t.
+    filters each account's d array to that range, and sums f, t, r, e.
 
     Returns a dict (not a list) for direct JSON serialisation.
     """
@@ -1458,10 +1462,14 @@ def build_account_daily(bookings_df):
     grouped = bk.groupby(["AccountId_int", "txn_date"]).agg(
         fees=("TotalFees", "sum"),
         tickets=("TicketQuantity", "sum"),
+        revenue=("PaymentReceived", "sum"),
+        events=("EventId", "nunique"),
     ).reset_index()
 
     grouped["fees"] = grouped["fees"].round(2)
     grouped["tickets"] = grouped["tickets"].astype(int)
+    grouped["revenue"] = grouped["revenue"].round(2)
+    grouped["events"] = grouped["events"].astype(int)
 
     # Determine epoch (earliest transaction date)
     epoch = grouped["txn_date"].min()
@@ -1475,7 +1483,9 @@ def build_account_daily(bookings_df):
         days = [(d - epoch).days for d in grp_sorted["txn_date"]]
         fees = [round(f, 2) for f in grp_sorted["fees"]]
         tickets = [int(t) for t in grp_sorted["tickets"]]
-        result[str(aid)] = {"d": days, "f": fees, "t": tickets}
+        revenue = [round(r, 2) for r in grp_sorted["revenue"]]
+        events = [int(e) for e in grp_sorted["events"]]
+        result[str(aid)] = {"d": days, "f": fees, "t": tickets, "r": revenue, "e": events}
 
     n_accounts = len(result) - 1  # Exclude the epoch key
     n_entries = len(grouped)
@@ -2373,6 +2383,14 @@ def generate(dry_run=False, local_dir=None):
         ppc_matched, ppc_unmatched, accounts_df, combined_bookings
     )
 
+    # Mailshake acquisitions — reuses the just-built account_metrics in memory.
+    # Skipped gracefully if MAILSHAKE_API_KEY is not set.
+    mailshake_records, _ = build_acquisition_report(
+        users_df, accounts_df, outputs["account_metrics.json"]
+    )
+    outputs["mailshake_acquisition.json"] = mailshake_records
+    mailshake_csv_bytes = records_to_csv_bytes(mailshake_records) if mailshake_records else b""
+
     outputs["daily_metrics.json"] = build_daily_metrics(
         accounts_df, combined_bookings, data_start, today
     )
@@ -2451,6 +2469,11 @@ def generate(dry_run=False, local_dir=None):
         json_outputs[filename] = json_bytes
         size_kb = len(json_bytes) / 1024
         log.info("  %s: %.1f KB", filename, size_kb)
+
+    # Mailshake CSV is a non-JSON companion to mailshake_acquisition.json.
+    if mailshake_csv_bytes:
+        json_outputs["mailshake_acquisition.csv"] = mailshake_csv_bytes
+        log.info("  mailshake_acquisition.csv: %.1f KB", len(mailshake_csv_bytes) / 1024)
 
     # Save locally if requested
     if local_dir:

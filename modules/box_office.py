@@ -70,10 +70,12 @@ INVENTORY_FILE = "box_office_inventory.json"
 HIRES_FILE = "box_office_hires.json"
 
 # Statuses where the equipment is considered "active" — the hire holds a
-# terminal/cradle and the inventory item should be unavailable.
-ACTIVE_STATUSES = frozenset({"confirmed", "shipped", "in_use"})
+# terminal/cradle and the inventory item should be unavailable. "trial" is
+# included: a trial hire still has the kit out the door.
+ACTIVE_STATUSES = frozenset({"trial", "confirmed", "shipped", "in_use"})
 
-# Statuses requiring payment-or-trial before they're reachable.
+# Statuses requiring payment-or-trial before they're reachable. "trial"
+# itself doesn't need to appear here — by definition trial = is_trial.
 PAID_STATUSES = frozenset({"confirmed", "shipped", "in_use"})
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"

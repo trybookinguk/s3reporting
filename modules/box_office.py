@@ -27,7 +27,8 @@ log = logging.getLogger(__name__)
 #   {
 #     "id": "TB-T1042",                # hardware ID stamped on the device
 #     "type": "terminal" | "cradle",
-#     "model": "Ingenico Move 5000",   # optional
+#     "model": "BBPOS WisePOS E" | "", # terminals: fixed list (frontend-managed);
+#                                      # cradles: empty string (no model concept).
 #     "notes": "...",                  # optional
 #     "retired_at": "YYYY-MM-DD",      # optional; hides from active pool
 #     "current_hire_id": "<uuid> | null",
@@ -42,15 +43,19 @@ log = logging.getLogger(__name__)
 #     "account_name": "Snapshot Co",
 #     "contact_name": "...", "contact_email": "...", "contact_phone": "...",
 #     "shipping_address": {"line1", "line2?", "city", "postcode", "country?"},
+#                                      # required iff outbound_method == "ship"
+#                                      # OR return_method == "ship"
 #     "hire_from": "YYYY-MM-DD",
-#     "hire_to": "YYYY-MM-DD | null",   # null = open-ended
+#     "hire_to": "YYYY-MM-DD | null",  # null = open-ended
 #     "status": "draft" | "pending_payment" | "trial" | "confirmed"
 #             | "shipped" | "in_use" | "returned" | "cancelled",
+#                                      # "trial" replaces the old is_trial flag.
 #     "terminal_ids": [...],
 #     "cradle_ids": [...],
+#     "outbound_method": "ship" | "drop_off" | "collect",
+#     "return_method": "ship" | "drop_off" | "collect",
 #     "box_office_web_enabled": bool,
 #     "terminals_linked_to_account": bool,
-#     "is_trial": bool,
 #     "payment_received": bool,
 #     "trybooking_booking_url_id": "...",  # reference only
 #     "amount_due_pence": int | null,
@@ -63,8 +68,14 @@ log = logging.getLogger(__name__)
 #   }
 #
 # Validation rule (frontend enforces, this check warns on drift):
-#   A hire cannot be in confirmed/shipped/in_use unless is_trial OR
-#   payment_received.
+#   A hire cannot be in confirmed/shipped/in_use unless payment_received
+#   is true. Trial hires sit in status="trial" and don't need payment.
+#
+# Conflict rule:
+#   Two active-status hires (trial/confirmed/shipped/in_use) cannot hold
+#   the same inventory item with overlapping date windows. A future-dated
+#   hire for a currently-held item is fine as long as the windows don't
+#   overlap. hire_to=null is treated as +infinity.
 
 INVENTORY_FILE = "box_office_inventory.json"
 HIRES_FILE = "box_office_hires.json"
@@ -136,6 +147,21 @@ def _parse_date(value) -> Optional[date]:
             return None
 
 
+def _windows_overlap(a_from: Optional[date], a_to: Optional[date],
+                     b_from: Optional[date], b_to: Optional[date]) -> bool:
+    """True if [a_from, a_to] intersects [b_from, b_to].
+
+    None on hire_to is +infinity (open-ended). None on hire_from is treated
+    conservatively as -infinity so a missing date doesn't accidentally hide
+    an overlap. Inclusive at both ends.
+    """
+    a_start = a_from or date.min
+    b_start = b_from or date.min
+    a_end = a_to or date.max
+    b_end = b_to or date.max
+    return a_start <= b_end and b_start <= a_end
+
+
 def check_box_office_consistency(inventory: list, hires: list,
                                  today: Optional[date] = None) -> list:
     """Return a list of warning dicts. Read-only: never mutates inputs.
@@ -163,7 +189,8 @@ def check_box_office_consistency(inventory: list, hires: list,
             })
         inventory_by_id[item_id] = item
 
-    # Map inventory.id → list of hire ids that currently hold it (active only).
+    # Map inventory.id → list of (hire_id, hire_from, hire_to) for active hires
+    # that hold this item. hire_to may be None (= open-ended).
     active_holdings: dict = {}
 
     for hire in hires:
@@ -173,16 +200,16 @@ def check_box_office_consistency(inventory: list, hires: list,
         status = hire.get("status", "draft")
 
         # Payment guardrail: forbidden states.
-        if (status in PAID_STATUSES
-                and not hire.get("is_trial")
-                and not hire.get("payment_received")):
+        # Trial hires sit in status="trial" and bypass this; only
+        # confirmed/shipped/in_use require payment_received.
+        if status in PAID_STATUSES and not hire.get("payment_received"):
             warnings.append({
                 "severity": "error",
                 "kind": "payment_required",
                 "hire_id": hire_id,
                 "message": (f"Hire {hire_id} is in status '{status}' but "
-                            "neither is_trial nor payment_received is set. "
-                            "Frontend should have blocked this — investigate."),
+                            "payment_received is false. Frontend should "
+                            "have blocked this — investigate."),
             })
 
         # Equipment refs must exist in inventory.
@@ -221,7 +248,11 @@ def check_box_office_consistency(inventory: list, hires: list,
                     })
 
                 if status in ACTIVE_STATUSES:
-                    active_holdings.setdefault(item_id, []).append(hire_id)
+                    active_holdings.setdefault(item_id, []).append((
+                        hire_id,
+                        _parse_date(hire.get("hire_from")),
+                        _parse_date(hire.get("hire_to")),
+                    ))
 
         # Overdue check — only when hire_to is set.
         hire_to = _parse_date(hire.get("hire_to"))
@@ -234,17 +265,32 @@ def check_box_office_consistency(inventory: list, hires: list,
                             f"but is still '{status}'."),
             })
 
-    # Double-booking detection.
-    for item_id, hire_ids in active_holdings.items():
-        if len(hire_ids) > 1:
-            warnings.append({
-                "severity": "error",
-                "kind": "double_booked",
-                "item_id": item_id,
-                "message": (f"Inventory item '{item_id}' is currently held by "
-                            f"{len(hire_ids)} active hires: "
-                            f"{', '.join(hire_ids)}."),
-            })
+    # Double-booking detection: two active hires whose [hire_from, hire_to]
+    # windows overlap on the same item. hire_to=None is treated as +infinity.
+    # A future-dated hire for a currently-held item is fine if the windows
+    # don't overlap.
+    for item_id, holdings in active_holdings.items():
+        if len(holdings) < 2:
+            continue
+        # Pair-wise comparison; n is tiny in practice.
+        flagged_pairs = set()
+        for i, (h1_id, h1_from, h1_to) in enumerate(holdings):
+            for j in range(i + 1, len(holdings)):
+                h2_id, h2_from, h2_to = holdings[j]
+                if not _windows_overlap(h1_from, h1_to, h2_from, h2_to):
+                    continue
+                pair = tuple(sorted([h1_id, h2_id]))
+                if pair in flagged_pairs:
+                    continue
+                flagged_pairs.add(pair)
+                warnings.append({
+                    "severity": "error",
+                    "kind": "double_booked",
+                    "item_id": item_id,
+                    "message": (f"Inventory item '{item_id}' is held by two "
+                                f"active hires with overlapping windows: "
+                                f"{pair[0]} and {pair[1]}."),
+                })
 
     # current_hire_id sanity check on inventory.
     active_hire_ids = {h.get("id") for h in hires

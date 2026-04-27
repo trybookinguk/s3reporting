@@ -1981,7 +1981,11 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
     else:
         gw_lookup = {}
 
-    # --- Box Office percentage per account ---
+    # --- Box Office percentage per account + channel-split aggregates ---
+    # Box Office channel = PaymentType containing "CARD PRESENT" or equal to "CASH".
+    # Anything else (Visa/Mastercard online, PayPal, gift certificate, etc.) is "Online".
+    bo_lifetime = pd.DataFrame()
+    bo_current = pd.DataFrame()
     if "PaymentType" in bk.columns:
         if bk["PaymentType"].dtype.name == "category":
             bk["PaymentType"] = bk["PaymentType"].astype(str)
@@ -1993,6 +1997,24 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
             boxoffice_lookup = pct_boxoffice.to_dict()
         else:
             boxoffice_lookup = {}
+
+        # Per-account Box Office aggregates (lifetime + last 365 days).
+        bk_bo = bk[bk["_channel"] == "Box Office"]
+        if len(bk_bo) > 0:
+            bo_lifetime = bk_bo.groupby("AccountId_int").agg(
+                fees_box_office_lifetime=("TotalFees", "sum"),
+                revenue_box_office_lifetime=("PaymentReceived", "sum"),
+                tickets_box_office_lifetime=("TicketQuantity", "sum"),
+                txns_box_office_lifetime=("TotalFees", "count"),
+                last_box_office_txn=("TransactionDate", "max"),
+            )
+            bk_bo_current = bk_bo[bk_bo["txn_date"] >= cutoff_365.date()]
+            if len(bk_bo_current) > 0:
+                bo_current = bk_bo_current.groupby("AccountId_int").agg(
+                    fees_box_office_current=("TotalFees", "sum"),
+                    revenue_box_office_current=("PaymentReceived", "sum"),
+                    tickets_box_office_current=("TicketQuantity", "sum"),
+                )
     else:
         boxoffice_lookup = {}
 
@@ -2049,6 +2071,10 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
 
     # --- Merge everything into account-level metrics ---
     metrics = lifetime.join(current, how="left").join(previous, how="left")
+    if not bo_lifetime.empty:
+        metrics = metrics.join(bo_lifetime, how="left")
+    if not bo_current.empty:
+        metrics = metrics.join(bo_current, how="left")
     # Fill numeric columns only (preserve NaT in datetime columns)
     numeric_cols = metrics.select_dtypes(include="number").columns
     metrics[numeric_cols] = metrics[numeric_cols].fillna(0)
@@ -2205,6 +2231,37 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
         row["events_lifetime"] = int(metrics.at[aid, "events_lifetime"])
         row["years_active"] = int(metrics.at[aid, "years_active"])
 
+        # Metrics — Box Office channel only (PaymentType "CARD PRESENT*" or "CASH")
+        row["fees_box_office_lifetime"] = round(
+            float(metrics.at[aid, "fees_box_office_lifetime"])
+            if "fees_box_office_lifetime" in metrics.columns else 0, 2)
+        row["revenue_box_office_lifetime"] = round(
+            float(metrics.at[aid, "revenue_box_office_lifetime"])
+            if "revenue_box_office_lifetime" in metrics.columns else 0, 2)
+        row["tickets_box_office_lifetime"] = int(
+            metrics.at[aid, "tickets_box_office_lifetime"]
+            if "tickets_box_office_lifetime" in metrics.columns else 0)
+        row["txns_box_office_lifetime"] = int(
+            metrics.at[aid, "txns_box_office_lifetime"]
+            if "txns_box_office_lifetime" in metrics.columns else 0)
+        row["fees_box_office_current"] = round(
+            float(metrics.at[aid, "fees_box_office_current"])
+            if "fees_box_office_current" in metrics.columns else 0, 2)
+        row["revenue_box_office_current"] = round(
+            float(metrics.at[aid, "revenue_box_office_current"])
+            if "revenue_box_office_current" in metrics.columns else 0, 2)
+        row["tickets_box_office_current"] = int(
+            metrics.at[aid, "tickets_box_office_current"]
+            if "tickets_box_office_current" in metrics.columns else 0)
+        if "last_box_office_txn" in metrics.columns:
+            last_bo = metrics.at[aid, "last_box_office_txn"]
+            row["last_box_office_transaction_date"] = (
+                str(pd.Timestamp(last_bo).date())
+                if pd.notna(last_bo) else None
+            )
+        else:
+            row["last_box_office_transaction_date"] = None
+
         # PPC metrics
         row["ppc_sessions"] = ppc.get("ppc_sessions", 0)
         row["ppc_users"] = ppc.get("ppc_users", 0)
@@ -2268,6 +2325,11 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
             "fees_previous": 0, "revenue_previous": 0, "tickets_previous": 0,
             "fees_lifetime": 0, "revenue_lifetime": 0, "tickets_lifetime": 0,
             "txns_lifetime": 0, "events_lifetime": 0, "years_active": 0,
+            "fees_box_office_lifetime": 0, "revenue_box_office_lifetime": 0,
+            "tickets_box_office_lifetime": 0, "txns_box_office_lifetime": 0,
+            "fees_box_office_current": 0, "revenue_box_office_current": 0,
+            "tickets_box_office_current": 0,
+            "last_box_office_transaction_date": None,
             "ppc_sessions": ppc.get("ppc_sessions", 0),
             "ppc_users": ppc.get("ppc_users", 0),
             "ppc_events": ppc.get("ppc_events", 0),

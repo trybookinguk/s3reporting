@@ -312,7 +312,54 @@ ACCOUNT_METRIC_FIELDS = (
 )
 
 
-def build_report(sends_df, by_email, by_domain, metrics_by_account=None):
+def _decision_key(campaign, email):
+    """Stable identity for a decision across regenerations.
+
+    `account_id` is the matcher's *guess* and may shift between runs as the
+    account or matcher changes; the (campaign, email) pair is the actual
+    sent-message identity, so it's the right key for persisted decisions.
+    """
+    return f"{(campaign or '').strip()}|{(email or '').strip().lower()}"
+
+
+def index_decisions(decisions):
+    """Index a list of decision objects by their (campaign, email) key."""
+    if not decisions:
+        return {}
+    indexed = {}
+    for d in decisions:
+        if not isinstance(d, dict):
+            continue
+        key = d.get("key") or _decision_key(d.get("campaign"), d.get("email"))
+        if key:
+            indexed[key] = d
+    return indexed
+
+
+def index_exclusions(exclusions):
+    """Split exclusions into account-id and domain sets.
+
+    Each exclusion has a key like "acc-12345" or "domain-example.com".
+    Returns (excluded_account_ids: set[int], excluded_domains: set[str]).
+    """
+    accounts = set()
+    domains = set()
+    for ex in exclusions or []:
+        if not isinstance(ex, dict):
+            continue
+        key = (ex.get("key") or "").strip().lower()
+        if key.startswith("acc-"):
+            try:
+                accounts.add(int(key[4:]))
+            except ValueError:
+                continue
+        elif key.startswith("domain-"):
+            domains.add(key[7:])
+    return accounts, domains
+
+
+def build_report(sends_df, by_email, by_domain, metrics_by_account=None,
+                 decisions=None, exclusions=None):
     """Produce acquisition rows: matched recipients who signed up *after* being emailed.
 
     Excluded: unmatched recipients (no account); matched recipients whose account
@@ -320,10 +367,20 @@ def build_report(sends_df, by_email, by_domain, metrics_by_account=None):
 
     If ``metrics_by_account`` is provided (keyed by account_id), each matched row
     is enriched with tier, activity rating, lifetime revenue/fees/events, etc.
+
+    If ``decisions`` and/or ``exclusions`` are provided, frontend-recorded review
+    state is overlaid:
+      - exclusions drop matches against the excluded account or domain entirely.
+      - decisions stamp ``match_status`` on each row (pending/confirmed/dismissed),
+        drop dismissed rows, and re-target reassigned rows to a different account.
     """
     records = []
     if sends_df.empty:
         return records
+
+    decisions_idx = index_decisions(decisions)
+    excluded_accounts, excluded_domains = index_exclusions(exclusions)
+    metrics_by_account = metrics_by_account or {}
 
     col = {c.lower().strip(): c for c in sends_df.columns}
 
@@ -343,33 +400,83 @@ def build_report(sends_df, by_email, by_domain, metrics_by_account=None):
             continue
 
         first_send = _parse_send_date(get(row, "First send date", None))
-        match_type, acct = match_recipient(email_lc, by_email, by_domain)
-
-        account_id = acct["account_id"] if acct else None
-        account_name = acct["account_name"] if acct else ""
-        account_created = acct["account_created"] if acct else None
-        account_industry = acct["account_industry"] if acct else ""
-        owner_email = acct["owner_email"] if acct else ""
-
-        # Only keep matched recipients whose account was created on/after the send.
-        if not acct or first_send is None or not account_created:
+        if first_send is None:
             continue
 
+        campaign = _safe_str(get(row, "Campaign"))
+        decision_key = _decision_key(campaign, email_lc)
+        decision = decisions_idx.get(decision_key)
+
+        match_type, acct = match_recipient(email_lc, by_email, by_domain)
+
+        # Apply exclusions: skip past matches that have been blanket-excluded.
+        # Exclusions only kick in if no per-row decision has been made.
+        if acct and decision is None:
+            recipient_domain = _email_domain(email_lc)
+            if (acct["account_id"] in excluded_accounts
+                    or (recipient_domain and recipient_domain in excluded_domains)):
+                acct = None
+                match_type = "none"
+
+        # Reassignment overrides whatever the matcher picked.
+        if decision and decision.get("decision") == "reassigned":
+            target_id = decision.get("reassigned_account_id")
+            try:
+                target_id = int(target_id) if target_id is not None else None
+            except (TypeError, ValueError):
+                target_id = None
+            target_metrics = metrics_by_account.get(target_id) if target_id is not None else None
+            if target_metrics:
+                acct = {
+                    "account_id": target_id,
+                    "account_name": target_metrics.get("account_name", ""),
+                    "account_created": target_metrics.get("created_date"),
+                    "account_industry": target_metrics.get("industry", ""),
+                    "owner_email": email_lc,  # the email we sent — no owner lookup needed
+                }
+                # match_type is whatever it was; we'll annotate via match_status below.
+
+        if not acct:
+            continue
+
+        account_id = acct["account_id"]
+        account_name = acct["account_name"]
+        account_created = acct["account_created"]
+        account_industry = acct["account_industry"]
+        owner_email = acct["owner_email"]
+
+        if not account_created:
+            continue
         created_ts = pd.to_datetime(account_created, utc=True)
         days_send_to_signup = int((created_ts - first_send).total_seconds() // 86400)
         if days_send_to_signup < 0:
             # Account pre-dated the send → re-engagement, not acquisition.
             continue
 
+        # Apply decision: drop dismissals, stamp status on the rest.
+        if decision:
+            decision_value = decision.get("decision")
+            if decision_value == "dismissed":
+                continue
+            if decision_value == "confirmed":
+                match_status = "confirmed"
+            elif decision_value == "reassigned":
+                match_status = "reassigned"
+            else:
+                match_status = "pending"
+        else:
+            match_status = "pending"
+
         record = {
             "email": email_lc,
             "first_name": _safe_str(get(row, "First Name")),
             "last_name": _safe_str(get(row, "Last Name")),
-            "campaign": _safe_str(get(row, "Campaign")),
+            "campaign": campaign,
             "first_send_date": first_send.date().isoformat(),
             "first_open_date": _iso_date(get(row, "First open date", None)),
             "first_reply_date": _iso_date(get(row, "First reply date", None)),
             "match_type": match_type,
+            "match_status": match_status,
             "account_id": account_id,
             "account_name": account_name,
             "account_created": account_created,
@@ -377,8 +484,13 @@ def build_report(sends_df, by_email, by_domain, metrics_by_account=None):
             "owner_email": owner_email,
             "days_send_to_signup": days_send_to_signup,
         }
+        if decision:
+            record["decided_by"] = decision.get("decided_by")
+            record["decided_at"] = decision.get("decided_at")
+            if decision.get("reason"):
+                record["decision_reason"] = decision["reason"]
 
-        metrics = (metrics_by_account or {}).get(account_id, {}) if account_id is not None else {}
+        metrics = metrics_by_account.get(account_id, {}) if account_id is not None else {}
         for field in ACCOUNT_METRIC_FIELDS:
             record[field] = metrics.get(field)
 
@@ -445,6 +557,41 @@ def load_account_metrics(token):
     return indexed
 
 
+def load_review_overlay(token):
+    """Fetch frontend-recorded decisions and exclusions from SharePoint.
+
+    Both files are optional — missing files just mean no overlay is applied.
+    Returns (decisions_list, exclusions_list).
+    """
+    if not token:
+        return [], []
+
+    decisions, exclusions = [], []
+
+    raw = download_from_sharepoint(token, "mailshake_match_decisions.json")
+    if raw:
+        try:
+            decisions = json.loads(raw)
+            if not isinstance(decisions, list):
+                log.warning("mailshake_match_decisions.json is not a list — ignoring.")
+                decisions = []
+        except json.JSONDecodeError as e:
+            log.warning("mailshake_match_decisions.json is invalid JSON (%s) — ignoring.", e)
+
+    raw = download_from_sharepoint(token, "mailshake_exclusions.json")
+    if raw:
+        try:
+            exclusions = json.loads(raw)
+            if not isinstance(exclusions, list):
+                log.warning("mailshake_exclusions.json is not a list — ignoring.")
+                exclusions = []
+        except json.JSONDecodeError as e:
+            log.warning("mailshake_exclusions.json is invalid JSON (%s) — ignoring.", e)
+
+    log.info("Review overlay: %d decisions, %d exclusions.", len(decisions), len(exclusions))
+    return decisions, exclusions
+
+
 def upload_to_sharepoint(token, filename, data_bytes):
     path = f"{SHAREPOINT_FOLDER}/{filename}" if SHAREPOINT_FOLDER else filename
     url = f"{GRAPH_BASE}/drives/{SHAREPOINT_DRIVE_ID}/root:/{path}:/content"
@@ -479,11 +626,13 @@ def records_to_csv_bytes(records):
     return buffer.getvalue().encode("utf-8")
 
 
-def build_acquisition_report(users_df, accounts_df, account_metrics=None):
+def build_acquisition_report(users_df, accounts_df, account_metrics=None,
+                             graph_token=None):
     """Public entry-point used by generate_dashboard_data.py.
 
     Pulls Mailshake sends, joins against the provided Users+Accounts frames,
-    and enriches with the (optional) in-memory account_metrics list.
+    enriches with the (optional) in-memory account_metrics list, and overlays
+    frontend-recorded decisions/exclusions if a Graph token is supplied.
 
     Returns (records, stats_dict). Callers handle serialisation/upload.
     """
@@ -507,23 +656,36 @@ def build_acquisition_report(users_df, accounts_df, account_metrics=None):
             if r.get("account_id") is not None
         }
 
-    records = build_report(sends_df, by_email, by_domain, metrics_by_account)
+    decisions, exclusions = load_review_overlay(graph_token)
+
+    records = build_report(sends_df, by_email, by_domain, metrics_by_account,
+                           decisions=decisions, exclusions=exclusions)
 
     counts = {"full": 0, "partial": 0}
+    status_counts = {"pending": 0, "confirmed": 0, "reassigned": 0}
     for r in records:
-        counts[r["match_type"]] += 1
+        counts[r["match_type"]] = counts.get(r["match_type"], 0) + 1
+        status_counts[r.get("match_status", "pending")] = (
+            status_counts.get(r.get("match_status", "pending"), 0) + 1
+        )
     enriched = sum(1 for r in records if r.get("tier") is not None)
 
     stats = {
         "campaigns_seen": len(campaigns),
         "recipients_processed": int(len(sends_df)),
         "acquisition_rows": len(records),
-        "matched_full": counts["full"],
-        "matched_partial": counts["partial"],
+        "matched_full": counts.get("full", 0),
+        "matched_partial": counts.get("partial", 0),
+        "status_pending": status_counts.get("pending", 0),
+        "status_confirmed": status_counts.get("confirmed", 0),
+        "status_reassigned": status_counts.get("reassigned", 0),
         "enriched_from_metrics": enriched,
     }
-    log.info("Acquisition report: %d rows (full=%d, partial=%d, enriched=%d)",
-             len(records), counts["full"], counts["partial"], enriched)
+    log.info("Acquisition report: %d rows (full=%d, partial=%d) | "
+             "pending=%d confirmed=%d reassigned=%d | enriched=%d",
+             len(records), counts.get("full", 0), counts.get("partial", 0),
+             status_counts.get("pending", 0), status_counts.get("confirmed", 0),
+             status_counts.get("reassigned", 0), enriched)
     return records, stats
 
 
@@ -554,21 +716,31 @@ def run(dry_run=False, local_dir=None):
     accounts_df = load_accounts()
     by_email, by_domain = build_owners_lookup(users_df, accounts_df)
 
-    # 4. Load pre-computed account metrics (tier, lifetime revenue, etc.) from SharePoint.
-    # Generated by generate_dashboard_data.py — may be a day stale, which is fine.
+    # 4. Load pre-computed account metrics + frontend review overlay from SharePoint.
+    # Both come from generate_dashboard_data.py / the dashboard frontend; missing files
+    # are non-fatal.
     metrics_by_account = load_account_metrics(graph_token) if graph_token else {}
+    decisions, exclusions = load_review_overlay(graph_token)
 
     # 5. Build the report.
-    records = build_report(sends_df, by_email, by_domain, metrics_by_account)
+    records = build_report(sends_df, by_email, by_domain, metrics_by_account,
+                           decisions=decisions, exclusions=exclusions)
 
     counts = {"full": 0, "partial": 0}
+    status_counts = {"pending": 0, "confirmed": 0, "reassigned": 0}
     enriched = 0
     for r in records:
-        counts[r["match_type"]] += 1
+        counts[r["match_type"]] = counts.get(r["match_type"], 0) + 1
+        status_counts[r.get("match_status", "pending")] = (
+            status_counts.get(r.get("match_status", "pending"), 0) + 1
+        )
         if r.get("tier") is not None:
             enriched += 1
-    log.info("Acquisition report: %d rows (full=%d, partial=%d, enriched=%d)",
-             len(records), counts["full"], counts["partial"], enriched)
+    log.info("Acquisition report: %d rows (full=%d, partial=%d) | "
+             "pending=%d confirmed=%d reassigned=%d | enriched=%d",
+             len(records), counts.get("full", 0), counts.get("partial", 0),
+             status_counts.get("pending", 0), status_counts.get("confirmed", 0),
+             status_counts.get("reassigned", 0), enriched)
 
     # 4. Serialise outputs.
     report_json = json.dumps(records, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -579,8 +751,11 @@ def run(dry_run=False, local_dir=None):
         "campaigns_seen": len(campaigns),
         "recipients_processed": int(len(sends_df)),
         "acquisition_rows": len(records),
-        "matched_full": counts["full"],
-        "matched_partial": counts["partial"],
+        "matched_full": counts.get("full", 0),
+        "matched_partial": counts.get("partial", 0),
+        "status_pending": status_counts.get("pending", 0),
+        "status_confirmed": status_counts.get("confirmed", 0),
+        "status_reassigned": status_counts.get("reassigned", 0),
         "enriched_from_metrics": enriched,
     }
     run_state_json = json.dumps(run_state, ensure_ascii=False, indent=2).encode("utf-8")

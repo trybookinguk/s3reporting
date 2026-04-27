@@ -2385,8 +2385,12 @@ def generate(dry_run=False, local_dir=None):
 
     # Mailshake acquisitions — reuses the just-built account_metrics in memory.
     # Skipped gracefully if MAILSHAKE_API_KEY is not set.
+    # Graph token (when available) is passed so the report can overlay the
+    # frontend-recorded mailshake_match_decisions.json / mailshake_exclusions.json.
+    mailshake_token = None if dry_run else authenticate_graph()
     mailshake_records, _ = build_acquisition_report(
-        users_df, accounts_df, outputs["account_metrics.json"]
+        users_df, accounts_df, outputs["account_metrics.json"],
+        graph_token=mailshake_token,
     )
     outputs["mailshake_acquisition.json"] = mailshake_records
     mailshake_csv_bytes = records_to_csv_bytes(mailshake_records) if mailshake_records else b""

@@ -41,8 +41,7 @@ def main():
     validate_environment_variables([
         'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
         'ZOHO_CLIENT_ID', 'ZOHO_CLIENT_SECRET', 'ZOHO_REFRESH_TOKEN',
-        'MAILGUN_SMTP_LOGIN', 'MAILGUN_SMTP_PASSWORD',
-        'MAILGUN_DOMAIN'
+        'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SENDER_MAILBOX'
     ])
     
     logger.info(f"Zoho Tier Update Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}")
@@ -323,8 +322,8 @@ def main():
         
         try:
             # Check if email credentials are configured
-            from modules.utils.config import MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN
-            if all([MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN]):
+            from modules.utils.config import AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_SENDER_MAILBOX
+            if all([AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_SENDER_MAILBOX]):
                 email_upcoming_events_report(annual_report, report_filename)
                 print(f"📧 Emailed upcoming annual events report")
             else:
@@ -339,8 +338,8 @@ def main():
     # Send tier updates email report
     try:
         # Check if email credentials are configured
-        from modules.utils.config import MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN
-        if all([MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN]):
+        from modules.utils.config import AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_SENDER_MAILBOX
+        if all([AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_SENDER_MAILBOX]):
             email_tier_updates_report(updates, csv_filename)
             print(f"📧 Emailed tier updates report with retention priorities")
         else:

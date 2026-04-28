@@ -2,14 +2,10 @@
 Report generation and email functionality for TryBooking tier system.
 """
 import pandas as pd
-import smtplib
 import logging
 from datetime import datetime
-from email.message import EmailMessage
-from .config import (
-    MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD,
-    MAILGUN_DOMAIN, SMTP_HOST, SMTP_PORT, TEST_MODE, DEFAULT_RECIPIENT, CC_RECIPIENT, UK_TZ
-)
+from .config import TEST_MODE, DEFAULT_RECIPIENT, CC_RECIPIENT, UK_TZ
+from .email_utils import send_html_email
 
 logger = logging.getLogger(__name__)
 
@@ -116,30 +112,18 @@ allowing proactive outreach approximately 1 month before they usually set up the
 <p>Best regards,<br>TryBooking Reporting System</p>
 </div>"""
     
-    # Create email message
-    msg = EmailMessage()
-    msg['Subject'] = f'{"[TEST] " if TEST_MODE else ""}Upcoming Annual Events - {datetime.now(UK_TZ).strftime("%B %Y")}'
-    msg['From'] = f"TryBooking Reporting <reports@{MAILGUN_DOMAIN}>"
-    msg['To'] = DEFAULT_RECIPIENT
-    
-    if CC_RECIPIENT and not TEST_MODE:
-        msg['Cc'] = CC_RECIPIENT
-    
-    # Set content
-    msg.set_content(body_plain)
-    msg.add_alternative(body_html, subtype='html')
-    
-    # Attach CSV file
     with open(filename, 'rb') as f:
         csv_data = f.read()
-        msg.add_attachment(csv_data, maintype='text', subtype='csv', filename=filename)
-    
-    # Send email via Mailgun
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-        smtp.starttls()
-        smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-        smtp.send_message(msg)
-    
+
+    send_html_email(
+        to=DEFAULT_RECIPIENT,
+        cc=CC_RECIPIENT if (CC_RECIPIENT and not TEST_MODE) else None,
+        subject=f'Upcoming Annual Events - {datetime.now(UK_TZ).strftime("%B %Y")}',
+        html_content=body_html,
+        plain_text=body_plain,
+        attachments=[(filename, csv_data, 'text', 'csv')],
+    )
+
     recipients = DEFAULT_RECIPIENT if TEST_MODE else f"{DEFAULT_RECIPIENT}, {CC_RECIPIENT}"
     logger.info(f"Email sent to {recipients} with {len(report_df)} upcoming annual events")
     print(f"Email sent to {recipients} with {len(report_df)} upcoming annual events")
@@ -359,30 +343,18 @@ TryBooking Reporting System
 <p>Best regards,<br>TryBooking Reporting System</p>
 </div>"""
     
-    # Create email message
-    msg = EmailMessage()
-    msg['Subject'] = f'{"[TEST] " if TEST_MODE else ""}Tier Updates & Retention Priorities - {datetime.now(UK_TZ).strftime("%B %Y")}'
-    msg['From'] = f"TryBooking Reporting <reports@{MAILGUN_DOMAIN}>"
-    msg['To'] = DEFAULT_RECIPIENT
-    
-    if CC_RECIPIENT and not TEST_MODE:
-        msg['Cc'] = CC_RECIPIENT
-    
-    # Set content
-    msg.set_content(body_plain)
-    msg.add_alternative(body_html, subtype='html')
-    
-    # Attach CSV file
     with open(csv_filename, 'rb') as f:
         csv_data = f.read()
-        msg.add_attachment(csv_data, maintype='text', subtype='csv', filename=csv_filename)
-    
-    # Send email via Mailgun
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-        smtp.starttls()
-        smtp.login(MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD)
-        smtp.send_message(msg)
-    
+
+    send_html_email(
+        to=DEFAULT_RECIPIENT,
+        cc=CC_RECIPIENT if (CC_RECIPIENT and not TEST_MODE) else None,
+        subject=f'Tier Updates & Retention Priorities - {datetime.now(UK_TZ).strftime("%B %Y")}',
+        html_content=body_html,
+        plain_text=body_plain,
+        attachments=[(csv_filename, csv_data, 'text', 'csv')],
+    )
+
     recipients = DEFAULT_RECIPIENT if TEST_MODE else f"{DEFAULT_RECIPIENT}, {CC_RECIPIENT}"
     logger.info(f"Email sent to {recipients} with tier updates and retention priorities")
     print(f"Email sent to {recipients} with tier updates and retention priorities")

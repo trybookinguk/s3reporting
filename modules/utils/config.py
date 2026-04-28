@@ -18,14 +18,14 @@ ZOHO_PORTAL_NAME = os.environ.get("ZOHO_PORTAL_NAME")
 
 ZOHO_DOMAIN = "https://www.zohoapis.com"
 
-# Mailgun Credentials
-MAILGUN_SMTP_LOGIN = os.environ.get("MAILGUN_SMTP_LOGIN")
-MAILGUN_SMTP_PASSWORD = os.environ.get("MAILGUN_SMTP_PASSWORD")
-MAILGUN_DOMAIN = os.environ.get("MAILGUN_DOMAIN")
-
-# Aliases for compatibility
-MAILGUN_FROM = MAILGUN_SMTP_LOGIN
-MAILGUN_PASSWORD = MAILGUN_SMTP_PASSWORD
+# Microsoft 365 / Azure (Graph API) Credentials
+# Reuses the existing app registration that powers s3_to_sharepoint.py.
+# The app must have Microsoft Graph "Mail.Send" application permission, scoped
+# to the shared mailbox via an Exchange Application Access Policy.
+AZURE_TENANT_ID = os.environ.get("AZURE_TENANT_ID")
+AZURE_CLIENT_ID = os.environ.get("AZURE_CLIENT_ID")
+AZURE_CLIENT_SECRET = os.environ.get("AZURE_CLIENT_SECRET")
+AZURE_SENDER_MAILBOX = os.environ.get("AZURE_SENDER_MAILBOX")
 
 # Vero Credentials
 VERO_API_KEY = os.environ.get("VERO_API_KEY")
@@ -86,8 +86,6 @@ EVENT_FREQUENCY_THRESHOLDS = {
 }
 
 # === EMAIL SETTINGS ===
-SMTP_HOST = "smtp.mailgun.org"
-SMTP_PORT = 587
 DEFAULT_RECIPIENT = "alex@trybooking.co.uk"
 CC_RECIPIENT = ""
 

@@ -35,7 +35,7 @@ jobs:
           sudo apt-get install -y libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 libffi-dev shared-mime-info
 
       - name: Install Python dependencies
-        run: pip install boto3 pandas requests pytz python-dateutil weasyprint
+        run: pip install boto3 pandas requests pytz python-dateutil weasyprint msal
 
       - name: Get current date
         id: date
@@ -57,9 +57,10 @@ jobs:
           ZOHO_CLIENT_ID: ${{ secrets.ZOHO_CLIENT_ID }}
           ZOHO_CLIENT_SECRET: ${{ secrets.ZOHO_CLIENT_SECRET }}
           ZOHO_REFRESH_TOKEN: ${{ secrets.ZOHO_REFRESH_TOKEN }}
-          MAILGUN_SMTP_LOGIN: ${{ secrets.MAILGUN_SMTP_LOGIN }}
-          MAILGUN_SMTP_PASSWORD: ${{ secrets.MAILGUN_SMTP_PASSWORD }}
-          MAILGUN_DOMAIN: ${{ secrets.MAILGUN_DOMAIN }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SENDER_MAILBOX: ${{ secrets.AZURE_SENDER_MAILBOX }}
           TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
           REPORT_MONTH: ${{ github.event.inputs.report_month || '' }}
           # SCHEDULED_RUN is true only for cron-triggered runs (not manual dispatch)

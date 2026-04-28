@@ -165,8 +165,8 @@ def main():
     # Validate environment variables
     validate_environment_variables([
         'ZOHO_CLIENT_ID', 'ZOHO_CLIENT_SECRET', 'ZOHO_REFRESH_TOKEN',
-        'ZOHO_PORTAL_NAME', 'MAILGUN_SMTP_LOGIN', 'MAILGUN_SMTP_PASSWORD', 
-        'MAILGUN_DOMAIN'
+        'ZOHO_PORTAL_NAME',
+        'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SENDER_MAILBOX'
     ])
     
     send_email_report = os.environ.get('SEND_EMAIL', '1') != '0'

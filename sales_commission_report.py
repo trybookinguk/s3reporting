@@ -17,7 +17,7 @@ Usage:
 Environment Variables:
     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY - S3 access
     ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN - Zoho CRM access
-    MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN - Email sending
+    AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_SENDER_MAILBOX - Email sending via Microsoft Graph
     TEST_MODE - If 'true', sends emails only to alex@trybooking.co.uk
     REPORT_MONTH - Optional, format 'YYYY-MM' to specify report month (defaults to previous month)
 """
@@ -34,7 +34,7 @@ from modules.utils.config import (
     TEST_MODE, UK_TZ, ZOHO_DOMAIN,
     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
     ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN,
-    MAILGUN_SMTP_LOGIN, MAILGUN_SMTP_PASSWORD, MAILGUN_DOMAIN
+    AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_SENDER_MAILBOX,
 )
 from modules.utils.zoho_api import get_access_token, get_session
 from modules.utils.data_loader import load_booking_data, load_accounts_data
@@ -54,9 +54,10 @@ def validate_environment():
         ('ZOHO_CLIENT_ID', ZOHO_CLIENT_ID),
         ('ZOHO_CLIENT_SECRET', ZOHO_CLIENT_SECRET),
         ('ZOHO_REFRESH_TOKEN', ZOHO_REFRESH_TOKEN),
-        ('MAILGUN_SMTP_LOGIN', MAILGUN_SMTP_LOGIN),
-        ('MAILGUN_SMTP_PASSWORD', MAILGUN_SMTP_PASSWORD),
-        ('MAILGUN_DOMAIN', MAILGUN_DOMAIN),
+        ('AZURE_TENANT_ID', AZURE_TENANT_ID),
+        ('AZURE_CLIENT_ID', AZURE_CLIENT_ID),
+        ('AZURE_CLIENT_SECRET', AZURE_CLIENT_SECRET),
+        ('AZURE_SENDER_MAILBOX', AZURE_SENDER_MAILBOX),
     ]
 
     missing = [name for name, value in required_vars if not value]

@@ -235,7 +235,7 @@ def main(send_email_report=True):
     # Validate environment variables
     validate_environment_variables([
         'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
-        'MAILGUN_SMTP_LOGIN', 'MAILGUN_SMTP_PASSWORD', 'MAILGUN_DOMAIN'
+        'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SENDER_MAILBOX'
     ])
     
     print(f"\n=== Weekly Reporting Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')} ===")

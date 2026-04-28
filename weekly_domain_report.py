@@ -130,8 +130,10 @@ def main():
     # Only require email credentials if sending emails
     if SEND_EMAILS:
         required_vars.extend([
-            'MAILGUN_SMTP_LOGIN',
-            'MAILGUN_SMTP_PASSWORD'
+            'AZURE_TENANT_ID',
+            'AZURE_CLIENT_ID',
+            'AZURE_CLIENT_SECRET',
+            'AZURE_SENDER_MAILBOX',
         ])
     
     validate_environment_variables(required_vars)

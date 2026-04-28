@@ -1,17 +1,16 @@
 # CLAUDE.md
 
+
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Instructions
-
-You should ultrathink all instructions, and ensure a rock solid solution is implemented whilst still being maintainable.
-It is critical that you do not assume context that hasn't been provided. If you require 
 
 ## Style Guidelines
 
 - Use British spellings always.
 
 ## Commands
+
+**IMPORTANT:** You should NEVER run code or read non code files directly. Instead, you should give the command required to the user. This is to ensure compliance with data protection legislation.
 
 ### Running Scripts Locally
 Scripts are executed through GitHub Actions in production, but can be tested locally:

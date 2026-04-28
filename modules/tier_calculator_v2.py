@@ -21,7 +21,7 @@ import numpy as np
 import logging
 from typing import Dict, Any
 
-from modules.utils.config import MIN_TICKETS_FOR_ACTIVE
+from modules.utils.config import MIN_TICKETS_FOR_ACTIVE, YEARS_LOYALTY_CAP
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,8 @@ TIER_NUMERIC = {
     'Tier 3': 3,
     'Tier 4': 4,
     'Tier 5': 5,
-    'Nil': 6,
+    'Free': 6,
+    'Nil': 7,
 }
 
 
@@ -74,11 +75,15 @@ def _build_metrics_df(account_metrics: Dict[int, Dict[str, Any]]) -> pd.DataFram
             'revenue_current': max(0.0, revenue_current / VAT_RATE),
             'revenue_lifetime': max(0.0, revenue_lifetime / VAT_RATE),
             'tickets_current': max(0, int(m.get('tickets_current', 0))),
-            'years_loyalty': max(0, int(m.get('years_loyalty', 0))),
+            # Cap years_loyalty so tenure beyond YEARS_LOYALTY_CAP doesn't
+            # keep stacking. Accounts at or above the cap tie at the top of
+            # the loyalty distribution; accounts below it rank against each
+            # other normally.
+            'years_loyalty': min(max(0, int(m.get('years_loyalty', 0))), YEARS_LOYALTY_CAP),
             'revenue_prev': max(0.0, float(m.get('revenue_prev', 0)) / VAT_RATE),
             'revenue_lifetime_prev': max(0.0, revenue_lifetime_prev / VAT_RATE),
             'tickets_prev': max(0, int(m.get('tickets_prev', 0))),
-            'years_loyalty_prev': max(0, int(m.get('years_loyalty_prev', 0))),
+            'years_loyalty_prev': min(max(0, int(m.get('years_loyalty_prev', 0))), YEARS_LOYALTY_CAP),
             'tickets_lifetime': max(0, int(m.get('tickets_lifetime', 0))),
         })
 
@@ -218,7 +223,15 @@ def calculate_composite_tiers(account_metrics: Dict[int, Dict[str, Any]]) -> pd.
 
     # --- Determine activation masks (tickets as qualifier only) ---
     current_activated = df['tickets_current'] >= MIN_TICKETS_FOR_ACTIVE
-    logger.info(f"Activated accounts (current): {current_activated.sum():,} of {len(df):,}")
+    current_has_revenue = df['revenue_current'] > 0
+    # Paid activated: enough tickets AND has revenue — these get scored/tiered
+    current_paid_activated = current_activated & current_has_revenue
+    # Free: enough tickets but zero revenue — separate "Free" tier
+    current_free = current_activated & ~current_has_revenue
+    logger.info(
+        f"Activated accounts (current): {current_activated.sum():,} of {len(df):,} "
+        f"(paid: {current_paid_activated.sum():,}, free: {current_free.sum():,})"
+    )
 
     # Rename previous-period columns to match the ranking helper's expectations
     df.rename(columns={
@@ -229,23 +242,34 @@ def calculate_composite_tiers(account_metrics: Dict[int, Dict[str, Any]]) -> pd.
     }, inplace=True)
 
     previous_activated = df['tickets_current_prev'] >= MIN_TICKETS_FOR_ACTIVE
+    previous_has_revenue = df['revenue_lifetime_prev'] > 0
+    previous_paid_activated = previous_activated & previous_has_revenue
+    previous_free = previous_activated & ~previous_has_revenue
 
-    # --- Current period percentile ranks (among activated only) ---
+    # --- Current period percentile ranks (among paid activated only) ---
     df = _rank_percentiles(df, [
         'revenue_current', 'revenue_lifetime', 'years_loyalty',
-    ], mask=current_activated)
+    ], mask=current_paid_activated)
+    # Accounts at the loyalty cap are treated as fully loyal — force their
+    # percentile to 0 (best) rather than the tied-group average.
+    df.loc[current_paid_activated & (df['years_loyalty'] >= YEARS_LOYALTY_CAP),
+           'years_loyalty_pct'] = 0.0
     df['Composite_Score'] = _compute_composite(df)
 
-    # --- Previous period percentile ranks (among previously activated only) ---
+    # --- Previous period percentile ranks (among previously paid activated only) ---
     df = _rank_percentiles(df, [
         'revenue_current_prev', 'revenue_lifetime_prev',
         'years_loyalty_prev',
-    ], mask=previous_activated)
+    ], mask=previous_paid_activated)
+    df.loc[previous_paid_activated & (df['years_loyalty_prev'] >= YEARS_LOYALTY_CAP),
+           'years_loyalty_prev_pct'] = 0.0
     df['Previous_Composite_Score'] = _compute_composite(df, suffix='_prev')
 
     # --- Tier assignment ---
-    df['Current_Tier'] = _assign_tier(df['Composite_Score'], current_activated)
-    df['Previous_Tier'] = _assign_tier(df['Previous_Composite_Score'], previous_activated)
+    df['Current_Tier'] = _assign_tier(df['Composite_Score'], current_paid_activated)
+    df.loc[current_free, 'Current_Tier'] = 'Free'
+    df['Previous_Tier'] = _assign_tier(df['Previous_Composite_Score'], previous_paid_activated)
+    df.loc[previous_free, 'Previous_Tier'] = 'Free'
 
     # --- YoY movement ---
     df['Tier_Movement'] = _calculate_movement(df['Current_Tier'], df['Previous_Tier'])

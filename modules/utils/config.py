@@ -72,6 +72,11 @@ MIN_YEARS_BY_TIER = {
 # === ACTIVITY THRESHOLDS ===
 MIN_TICKETS_FOR_ACTIVE = 10  # Minimum tickets to be considered active
 
+# Years of loyalty are capped at this value before percentile-ranking, so
+# tenure beyond the cap doesn't keep stacking. Lower the cap to make
+# "established" easier to reach; raise it to weight long-standing accounts more.
+YEARS_LOYALTY_CAP = 5
+
 # === EVENT FREQUENCY THRESHOLDS ===
 EVENT_FREQUENCY_THRESHOLDS = {
     "Regular": 4,     # 4+ events

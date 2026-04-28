@@ -51,13 +51,13 @@ from modules.utils.data_loader import (
 )
 from modules.utils.date_utils import get_latest_data_date
 from modules.utils.performance import timer_decorator
-from modules.tier_calculator import determine_tier_from_percentiles
+from modules.tier_calculator_v2 import calculate_composite_tiers
 from modules.uk_regional_segmentation import (
     extract_postcode_areas_vectorized,
     get_regions_vectorized,
     VALID_UK_POSTCODE_AREAS
 )
-from modules.event_keyword_analysis import generate_keyword_analysis_csvs
+from modules.event_keyword_analysis import generate_keyword_analysis_csvs, build_keyword_frequency_table
 
 
 # Output folder structure
@@ -159,6 +159,10 @@ def parse_args():
         '--start', type=str,
         help='Start month in YYYY-MM format (requires --end)'
     )
+    group.add_argument(
+        '--monthly-review', type=str, nargs='?', const='auto', metavar='YYYY-MM',
+        help='Generate Monthly Business Review data (auto-detects previous month, or specify YYYY-MM)'
+    )
 
     parser.add_argument(
         '--end', type=str,
@@ -177,6 +181,16 @@ def parse_args():
         parser.error("--start requires --end")
     if args.end and not args.start:
         parser.error("--end requires --start")
+
+    # Validate monthly review argument
+    if args.monthly_review and args.monthly_review != 'auto':
+        try:
+            review_date = datetime.strptime(args.monthly_review, '%Y-%m')
+        except ValueError:
+            parser.error("--monthly-review must be in YYYY-MM format")
+        today = datetime.now(UK_TZ)
+        if review_date.year > today.year or (review_date.year == today.year and review_date.month >= today.month):
+            parser.error("--monthly-review month must be a complete (past) month")
 
     return args
 
@@ -221,6 +235,23 @@ def get_month_range(args):
             current += relativedelta(months=1)
 
     return months
+
+
+def get_monthly_review_ranges(review_year, review_month):
+    """
+    Get month range and year-to-date range for a monthly business review.
+
+    Args:
+        review_year: Year of the review month
+        review_month: Month of the review month (1-12)
+
+    Returns:
+        Tuple of (month_range, ytd_range) where each is a list of (year, month) tuples.
+        For a January review, both are identical (single month = YTD).
+    """
+    month_range = [(review_year, review_month)]
+    ytd_range = [(review_year, m) for m in range(1, review_month + 1)]
+    return month_range, ytd_range
 
 
 def get_month_boundaries(year, month):
@@ -627,7 +658,7 @@ def calculate_yoy_metrics(current_metrics, previous_year_metrics):
         current_metrics['YoY New Accounts'] = None
         current_metrics['YoY Created Events'] = None
         current_metrics['YoY Tier Qualified'] = None
-        current_metrics['YoY Tier 4+'] = None
+        current_metrics['YoY Tier 3+'] = None
         current_metrics['YoY Events With Sales'] = None
         current_metrics['YoY Ticket Revenue'] = None
         current_metrics['YoY Fees'] = None
@@ -651,9 +682,9 @@ def calculate_yoy_metrics(current_metrics, previous_year_metrics):
         current_metrics['New Accounts Tier Qualified'],
         previous_year_metrics['New Accounts Tier Qualified']
     )
-    current_metrics['YoY Tier 4+'] = calc_yoy(
-        current_metrics.get('New Accounts Tier 4+', 0),
-        previous_year_metrics.get('New Accounts Tier 4+', 0)
+    current_metrics['YoY Tier 3+'] = calc_yoy(
+        current_metrics.get('New Accounts Tier 3+', 0),
+        previous_year_metrics.get('New Accounts Tier 3+', 0)
     )
     current_metrics['YoY Events With Sales'] = calc_yoy(
         current_metrics['Events With Sales'],
@@ -672,7 +703,7 @@ def calculate_yoy_metrics(current_metrics, previous_year_metrics):
     current_metrics['PY New Accounts'] = previous_year_metrics['Total New Accounts']
     current_metrics['PY Created Events'] = previous_year_metrics['Activated (Created Events)']
     current_metrics['PY Tier Qualified'] = previous_year_metrics['New Accounts Tier Qualified']
-    current_metrics['PY Tier 4+'] = previous_year_metrics.get('New Accounts Tier 4+', 0)
+    current_metrics['PY Tier 3+'] = previous_year_metrics.get('New Accounts Tier 3+', 0)
     current_metrics['PY Events With Sales'] = previous_year_metrics['Events With Sales']
     current_metrics['PY Ticket Revenue'] = previous_year_metrics['Total Ticket Revenue']
     current_metrics['PY Fees'] = previous_year_metrics['Total Fees']
@@ -1518,6 +1549,212 @@ def generate_industry_subindustry_breakdown_csv(accounts_df, booking_df, months,
 
     industry_df.to_csv(industry_file, index=False, float_format='%.2f')
     return industry_file
+
+
+def generate_industry_by_tier_csv(accounts_df, booking_df, account_tiers, months, output_file,
+                                  review_year=None, review_month=None):
+    """
+    Generate industry fee breakdown across three account segments with YoY comparison.
+
+    Segments:
+    - All active accounts
+    - New accounts only (created in the last 3 months ending at the review month)
+    - Tier 1 + Tier 2 accounts
+
+    Args:
+        accounts_df: Accounts DataFrame
+        booking_df: Booking transactions DataFrame
+        account_tiers: Dictionary mapping AccountId -> tier string
+        months: List of (year, month) tuples for the period
+        output_file: Base output filename
+        review_year: Year of the review month (enables 3-month lookback for New Accounts)
+        review_month: Month of the review month (enables 3-month lookback for New Accounts)
+
+    Returns:
+        Path to generated CSV file, or None if data is unavailable
+    """
+    if not months:
+        return None
+
+    # Determine period boundaries
+    first_year, first_month = months[0]
+    last_year, last_month = months[-1]
+
+    period_start = pd.Timestamp(year=first_year, month=first_month, day=1, tz='Europe/London')
+    last_day = calendar.monthrange(last_year, last_month)[1]
+    period_end = pd.Timestamp(year=last_year, month=last_month, day=last_day,
+                              hour=23, minute=59, second=59, tz='Europe/London')
+
+    # Previous year period
+    py_start = pd.Timestamp(year=first_year - 1, month=first_month, day=1, tz='Europe/London')
+    py_last_day = calendar.monthrange(last_year - 1, last_month)[1]
+    py_end = pd.Timestamp(year=last_year - 1, month=last_month, day=py_last_day,
+                          hour=23, minute=59, second=59, tz='Europe/London')
+
+    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Id'
+
+    # Check for industry data
+    industry_col = 'Industry' if 'Industry' in booking_df.columns else None
+    if industry_col is None and 'Industry' in accounts_df.columns:
+        industry_col = 'Industry'
+
+    if industry_col is None:
+        print("    Warning: No industry data available for industry-by-tier analysis")
+        return None
+
+    def _aggregate_segment(period_bookings, segment_label, segment_accounts_filter=None):
+        """Aggregate industry metrics for a filtered segment of bookings."""
+        if segment_accounts_filter is not None:
+            period_bookings = period_bookings[
+                period_bookings['AccountId'].isin(segment_accounts_filter)
+            ]
+
+        if len(period_bookings) == 0:
+            return []
+
+        # Ensure industry is available on bookings
+        if 'Industry' not in period_bookings.columns:
+            period_bookings = period_bookings.merge(
+                accounts_df[[account_id_col, 'Industry']].rename(columns={account_id_col: 'AccountId'}),
+                on='AccountId', how='left'
+            )
+
+        rows = []
+        total_fees = period_bookings['TotalFees'].sum() if 'TotalFees' in period_bookings.columns else 0
+
+        for industry in sorted(period_bookings['Industry'].dropna().unique()):
+            ind_bookings = period_bookings[period_bookings['Industry'] == industry]
+            ind_fees = ind_bookings['TotalFees'].sum() if 'TotalFees' in ind_bookings.columns else 0
+            ind_accounts = ind_bookings['AccountId'].nunique()
+            ind_tickets = int(ind_bookings['TicketQuantity'].sum()) if 'TicketQuantity' in ind_bookings.columns else 0
+
+            rows.append({
+                'Segment': segment_label,
+                'Industry': str(industry),
+                'Active Accounts': ind_accounts,
+                'Tickets': ind_tickets,
+                'Fees': round(ind_fees, 2),
+                '% of Total Fees': round(ind_fees / total_fees * 100, 1) if total_fees > 0 else 0,
+            })
+
+        return rows
+
+    # Filter bookings to current and previous year periods
+    current_bookings = booking_df[
+        (booking_df['TransactionDate'] >= period_start) &
+        (booking_df['TransactionDate'] <= period_end)
+    ].copy()
+
+    py_bookings = booking_df[
+        (booking_df['TransactionDate'] >= py_start) &
+        (booking_df['TransactionDate'] <= py_end)
+    ].copy()
+
+    # Identify new accounts — use 3-month lookback if review_year/review_month provided
+    if review_year and review_month:
+        new_end = pd.Timestamp(year=last_year, month=last_month,
+                               day=calendar.monthrange(last_year, last_month)[1],
+                               hour=23, minute=59, second=59, tz='Europe/London')
+        new_start = (new_end.normalize() - pd.DateOffset(months=3) + pd.Timedelta(days=1))
+        new_start = new_start.tz_localize('Europe/London') if new_start.tzinfo is None else new_start
+
+        py_new_end = pd.Timestamp(year=last_year - 1, month=last_month,
+                                  day=calendar.monthrange(last_year - 1, last_month)[1],
+                                  hour=23, minute=59, second=59, tz='Europe/London')
+        py_new_start = (py_new_end.normalize() - pd.DateOffset(months=3) + pd.Timedelta(days=1))
+        py_new_start = py_new_start.tz_localize('Europe/London') if py_new_start.tzinfo is None else py_new_start
+    else:
+        new_start = period_start
+        new_end = period_end
+        py_new_start = py_start
+        py_new_end = py_end
+
+    new_account_ids = set(
+        accounts_df[
+            (accounts_df['DateTimeCreated'] >= new_start) &
+            (accounts_df['DateTimeCreated'] <= new_end)
+        ][account_id_col].astype(float).dropna().unique()
+    )
+    py_new_account_ids = set(
+        accounts_df[
+            (accounts_df['DateTimeCreated'] >= py_new_start) &
+            (accounts_df['DateTimeCreated'] <= py_new_end)
+        ][account_id_col].astype(float).dropna().unique()
+    )
+
+    # Identify Tier 1 + Tier 2 accounts
+    kv_hv_ids = set(
+        acct_id for acct_id, tier in account_tiers.items()
+        if tier in ('Tier 1', 'Tier 2')
+    )
+
+    # Build current period rows for all three segments
+    all_rows = []
+    segments = [
+        ('All Active', None),
+        ('New Accounts', new_account_ids),
+        ('Tier 1 + Tier 2', kv_hv_ids),
+    ]
+
+    for label, filter_ids in segments:
+        all_rows.extend(_aggregate_segment(current_bookings, label, filter_ids))
+
+    current_df = pd.DataFrame(all_rows)
+
+    if current_df.empty:
+        print("    Warning: No data for industry-by-tier analysis")
+        return None
+
+    # Build previous year rows for YoY comparison
+    py_rows = []
+    py_segments = [
+        ('All Active', None),
+        ('New Accounts', py_new_account_ids),
+        ('Tier 1 + Tier 2', kv_hv_ids),
+    ]
+
+    for label, filter_ids in py_segments:
+        py_rows.extend(_aggregate_segment(py_bookings, label, filter_ids))
+
+    py_df = pd.DataFrame(py_rows)
+
+    # Merge YoY data
+    if not py_df.empty:
+        py_df = py_df.rename(columns={
+            'Active Accounts': 'PY Active Accounts',
+            'Tickets': 'PY Tickets',
+            'Fees': 'PY Fees',
+            '% of Total Fees': 'PY % of Total Fees',
+        })
+        current_df = current_df.merge(
+            py_df[['Segment', 'Industry', 'PY Active Accounts', 'PY Tickets', 'PY Fees', 'PY % of Total Fees']],
+            on=['Segment', 'Industry'], how='left'
+        )
+
+        # Calculate YoY changes
+        current_df['Fees YoY %'] = current_df.apply(
+            lambda r: round((r['Fees'] - r['PY Fees']) / r['PY Fees'] * 100, 1)
+            if pd.notna(r.get('PY Fees')) and r.get('PY Fees', 0) > 0 else None,
+            axis=1
+        )
+        current_df['Accounts YoY %'] = current_df.apply(
+            lambda r: round((r['Active Accounts'] - r['PY Active Accounts']) / r['PY Active Accounts'] * 100, 1)
+            if pd.notna(r.get('PY Active Accounts')) and r.get('PY Active Accounts', 0) > 0 else None,
+            axis=1
+        )
+
+    # Sort by segment then fees descending
+    segment_order = {'All Active': 0, 'New Accounts': 1, 'Tier 1 + Tier 2': 2}
+    current_df['_order'] = current_df['Segment'].map(segment_order)
+    current_df = current_df.sort_values(['_order', 'Fees'], ascending=[True, False]).drop('_order', axis=1)
+
+    # Save
+    base_name = output_file.rsplit('.', 1)[0]
+    output_path = get_output_path(base_name, 'industry', '_industry_by_tier.csv')
+    current_df.to_csv(output_path, index=False, float_format='%.2f')
+    print(f"    ✓ Industry by tier segment: {output_path}")
+
+    return output_path
 
 
 def _calculate_industry_geo_metrics_for_period(booking_df, accounts_df, period_start, period_end, account_id_col):
@@ -3978,9 +4215,9 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
         accounts_with_year = accounts_df.copy()
         accounts_with_year['CreatedYear'] = pd.to_datetime(accounts_with_year['DateTimeCreated']).dt.year
 
-        # Calculate tiers for High Value analysis (Key Account + High Value)
+        # Calculate tiers for Tier 1 + Tier 2 analysis
         # Tiers are calculated based on each year's activity
-        high_value_tiers = {'Key Account', 'High Value'}
+        high_value_tiers = {'Tier 1', 'Tier 2'}
 
         yoy_rows = []
         new_account_rows = []
@@ -4055,7 +4292,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
                     })
 
             # === HIGH VALUE ACCOUNTS BY INDUSTRY ===
-            # Get High Value (Key Account + High Value) accounts active in this year
+            # Get Tier 1 + Tier 2 accounts active in this year
             # Calculate tiers based on activity in that specific year
             year_account_fees = year_bookings.groupby('AccountId').agg({
                 'TotalFees': 'sum',
@@ -4067,23 +4304,23 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
                 year_account_fees['fees_pct'] = year_account_fees['TotalFees'].rank(pct=True) * 100
                 year_account_fees['tickets_pct'] = year_account_fees['TicketQuantity'].rank(pct=True) * 100
 
-                # Assign tiers based on percentiles (Key Account = 99th, High Value = 95th)
+                # Assign tiers based on v2 percentile bands (Tier 1 = top 2%, Tier 2 = 3-10%)
                 def assign_tier(row):
                     max_pct = max(row['fees_pct'], row['tickets_pct'])
-                    if max_pct >= 99:
-                        return 'Key Account'
-                    elif max_pct >= 95:
-                        return 'High Value'
+                    if max_pct >= 98:
+                        return 'Tier 1'
+                    elif max_pct >= 90:
+                        return 'Tier 2'
                     else:
                         return 'Other'
 
                 year_account_fees['Tier'] = year_account_fees.apply(assign_tier, axis=1)
                 year_account_fees['IsHighValue'] = year_account_fees['Tier'].isin(high_value_tiers)
 
-                # Get High Value account IDs
+                # Get top tier account IDs
                 high_value_accounts = year_account_fees[year_account_fees['IsHighValue']]['AccountId'].tolist()
 
-                # Get industry for High Value accounts from bookings
+                # Get industry for top tier accounts from bookings
                 high_value_bookings = year_bookings[year_bookings['AccountId'].isin(high_value_accounts)]
 
                 hv_by_industry = high_value_bookings.groupby('Industry').agg({
@@ -4107,7 +4344,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
             industries = industry_yoy_df['Industry'].unique()
             comparison_rows = []
 
-            # Create DataFrames for new accounts and High Value for easy lookup
+            # Create DataFrames for new accounts and top tier for easy lookup
             new_account_df = pd.DataFrame(new_account_rows) if new_account_rows else pd.DataFrame()
             high_value_df = pd.DataFrame(high_value_rows) if high_value_rows else pd.DataFrame()
 
@@ -4175,7 +4412,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
                     row['2025_High_Value_Accounts'] = int(hv_2025['High_Value_Accounts'].iloc[0]) if len(hv_2025) > 0 else 0
                     row['2025_High_Value_Fees'] = float(hv_2025['High_Value_Fees'].iloc[0]) if len(hv_2025) > 0 else 0
 
-                    # High Value growth
+                    # Top tier growth
                     if row['2024_High_Value_Accounts'] > 0:
                         row['High_Value_Account_Growth_%'] = round((row['2025_High_Value_Accounts'] - row['2024_High_Value_Accounts']) / row['2024_High_Value_Accounts'] * 100, 1)
                     else:
@@ -4202,15 +4439,14 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
 
 def calculate_account_tiers(accounts_df, booking_df, as_of_date=None):
     """
-    Calculate tiers for ALL accounts based on percentile rankings across entire population.
+    Calculate tiers for ALL accounts using the v2 composite scoring system.
 
-    This uses the same tier logic as zoho_tiers.py:
-    - Path A: tickets_current percentile
-    - Path B: revenue_current percentile
-    - Path C+D+E: years_loyalty + lifetime_revenue_pct + avg_revenue_per_year_pct
+    Uses a weighted composite score:
+        composite = (0.55 x revenue_current) + (0.35 x revenue_lifetime) +
+                    (0.10 x years_loyalty)
 
-    Tiers: Key Account (99th), High Value (95th), Tier 4 (75th), Tier 3 (50th),
-           Tier 2 (25th), Tier 1 (below 25th), NIL (no activity)
+    Tiers: Tier 1 (top 2%), Tier 2 (3-10%), Tier 3 (11-25%),
+           Tier 4 (26-50%), Tier 5 (51-100%), Free, Nil
 
     Args:
         accounts_df: Accounts DataFrame with DateTimeCreated
@@ -4227,6 +4463,7 @@ def calculate_account_tiers(accounts_df, booking_df, as_of_date=None):
     # Use provided date or default to today
     reference_date = as_of_date if as_of_date else date.today()
     cutoff_365 = reference_date - timedelta(days=365)
+    cutoff_prev = cutoff_365 - timedelta(days=365)
 
     date_label = reference_date.strftime('%Y-%m-%d') if as_of_date else "current"
     print(f"  Calculating tiers for all accounts (as of {date_label})...")
@@ -4238,13 +4475,11 @@ def calculate_account_tiers(accounts_df, booking_df, as_of_date=None):
     # Filter bookings to only those before the reference date
     booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'])
     if as_of_date:
-        # For historical calculation, only include transactions up to the reference date
         reference_ts = pd.Timestamp(reference_date)
         if booking_df['TransactionDate'].dt.tz is not None:
             reference_ts = reference_ts.tz_localize('UTC')
         booking_df = booking_df[booking_df['TransactionDate'].dt.date <= reference_date]
 
-    # Aggregate metrics per account using vectorised operations (optimised)
     # Filter out null AccountIds upfront
     booking_df = booking_df[booking_df['AccountId'].notna()]
 
@@ -4255,9 +4490,10 @@ def calculate_account_tiers(accounts_df, booking_df, as_of_date=None):
     # Ensure AccountId is integer
     booking_df['AccountId'] = booking_df['AccountId'].astype(int)
 
-    # Add current period flag
+    # Add period flags
     booking_df['tx_date'] = pd.to_datetime(booking_df['TransactionDate']).dt.date
     booking_df['is_current'] = booking_df['tx_date'] >= cutoff_365
+    booking_df['is_prev'] = (booking_df['tx_date'] >= cutoff_prev) & (booking_df['tx_date'] < cutoff_365)
     booking_df['tx_year'] = pd.to_datetime(booking_df['TransactionDate']).dt.year
 
     # Calculate fee columns sum
@@ -4268,77 +4504,78 @@ def calculate_account_tiers(accounts_df, booking_df, as_of_date=None):
     booking_df['total_fees'] = booking_df[existing_fee_cols].sum(axis=1) if existing_fee_cols else 0
 
     # Vectorised aggregation - lifetime metrics
-    lifetime_agg = booking_df.groupby('AccountId').agg({
-        'total_fees': 'sum',
-        'tx_year': 'nunique'
-    }).rename(columns={'total_fees': 'revenue_lifetime', 'tx_year': 'years_loyalty'})
+    lifetime_agg = booking_df.groupby('AccountId').agg(
+        revenue_lifetime=('total_fees', 'sum'),
+        years_loyalty=('tx_year', 'nunique'),
+        tickets_lifetime=('TicketQuantity', 'sum') if 'TicketQuantity' in booking_df.columns else ('total_fees', 'count'),
+    )
 
     # Vectorised aggregation - current period metrics
     current_df = booking_df[booking_df['is_current']]
     if len(current_df) > 0:
-        current_agg = current_df.groupby('AccountId').agg({
-            'TicketQuantity': 'sum' if 'TicketQuantity' in current_df.columns else lambda x: 0,
-            'total_fees': 'sum'
-        }).rename(columns={'TicketQuantity': 'tickets_current', 'total_fees': 'revenue_current'})
+        current_agg = current_df.groupby('AccountId').agg(
+            tickets_current=('TicketQuantity', 'sum') if 'TicketQuantity' in current_df.columns else ('total_fees', 'count'),
+            revenue_current=('total_fees', 'sum'),
+        )
     else:
         current_agg = pd.DataFrame(columns=['tickets_current', 'revenue_current'])
 
-    # Merge lifetime and current metrics
-    metrics_df = lifetime_agg.join(current_agg, how='left')
-    metrics_df['tickets_current'] = metrics_df['tickets_current'].fillna(0)
-    metrics_df['revenue_current'] = metrics_df['revenue_current'].fillna(0)
+    # Vectorised aggregation - previous period metrics
+    prev_df = booking_df[booking_df['is_prev']]
+    if len(prev_df) > 0:
+        prev_agg = prev_df.groupby('AccountId').agg(
+            tickets_prev=('TicketQuantity', 'sum') if 'TicketQuantity' in prev_df.columns else ('total_fees', 'count'),
+            revenue_prev=('total_fees', 'sum'),
+            years_loyalty_prev=('tx_year', 'nunique'),
+        )
+    else:
+        prev_agg = pd.DataFrame(columns=['tickets_prev', 'revenue_prev', 'years_loyalty_prev'])
 
-    # Calculate average revenue per year
-    metrics_df['avg_revenue_per_year'] = np.where(
-        metrics_df['years_loyalty'] > 0,
-        metrics_df['revenue_lifetime'] / metrics_df['years_loyalty'],
-        0
-    )
+    # Merge all metrics
+    metrics_df = lifetime_agg.join(current_agg, how='left').join(prev_agg, how='left')
+    metrics_df = metrics_df.fillna(0)
 
     # Clean up temporary columns from booking_df
-    booking_df.drop(columns=['tx_date', 'is_current', 'tx_year', 'total_fees'], inplace=True, errors='ignore')
+    booking_df.drop(columns=['tx_date', 'is_current', 'is_prev', 'tx_year', 'total_fees'], inplace=True, errors='ignore')
 
-    # Calculate percentile rankings (only for accounts with activity)
-    for metric in ['tickets_current', 'revenue_current', 'revenue_lifetime', 'avg_revenue_per_year']:
-        pct_col = f"{metric}_pct"
-        mask = metrics_df[metric] > 0
-        if mask.sum() > 0:
-            metrics_df.loc[mask, pct_col] = metrics_df.loc[mask, metric].rank(pct=True, method='average') * 100
-        metrics_df.loc[~mask, pct_col] = 0
+    # Build the dict expected by calculate_composite_tiers
+    account_metrics = {}
+    for account_id, row in metrics_df.iterrows():
+        account_metrics[int(account_id)] = {
+            'revenue_current': float(row['revenue_current']),
+            'revenue_lifetime': float(row['revenue_lifetime']),
+            'tickets_current': int(row['tickets_current']),
+            'years_loyalty': int(row['years_loyalty']),
+            'revenue_prev': float(row['revenue_prev']),
+            'tickets_prev': int(row.get('tickets_prev', 0)),
+            'years_loyalty_prev': int(row.get('years_loyalty_prev', 0)),
+            'tickets_lifetime': int(row.get('tickets_lifetime', 0)),
+        }
 
-    # Determine tier for each account using vectorised apply (optimised)
-    metrics_df['has_activity'] = metrics_df['tickets_current'] >= MIN_TICKETS_FOR_ACTIVE
+    # Calculate tiers using v2 composite scoring
+    tiers_df = calculate_composite_tiers(account_metrics)
 
-    # Use numpy arrays for faster iteration than iterrows
-    metrics_df['tier'] = [
-        determine_tier_from_percentiles(
-            a_pct=row['tickets_current_pct'],
-            b_pct=row['revenue_current_pct'],
-            c_years=row['years_loyalty'],
-            d_pct=row['revenue_lifetime_pct'],
-            e_pct=row['avg_revenue_per_year_pct'],
-            has_activity=row['has_activity']
-        )
-        for _, row in metrics_df[['tickets_current_pct', 'revenue_current_pct', 'years_loyalty',
-                                   'revenue_lifetime_pct', 'avg_revenue_per_year_pct', 'has_activity']].iterrows()
-    ]
+    if tiers_df.empty:
+        print("    No tiers calculated")
+        return {}
 
-    # Convert to dictionary
-    account_tiers = metrics_df['tier'].to_dict()
+    # Convert to dictionary (AccountId -> tier string)
+    account_tiers = tiers_df.set_index('AccountId')['Current_Tier'].to_dict()
 
-    # Log tier distribution using value_counts (optimised)
-    tier_counts = metrics_df['tier'].value_counts().to_dict()
-
+    # Log tier distribution
+    tier_counts = tiers_df['Current_Tier'].value_counts().to_dict()
     print(f"    Calculated tiers for {len(account_tiers):,} accounts")
-    tier_4_plus = sum(tier_counts.get(t, 0) for t in ['Key Account', 'High Value', 'Tier 4'])
-    print(f"    Tier 4+ accounts: {tier_4_plus:,}")
+    tier_3_plus = sum(tier_counts.get(t, 0) for t in ['Tier 1', 'Tier 2', 'Tier 3'])
+    print(f"    Tier 3+ accounts: {tier_3_plus:,}")
 
     return account_tiers
 
 
-def count_tier4_plus_new_accounts(accounts_df, account_tiers, year, month):
+def count_tier3_plus_new_accounts(accounts_df, account_tiers, year, month):
     """
-    Count new accounts created in a specific month that achieved Tier 4+.
+    Count new accounts created in a specific month that achieved Tier 3+.
+
+    Tier 3+ means Tier 1, Tier 2, or Tier 3 (top 25% of accounts).
 
     Args:
         accounts_df: Accounts DataFrame with DateTimeCreated
@@ -4347,7 +4584,7 @@ def count_tier4_plus_new_accounts(accounts_df, account_tiers, year, month):
         month: Month to filter
 
     Returns:
-        Count of Tier 4+ new accounts for that month
+        Count of Tier 3+ new accounts for that month
     """
     # Get month boundaries
     month_start = pd.Timestamp(year=year, month=month, day=1, tz='Europe/London')
@@ -4364,19 +4601,19 @@ def count_tier4_plus_new_accounts(accounts_df, account_tiers, year, month):
         (accounts_df['DateTimeCreated'] <= month_end)
     ]
 
-    # Count how many achieved Tier 4+
-    tier_4_plus_tiers = {'Key Account', 'High Value', 'Tier 4'}
-    tier4_plus_count = 0
+    # Count how many achieved Tier 3+
+    tier_3_plus_tiers = {'Tier 1', 'Tier 2', 'Tier 3'}
+    tier3_plus_count = 0
 
     for _, row in new_accounts.iterrows():
         account_id = row[account_id_col]
         if pd.notna(account_id):
             account_id = int(float(account_id))
-            tier = account_tiers.get(account_id, 'NIL')
-            if tier in tier_4_plus_tiers:
-                tier4_plus_count += 1
+            tier = account_tiers.get(account_id, 'Nil')
+            if tier in tier_3_plus_tiers:
+                tier3_plus_count += 1
 
-    return tier4_plus_count
+    return tier3_plus_count
 
 
 # === DDDM ANALYTICS MODULES ===
@@ -4684,7 +4921,7 @@ def generate_dormancy_analysis_csv(booking_df: pd.DataFrame, accounts_df: pd.Dat
     """
     Generate dormancy/churn analysis using tier transitions.
 
-    Tracks accounts transitioning to NIL (no activity) status and identifies
+    Tracks accounts transitioning to Nil (no activity) status and identifies
     dormancy patterns by segment.
 
     Args:
@@ -6179,7 +6416,7 @@ def generate_organiser_concentration_csv(booking_df: pd.DataFrame, accounts_df: 
     tier_summary['Accounts %'] = round(tier_summary['Accounts'] / total_accounts * 100, 1)
 
     # Order tiers logically
-    tier_order = ['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1', 'Untiered']
+    tier_order = ['Tier 1', 'Tier 2', 'Tier 3', 'Tier 4', 'Tier 5', 'Free', 'Nil']
     tier_summary['Order'] = tier_summary['Tier'].apply(
         lambda x: tier_order.index(x) if x in tier_order else 99
     )
@@ -6219,25 +6456,25 @@ def generate_organiser_concentration_csv(booking_df: pd.DataFrame, accounts_df: 
         year_account_fees.columns = ['AccountId', 'YearFees']
         year_account_fees = year_account_fees.sort_values('YearFees', ascending=False)
 
-        # Assign tiers based on percentiles
+        # Assign tiers based on v2 percentile bands
         total_accounts = len(year_account_fees)
         year_account_fees['Rank'] = range(1, total_accounts + 1)
         year_account_fees['Percentile'] = year_account_fees['Rank'] / total_accounts * 100
 
-        # Assign tiers using standard tier percentile boundaries (1%, 5%, 25%, 50%)
+        # Assign tiers using v2 composite band boundaries (2%, 10%, 25%, 50%)
         def assign_tier(row):
-            if row['Percentile'] <= 1:
-                return 'Key Account'  # Top 1%
-            elif row['Percentile'] <= 5:
-                return 'High Value'   # Top 5%
+            if row['Percentile'] <= 2:
+                return 'Tier 1'    # Top 2%
+            elif row['Percentile'] <= 10:
+                return 'Tier 2'    # 3-10%
             elif row['Percentile'] <= 25:
-                return 'Tier 4'       # Top 25%
+                return 'Tier 3'    # 11-25%
             elif row['Percentile'] <= 50:
-                return 'Tier 3'       # Top 50%
+                return 'Tier 4'    # 26-50%
             elif row['YearFees'] > 0:
-                return 'Tier 2/1'     # Bottom 50% with activity
+                return 'Tier 5'    # 51-100%
             else:
-                return 'NIL'
+                return 'Nil'
 
         year_account_fees['Tier'] = year_account_fees.apply(assign_tier, axis=1)
 
@@ -6264,7 +6501,7 @@ def generate_organiser_concentration_csv(booking_df: pd.DataFrame, accounts_df: 
     result_2025, accounts_2025, total_acc_2025, total_fees_2025 = calculate_year_concentration(bookings_2025, '2025')
 
     # Merge results
-    tier_order = ['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2/1', 'NIL']
+    tier_order = ['Tier 1', 'Tier 2', 'Tier 3', 'Tier 4', 'Tier 5', 'Nil']
 
     yoy_data = []
     for tier in tier_order:
@@ -6297,44 +6534,44 @@ def generate_organiser_concentration_csv(booking_df: pd.DataFrame, accounts_df: 
         fees_pct = round(fees / total_fees * 100, 1) if total_fees > 0 else 0
         return count, fees, fees_pct
 
-    # Top 1% (Key Account boundary)
-    count_2024, fees_2024, pct_2024 = calculate_top_n_pct(accounts_2024, total_fees_2024, 1)
-    count_2025, fees_2025, pct_2025 = calculate_top_n_pct(accounts_2025, total_fees_2025, 1)
+    # Top 2% (Tier 1 boundary)
+    count_2024, fees_2024, pct_2024 = calculate_top_n_pct(accounts_2024, total_fees_2024, 2)
+    count_2025, fees_2025, pct_2025 = calculate_top_n_pct(accounts_2025, total_fees_2025, 2)
     yoy_data.append({
-        'Tier': 'Top 1% (Key Account)',
-        '2024 Accounts': count_2024, '2024 Account %': 1.0,
+        'Tier': 'Top 2% (Tier 1)',
+        '2024 Accounts': count_2024, '2024 Account %': 2.0,
         '2024 Fees': round(fees_2024, 2), '2024 Fees %': pct_2024,
-        '2025 Accounts': count_2025, '2025 Account %': 1.0,
+        '2025 Accounts': count_2025, '2025 Account %': 2.0,
         '2025 Fees': round(fees_2025, 2), '2025 Fees %': pct_2025,
     })
 
-    # Top 5% (High Value boundary)
-    count_2024, fees_2024, pct_2024 = calculate_top_n_pct(accounts_2024, total_fees_2024, 5)
-    count_2025, fees_2025, pct_2025 = calculate_top_n_pct(accounts_2025, total_fees_2025, 5)
+    # Top 10% (Tier 2+ boundary)
+    count_2024, fees_2024, pct_2024 = calculate_top_n_pct(accounts_2024, total_fees_2024, 10)
+    count_2025, fees_2025, pct_2025 = calculate_top_n_pct(accounts_2025, total_fees_2025, 10)
     yoy_data.append({
-        'Tier': 'Top 5% (High Value+)',
-        '2024 Accounts': count_2024, '2024 Account %': 5.0,
+        'Tier': 'Top 10% (Tier 2+)',
+        '2024 Accounts': count_2024, '2024 Account %': 10.0,
         '2024 Fees': round(fees_2024, 2), '2024 Fees %': pct_2024,
-        '2025 Accounts': count_2025, '2025 Account %': 5.0,
+        '2025 Accounts': count_2025, '2025 Account %': 10.0,
         '2025 Fees': round(fees_2025, 2), '2025 Fees %': pct_2025,
     })
 
-    # Top 25% (Tier 4 boundary)
+    # Top 25% (Tier 3+ boundary)
     count_2024, fees_2024, pct_2024 = calculate_top_n_pct(accounts_2024, total_fees_2024, 25)
     count_2025, fees_2025, pct_2025 = calculate_top_n_pct(accounts_2025, total_fees_2025, 25)
     yoy_data.append({
-        'Tier': 'Top 25% (Tier 4+)',
+        'Tier': 'Top 25% (Tier 3+)',
         '2024 Accounts': count_2024, '2024 Account %': 25.0,
         '2024 Fees': round(fees_2024, 2), '2024 Fees %': pct_2024,
         '2025 Accounts': count_2025, '2025 Account %': 25.0,
         '2025 Fees': round(fees_2025, 2), '2025 Fees %': pct_2025,
     })
 
-    # Top 50% (Tier 3 boundary)
+    # Top 50% (Tier 4+ boundary)
     count_2024, fees_2024, pct_2024 = calculate_top_n_pct(accounts_2024, total_fees_2024, 50)
     count_2025, fees_2025, pct_2025 = calculate_top_n_pct(accounts_2025, total_fees_2025, 50)
     yoy_data.append({
-        'Tier': 'Top 50% (Tier 3+)',
+        'Tier': 'Top 50% (Tier 4+)',
         '2024 Accounts': count_2024, '2024 Account %': 50.0,
         '2024 Fees': round(fees_2024, 2), '2024 Fees %': pct_2024,
         '2025 Accounts': count_2025, '2025 Account %': 50.0,
@@ -6850,16 +7087,22 @@ def generate_fee_structure_analysis_csv(booking_df: pd.DataFrame, output_file: s
 
 
 def generate_activation_by_month_csv(accounts_df: pd.DataFrame, booking_df: pd.DataFrame,
-                                      output_file: str) -> dict:
+                                      output_file: str, review_year: int = None,
+                                      review_month: int = None) -> dict:
     """
     Generate activation rate analysis by signup month.
 
     Shows how quickly accounts activate based on signup month.
+    When review_year/review_month are provided (MBR mode), additionally
+    outputs a per-year breakdown CSV for the review month to enable YoY
+    comparison charts.
 
     Args:
         accounts_df: Accounts DataFrame
         booking_df: Booking transactions DataFrame
         output_file: Base output filename
+        review_year: Optional year for MBR focus
+        review_month: Optional month (1-12) for MBR focus
 
     Returns:
         Dictionary of generated file paths
@@ -6921,8 +7164,12 @@ def generate_activation_by_month_csv(accounts_df: pd.DataFrame, booking_df: pd.D
     print(f"    ✓ Activation by signup month: {activation_file}")
 
     # === ACTIVATION RATES YOY COMPARISON ===
-    # Compare activation rates for accounts created in 2024 vs 2025
-    print("    Generating activation rates YoY comparison...")
+    mbr_mode = review_year is not None and review_month is not None
+    if mbr_mode:
+        activation_years = [review_year - 2, review_year - 1, review_year]
+    else:
+        activation_years = [2024, 2025]
+    print(f"    Generating activation rates YoY comparison ({activation_years})...")
 
     # Add signup year
     accounts_df['SignupYear'] = pd.to_datetime(accounts_df['DateTimeCreated']).dt.year
@@ -6946,7 +7193,7 @@ def generate_activation_by_month_csv(accounts_df: pd.DataFrame, booking_df: pd.D
     accounts_df.loc[accounts_df['DaysToFirstSale'] < 0, 'DaysToFirstSale'] = None
 
     activation_yoy_rows = []
-    for year in [2024, 2025]:
+    for year in activation_years:
         year_accounts = accounts_df[accounts_df['SignupYear'] == year]
         total = len(year_accounts)
 
@@ -7001,100 +7248,95 @@ def generate_activation_by_month_csv(accounts_df: pd.DataFrame, booking_df: pd.D
             'Avg_Days_Sale': round(avg_days_sale, 1) if avg_days_sale else None
         })
 
-    if len(activation_yoy_rows) == 2:
-        data_2024 = activation_yoy_rows[0] if activation_yoy_rows[0]['Year'] == 2024 else activation_yoy_rows[1]
-        data_2025 = activation_yoy_rows[1] if activation_yoy_rows[1]['Year'] == 2025 else activation_yoy_rows[0]
+    if len(activation_yoy_rows) >= 2:
+        # Build comparison dynamically across all available years
+        yoy_data_by_year = {row['Year']: row for row in activation_yoy_rows}
+        sorted_years = sorted(yoy_data_by_year.keys())
+        newest_year = sorted_years[-1]
+        prev_year = sorted_years[-2]
 
-        def calc_change(v_2025, v_2024):
-            if v_2024 is None or v_2025 is None:
+        def calc_change(v_new, v_old):
+            if v_old is None or v_new is None:
                 return None
-            return round(v_2025 - v_2024, 1)
+            return round(v_new - v_old, 1)
 
-        activation_comparison = pd.DataFrame([
-            {
-                'Metric': '% activated within 1 day (event)',
-                '2024': data_2024['Event_1d_%'],
-                '2025': data_2025['Event_1d_%'],
-                'Change': calc_change(data_2025['Event_1d_%'], data_2024['Event_1d_%'])
-            },
-            {
-                'Metric': '% activated within 3 days (event)',
-                '2024': data_2024['Event_3d_%'],
-                '2025': data_2025['Event_3d_%'],
-                'Change': calc_change(data_2025['Event_3d_%'], data_2024['Event_3d_%'])
-            },
-            {
-                'Metric': '% activated within 7 days (event)',
-                '2024': data_2024['Event_7d_%'],
-                '2025': data_2025['Event_7d_%'],
-                'Change': calc_change(data_2025['Event_7d_%'], data_2024['Event_7d_%'])
-            },
-            {
-                'Metric': '% activated within 30 days (event)',
-                '2024': data_2024['Event_30d_%'],
-                '2025': data_2025['Event_30d_%'],
-                'Change': calc_change(data_2025['Event_30d_%'], data_2024['Event_30d_%'])
-            },
-            {
-                'Metric': '% activated within 90 days (event)',
-                '2024': data_2024['Event_90d_%'],
-                '2025': data_2025['Event_90d_%'],
-                'Change': calc_change(data_2025['Event_90d_%'], data_2024['Event_90d_%'])
-            },
-            {
-                'Metric': 'Average days to first event',
-                '2024': data_2024['Avg_Days_Event'],
-                '2025': data_2025['Avg_Days_Event'],
-                'Change': calc_change(data_2025['Avg_Days_Event'], data_2024['Avg_Days_Event'])
-            },
-            {
-                'Metric': '% with sale within 1 day',
-                '2024': data_2024['Sale_1d_%'],
-                '2025': data_2025['Sale_1d_%'],
-                'Change': calc_change(data_2025['Sale_1d_%'], data_2024['Sale_1d_%'])
-            },
-            {
-                'Metric': '% with sale within 3 days',
-                '2024': data_2024['Sale_3d_%'],
-                '2025': data_2025['Sale_3d_%'],
-                'Change': calc_change(data_2025['Sale_3d_%'], data_2024['Sale_3d_%'])
-            },
-            {
-                'Metric': '% with sale within 7 days',
-                '2024': data_2024['Sale_7d_%'],
-                '2025': data_2025['Sale_7d_%'],
-                'Change': calc_change(data_2025['Sale_7d_%'], data_2024['Sale_7d_%'])
-            },
-            {
-                'Metric': '% with sale within 30 days',
-                '2024': data_2024['Sale_30d_%'],
-                '2025': data_2025['Sale_30d_%'],
-                'Change': calc_change(data_2025['Sale_30d_%'], data_2024['Sale_30d_%'])
-            },
-            {
-                'Metric': '% with sale within 90 days',
-                '2024': data_2024['Sale_90d_%'],
-                '2025': data_2025['Sale_90d_%'],
-                'Change': calc_change(data_2025['Sale_90d_%'], data_2024['Sale_90d_%'])
-            },
-            {
-                'Metric': 'Average days to first sale',
-                '2024': data_2024['Avg_Days_Sale'],
-                '2025': data_2025['Avg_Days_Sale'],
-                'Change': calc_change(data_2025['Avg_Days_Sale'], data_2024['Avg_Days_Sale'])
-            },
-            {
-                'Metric': 'Total accounts created',
-                '2024': data_2024['Total_Accounts'],
-                '2025': data_2025['Total_Accounts'],
-                'Change': data_2025['Total_Accounts'] - data_2024['Total_Accounts']
-            }
-        ])
+        # Build comparison metrics
+        metrics_keys = [
+            ('% activated within 1 day (event)', 'Event_1d_%'),
+            ('% activated within 3 days (event)', 'Event_3d_%'),
+            ('% activated within 7 days (event)', 'Event_7d_%'),
+            ('% activated within 30 days (event)', 'Event_30d_%'),
+            ('% activated within 90 days (event)', 'Event_90d_%'),
+            ('Average days to first event', 'Avg_Days_Event'),
+            ('% with sale within 1 day', 'Sale_1d_%'),
+            ('% with sale within 3 days', 'Sale_3d_%'),
+            ('% with sale within 7 days', 'Sale_7d_%'),
+            ('% with sale within 30 days', 'Sale_30d_%'),
+            ('% with sale within 90 days', 'Sale_90d_%'),
+            ('Average days to first sale', 'Avg_Days_Sale'),
+            ('Total accounts created', 'Total_Accounts'),
+        ]
+
+        comparison_rows = []
+        for metric_label, key in metrics_keys:
+            row = {'Metric': metric_label}
+            for yr in sorted_years:
+                row[str(yr)] = yoy_data_by_year[yr][key]
+            row['Change'] = calc_change(
+                yoy_data_by_year[newest_year][key],
+                yoy_data_by_year[prev_year][key]
+            )
+            comparison_rows.append(row)
+
+        activation_comparison = pd.DataFrame(comparison_rows)
 
         activation_yoy_file = get_output_path(base_name, 'cohorts', '_activation_yoy_comparison.csv')
         activation_comparison.to_csv(activation_yoy_file, index=False)
         output_files['activation_yoy_comparison'] = activation_yoy_file
         print(f"    ✓ Activation rates YoY comparison: {activation_yoy_file}")
+
+    # === MBR: PER-YEAR BREAKDOWN FOR REVIEW MONTH ===
+    if mbr_mode and activation_yoy_rows:
+        # Filter to accounts created in the review month only, per year
+        review_month_rows = []
+        for year in activation_years:
+            year_month_accounts = accounts_df[
+                (accounts_df['SignupYear'] == year) &
+                (accounts_df['SignupMonth'] == review_month)
+            ]
+            total = len(year_month_accounts)
+            if total == 0:
+                continue
+
+            has_dte = 'DaysToFirstEvent' in year_month_accounts.columns
+            event_7d = (year_month_accounts['DaysToFirstEvent'] <= 7).sum() if has_dte else 0
+            event_30d = (year_month_accounts['DaysToFirstEvent'] <= 30).sum() if has_dte else 0
+            event_90d = (year_month_accounts['DaysToFirstEvent'] <= 90).sum() if has_dte else 0
+            activated = year_month_accounts['FirstEventCreation'].notna().sum() if 'FirstEventCreation' in year_month_accounts.columns else 0
+            avg_days = year_month_accounts['DaysToFirstEvent'].dropna().mean() if has_dte else None
+
+            review_month_rows.append({
+                'Year': year,
+                'Month': review_month,
+                'Month Name': calendar.month_name[review_month],
+                'Total Accounts': total,
+                'Activated': activated,
+                'Activation Rate %': round(activated / total * 100, 1),
+                'Within 7 Days': event_7d,
+                'Within 7 Days %': round(event_7d / total * 100, 1),
+                'Within 30 Days': event_30d,
+                'Within 30 Days %': round(event_30d / total * 100, 1),
+                'Within 90 Days': event_90d,
+                'Within 90 Days %': round(event_90d / total * 100, 1),
+                'Avg Days to Activate': round(avg_days, 1) if avg_days and not pd.isna(avg_days) else None,
+            })
+
+        if review_month_rows:
+            review_month_df = pd.DataFrame(review_month_rows)
+            review_month_file = get_output_path(base_name, 'cohorts', '_activation_review_month.csv')
+            review_month_df.to_csv(review_month_file, index=False, float_format='%.1f')
+            output_files['activation_review_month'] = review_month_file
+            print(f"    ✓ Activation review month ({calendar.month_name[review_month]}): {review_month_file}")
 
     return output_files
 
@@ -7210,14 +7452,18 @@ def generate_gateway_migration_csv(booking_df: pd.DataFrame, accounts_df: pd.Dat
 
 def generate_monthly_performance_yoy_csv(booking_df: pd.DataFrame, output_file: str) -> dict:
     """
-    Generate monthly performance YoY comparison (2024 vs 2025).
+    Generate monthly performance YoY comparison for the last 3 years with data.
 
     Creates a side-by-side comparison of key metrics for charting purposes:
-    - Live Accounts (unique accounts with sales)
-    - Events (unique events with sales)
+    - Live Accounts (unique accounts with any transaction)
+    - Live Events (unique events with any transaction)
+    - Accounts with Paid Tickets (unique accounts with PaymentReceived > 0)
+    - Events with Paid Tickets (unique events with PaymentReceived > 0)
     - Tickets (total tickets sold)
     - Revenue (total ticket revenue)
     - Fees (total fees)
+
+    YoY growth is calculated for each consecutive year pair.
 
     Args:
         booking_df: Booking transactions DataFrame
@@ -7241,9 +7487,17 @@ def generate_monthly_performance_yoy_csv(booking_df: pd.DataFrame, output_file: 
     booking_df['Year'] = booking_df['TransactionDate'].dt.year
     booking_df['Month'] = booking_df['TransactionDate'].dt.month
 
-    # Calculate metrics per month for 2024 and 2025
-    years_to_process = [2024, 2025]
+    # Determine last 3 years with meaningful fee data
+    all_years = sorted(booking_df['Year'].unique())
+    years_with_fees = [y for y in all_years
+                       if booking_df[booking_df['Year'] == y]['TotalFees'].sum() > 0]
+    years_to_process = years_with_fees[-3:] if len(years_with_fees) >= 3 else years_with_fees
+
+    print(f"    Years: {', '.join(str(y) for y in years_to_process)}")
+
     monthly_data = []
+    metric_names = ['Live Accounts', 'Live Events', 'Accounts with Paid Tickets',
+                    'Events with Paid Tickets', 'Tickets', 'Revenue', 'Fees']
 
     for month in range(1, 13):
         row = {'Month': month, 'Month Name': MONTH_NAME_MAP[month]}
@@ -7259,8 +7513,15 @@ def generate_monthly_performance_yoy_csv(booking_df: pd.DataFrame, output_file: 
             revenue = round(month_df['PaymentReceived'].sum(), 2) if 'PaymentReceived' in month_df.columns else 0
             fees = round(month_df['TotalFees'].sum(), 2) if 'TotalFees' in month_df.columns else 0
 
+            # Paid-only metrics (PaymentReceived > 0)
+            paid_df = month_df[month_df['PaymentReceived'] > 0] if 'PaymentReceived' in month_df.columns else month_df.iloc[0:0]
+            paid_accounts = paid_df['AccountId'].nunique() if 'AccountId' in paid_df.columns else 0
+            paid_events = paid_df['EventId'].nunique() if 'EventId' in paid_df.columns else 0
+
             row[f'{year} Live Accounts'] = live_accounts
-            row[f'{year} Events'] = events
+            row[f'{year} Live Events'] = events
+            row[f'{year} Accounts with Paid Tickets'] = paid_accounts
+            row[f'{year} Events with Paid Tickets'] = paid_events
             row[f'{year} Tickets'] = tickets
             row[f'{year} Revenue'] = revenue
             row[f'{year} Fees'] = fees
@@ -7270,35 +7531,36 @@ def generate_monthly_performance_yoy_csv(booking_df: pd.DataFrame, output_file: 
     # Create DataFrame
     result_df = pd.DataFrame(monthly_data)
 
-    # Calculate YoY percentages
+    # Calculate YoY percentages for each consecutive year pair
     def calc_yoy(current, previous):
         if previous == 0 or pd.isna(previous):
             return None
         return round((current - previous) / previous * 100, 1)
 
-    result_df['YoY Live Accounts %'] = result_df.apply(
-        lambda r: calc_yoy(r['2025 Live Accounts'], r['2024 Live Accounts']), axis=1
-    )
-    result_df['YoY Events %'] = result_df.apply(
-        lambda r: calc_yoy(r['2025 Events'], r['2024 Events']), axis=1
-    )
-    result_df['YoY Tickets %'] = result_df.apply(
-        lambda r: calc_yoy(r['2025 Tickets'], r['2024 Tickets']), axis=1
-    )
-    result_df['YoY Revenue %'] = result_df.apply(
-        lambda r: calc_yoy(r['2025 Revenue'], r['2024 Revenue']), axis=1
-    )
-    result_df['YoY Fees %'] = result_df.apply(
-        lambda r: calc_yoy(r['2025 Fees'], r['2024 Fees']), axis=1
-    )
+    for i in range(1, len(years_to_process)):
+        curr_year = years_to_process[i]
+        prev_year = years_to_process[i - 1]
+        label = f'{curr_year} vs {prev_year}'
 
-    # Reorder columns to match requested output
-    columns = [
-        'Month', 'Month Name',
-        '2024 Live Accounts', '2024 Events', '2024 Tickets', '2024 Revenue', '2024 Fees',
-        '2025 Live Accounts', '2025 Events', '2025 Tickets', '2025 Revenue', '2025 Fees',
-        'YoY Live Accounts %', 'YoY Events %', 'YoY Tickets %', 'YoY Revenue %', 'YoY Fees %'
-    ]
+        for metric in metric_names:
+            result_df[f'{label} {metric} %'] = result_df.apply(
+                lambda r, cy=curr_year, py=prev_year, m=metric: calc_yoy(
+                    r.get(f'{cy} {m}', 0), r.get(f'{py} {m}', 0)
+                ), axis=1
+            )
+
+    # Reorder columns: Month info, then year data, then YoY columns
+    columns = ['Month', 'Month Name']
+    for year in years_to_process:
+        for metric in metric_names:
+            columns.append(f'{year} {metric}')
+    for i in range(1, len(years_to_process)):
+        curr_year = years_to_process[i]
+        prev_year = years_to_process[i - 1]
+        label = f'{curr_year} vs {prev_year}'
+        for metric in metric_names:
+            columns.append(f'{label} {metric} %')
+
     result_df = result_df[columns]
 
     # Save to CSV
@@ -7310,10 +7572,293 @@ def generate_monthly_performance_yoy_csv(booking_df: pd.DataFrame, output_file: 
     return output_files
 
 
-def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, booking_df: pd.DataFrame,
-                                                account_tiers: dict, output_file: str) -> dict:
+def generate_monthly_revenue_summary_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                         review_month: int, output_file: str) -> dict:
     """
-    Generate new account conversion funnel by month for 2024 and 2025.
+    Generate a month-over-month revenue summary comparing the same calendar month
+    across years (e.g. Jan 2022, Jan 2023, Jan 2024, Jan 2025, Jan 2026).
+
+    Produces a table with rows:
+    - Total fees
+    - YoY Growth
+    - % from new accounts (created within the last 12 months — complement of +1 year)
+    - % from +1 year accounts (created > 12 months before month start)
+    - Top 5% - % of fees
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        review_month: Month number (1-12) to compare across years
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    month_name = MONTH_NAME_MAP[review_month]
+    print(f"  Generating {month_name} revenue summary across years...")
+
+    booking_df = booking_df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(booking_df['TransactionDate']):
+        booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], utc=True)
+
+    # Standardise account ID column
+    account_id_col = 'AccountId' if 'AccountId' in accounts_df.columns else 'Id'
+
+    # Ensure accounts DateTimeCreated is datetime
+    accounts_df = accounts_df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(accounts_df['DateTimeCreated']):
+        accounts_df['DateTimeCreated'] = pd.to_datetime(accounts_df['DateTimeCreated'], utc=True)
+
+    booking_df['Year'] = booking_df['TransactionDate'].dt.year
+    booking_df['Month'] = booking_df['TransactionDate'].dt.month
+
+    # Determine years present in data for this month
+    available_years = sorted(booking_df[booking_df['Month'] == review_month]['Year'].unique())
+    # Keep only years with meaningful data (fees > 0)
+    years = []
+    for y in available_years:
+        month_df = booking_df[(booking_df['Year'] == y) & (booking_df['Month'] == review_month)]
+        if 'TotalFees' in month_df.columns and month_df['TotalFees'].sum() > 0:
+            years.append(y)
+
+    # Limit to last 5 years
+    if len(years) > 5:
+        years = years[-5:]
+
+    if len(years) == 0:
+        print("    Warning: No data found for this month")
+        return output_files
+
+    rows = {
+        'Total Fees': {},
+        'YoY Growth': {},
+        '% from New Accounts': {},
+        '% from +1 Year Accounts': {},
+        'Top 5% - % of Fees': {},
+    }
+
+    # Calculate prior year fees for first year's YoY growth
+    prior_year = years[0] - 1
+    prior_df = booking_df[(booking_df['Year'] == prior_year) & (booking_df['Month'] == review_month)]
+    prev_fees = prior_df['TotalFees'].sum() if 'TotalFees' in prior_df.columns and len(prior_df) > 0 else None
+    if prev_fees == 0:
+        prev_fees = None
+
+    for year in years:
+        month_start, month_end = get_month_boundaries(year, review_month)
+        month_df = booking_df[(booking_df['Year'] == year) & (booking_df['Month'] == review_month)]
+
+        total_fees = month_df['TotalFees'].sum() if 'TotalFees' in month_df.columns else 0
+        col_label = str(year)
+
+        # Total fees
+        rows['Total Fees'][col_label] = total_fees
+
+        # YoY Growth
+        if prev_fees is not None and prev_fees > 0:
+            rows['YoY Growth'][col_label] = round((total_fees - prev_fees) / prev_fees * 100, 1)
+        else:
+            rows['YoY Growth'][col_label] = None
+        prev_fees = total_fees
+
+        # % from +1 year accounts (created > 12 months before month start)
+        mature_cutoff = month_start - pd.DateOffset(years=1)
+        mature_accounts = accounts_df[
+            accounts_df['DateTimeCreated'] < mature_cutoff
+        ]
+        mature_account_ids = set(mature_accounts[account_id_col].astype(float).dropna().unique())
+
+        if 'AccountId' in month_df.columns and len(mature_account_ids) > 0:
+            mature_acct_fees = month_df[
+                pd.to_numeric(month_df['AccountId'], errors='coerce').isin(mature_account_ids)
+            ]['TotalFees'].sum() if 'TotalFees' in month_df.columns else 0
+        else:
+            mature_acct_fees = 0
+
+        if total_fees > 0:
+            mature_pct = round(mature_acct_fees / total_fees * 100, 1)
+            rows['% from +1 Year Accounts'][col_label] = mature_pct
+            rows['% from New Accounts'][col_label] = round(100 - mature_pct, 1)
+        else:
+            rows['% from +1 Year Accounts'][col_label] = 0.0
+            rows['% from New Accounts'][col_label] = 0.0
+
+        # Top 5% - % of fees (top 5% of accounts by fees this month)
+        if 'AccountId' in month_df.columns and 'TotalFees' in month_df.columns:
+            acct_fees = month_df.groupby('AccountId')['TotalFees'].sum().reset_index()
+            acct_fees = acct_fees[acct_fees['TotalFees'] > 0].sort_values('TotalFees', ascending=False)
+
+            if len(acct_fees) > 0:
+                top_5_pct_count = max(1, int(len(acct_fees) * 0.05))
+                top_5_pct_fees = acct_fees.head(top_5_pct_count)['TotalFees'].sum()
+                rows['Top 5% - % of Fees'][col_label] = round(top_5_pct_fees / total_fees * 100, 1)
+            else:
+                rows['Top 5% - % of Fees'][col_label] = 0.0
+        else:
+            rows['Top 5% - % of Fees'][col_label] = 0.0
+
+    # Build DataFrame
+    result_df = pd.DataFrame(rows).T
+    result_df.index.name = 'Metric'
+
+    # Save to CSV
+    output_path = get_output_path(base_name, None, f'_monthly_revenue_summary.csv')
+    result_df.to_csv(output_path, float_format='%.1f')
+    output_files['monthly_revenue_summary'] = output_path
+    print(f"    ✓ {month_name} revenue summary: {output_path}")
+
+    return output_files
+
+
+def _calc_avg_transaction_metrics(period_df):
+    """Calculate transaction metrics for a booking DataFrame slice.
+
+    Returns a dict of metric name -> value with 5 rows:
+      - Average Transaction Price (mean price per ticket, paid only)
+      - Median Transaction Price (median price per ticket, paid only)
+      - Average Number of Tickets (mean tickets per booking)
+      - Average Transaction Value (mean ATV, paid only)
+      - % Free Events
+    """
+    if len(period_df) == 0:
+        return None
+
+    period_df = period_df.copy()
+
+    # Paid transactions only for price/ATV
+    paid_df = period_df[period_df['PaymentReceived'] > 0].copy() if 'PaymentReceived' in period_df.columns else period_df.iloc[0:0]
+
+    # Price per ticket (paid only) — median
+    if len(paid_df) > 0:
+        ppt_series = np.where(paid_df['TicketQuantity'] > 0,
+                              paid_df['PaymentReceived'] / paid_df['TicketQuantity'], 0)
+        median_ppt = float(np.median(ppt_series[ppt_series > 0])) if (ppt_series > 0).any() else 0
+    else:
+        median_ppt = 0
+
+    # Price per ticket (paid only) — mean
+    paid_revenue = paid_df['PaymentReceived'].sum() if len(paid_df) > 0 else 0
+    paid_tickets = paid_df['TicketQuantity'].sum() if len(paid_df) > 0 else 0
+    mean_ppt = paid_revenue / paid_tickets if paid_tickets > 0 else 0
+
+    # Average number of tickets per booking (mean, all transactions)
+    total_transactions = len(period_df)
+    mean_tpb = period_df['TicketQuantity'].sum() / total_transactions if total_transactions > 0 else 0
+
+    # Average transaction value (mean, paid only)
+    mean_atv = paid_revenue / len(paid_df) if len(paid_df) > 0 else 0
+
+    # Free vs Paid events
+    if 'EventId' in period_df.columns and 'PaymentReceived' in period_df.columns:
+        event_rev = period_df.groupby('EventId')['PaymentReceived'].sum()
+        total_events = len(event_rev)
+        free_events = (event_rev == 0).sum()
+        pct_free = free_events / total_events * 100 if total_events > 0 else 0
+    else:
+        pct_free = 0
+
+    return {
+        'Average Transaction Price': mean_ppt,
+        'Median Transaction Price': median_ppt,
+        'Average Number of Tickets': mean_tpb,
+        'Average Transaction Value': mean_atv,
+        '% Free Events': pct_free,
+    }
+
+
+def generate_monthly_avg_transaction_metrics_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
+                                                  review_month: int, output_file: str) -> dict:
+    """
+    Generate average transaction metrics comparing the same period across
+    the last 5 years. Produces two CSVs:
+
+    1. Month only (e.g. Jan 2022, Jan 2023, ..., Jan 2026)
+    2. YTD (e.g. Jan–Jan 2022, Jan–Jan 2023, ..., Jan–May 2026 if review_month=5)
+
+    All values are medians. Currency values to 2dp.
+
+    Args:
+        booking_df: Booking transactions DataFrame
+        accounts_df: Accounts DataFrame
+        review_month: Month number (1-12) to compare across years
+        output_file: Base output filename
+
+    Returns:
+        Dictionary of generated file paths
+    """
+    base_name = output_file.rsplit('.', 1)[0]
+    output_files = {}
+
+    month_name = MONTH_NAME_MAP[review_month]
+    print(f"  Generating {month_name} average transaction metrics across years...")
+
+    booking_df = booking_df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(booking_df['TransactionDate']):
+        booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], utc=True)
+
+    booking_df['Year'] = booking_df['TransactionDate'].dt.year
+    booking_df['Month'] = booking_df['TransactionDate'].dt.month
+
+    # Determine years with data for this month, limit to last 5
+    available_years = sorted(booking_df[booking_df['Month'] == review_month]['Year'].unique())
+    years = [y for y in available_years
+             if len(booking_df[(booking_df['Year'] == y) & (booking_df['Month'] == review_month)]) > 0]
+    if len(years) > 5:
+        years = years[-5:]
+
+    if len(years) == 0:
+        print("    Warning: No data found for this month")
+        return output_files
+
+    # --- Month-only metrics ---
+    month_metrics = {}
+    for year in years:
+        month_df = booking_df[(booking_df['Year'] == year) & (booking_df['Month'] == review_month)]
+        result = _calc_avg_transaction_metrics(month_df)
+        if result:
+            month_metrics[str(year)] = result
+
+    if month_metrics:
+        result_df = pd.DataFrame(month_metrics)
+        result_df.index.name = 'Metric'
+        output_path = get_output_path(base_name, None, '_monthly_avg_transaction_metrics.csv')
+        result_df.to_csv(output_path, float_format='%.2f')
+        output_files['monthly_avg_transaction_metrics'] = output_path
+        print(f"    \u2713 {month_name} average transaction metrics: {output_path}")
+
+    # --- YTD metrics (Jan through review_month) ---
+    ytd_metrics = {}
+    ytd_label = f"Jan\u2013{MONTH_ABBR_MAP[review_month]}"
+    for year in years:
+        ytd_df = booking_df[(booking_df['Year'] == year) & (booking_df['Month'] <= review_month)]
+        result = _calc_avg_transaction_metrics(ytd_df)
+        if result:
+            ytd_metrics[str(year)] = result
+
+    if ytd_metrics:
+        result_df = pd.DataFrame(ytd_metrics)
+        result_df.index.name = 'Metric'
+        output_path = get_output_path(base_name, None, '_ytd_avg_transaction_metrics.csv')
+        result_df.to_csv(output_path, float_format='%.2f')
+        output_files['ytd_avg_transaction_metrics'] = output_path
+        print(f"    \u2713 YTD ({ytd_label}) average transaction metrics: {output_path}")
+
+    return output_files
+
+
+def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, booking_df: pd.DataFrame,
+                                                account_tiers: dict, output_file: str,
+                                                review_year: int = None,
+                                                review_month: int = None) -> dict:
+    """
+    Generate new account conversion funnel by month.
+
+    When review_year/review_month are provided (MBR mode), produces a focused
+    funnel for that single month across 3 years (review_year-2 .. review_year).
+    Otherwise falls back to the full 2024/2025 EOY report behaviour.
 
     Shows how accounts created in each month progressed through the activation funnel:
     - Accounts Created
@@ -7328,6 +7873,8 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
         booking_df: Booking transactions DataFrame
         account_tiers: Dictionary mapping AccountId -> tier string
         output_file: Base output filename
+        review_year: Optional year for MBR focus
+        review_month: Optional month (1-12) for MBR focus
 
     Returns:
         Dictionary of generated file paths
@@ -7352,6 +7899,17 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
     # Add year/month to accounts
     accounts_df['Created_Year'] = accounts_df['DateTimeCreated'].dt.year
     accounts_df['Created_Month'] = accounts_df['DateTimeCreated'].dt.month
+
+    # Determine years and months to process
+    mbr_mode = review_year is not None and review_month is not None
+    if mbr_mode:
+        funnel_years = [review_year - 2, review_year - 1, review_year]
+        funnel_months = [review_month]
+    else:
+        funnel_years = [2024, 2025]
+        funnel_months = list(range(1, 13))
+
+    current_year = datetime.now(UK_TZ).year
 
     # === PRE-COMPUTE ACCOUNT-LEVEL METRICS ===
     # Get first sale date and paid/free status per account
@@ -7418,86 +7976,85 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
     accounts_df.loc[accounts_df['DaysToFirstSale'] > 365, 'DaysToFirstSale'] = None
 
     # Add tier information (current snapshot - used for 2025 which doesn't have 12m data)
-    tier_4_plus = {'Key Account', 'High Value', 'Tier 4'}
+    tier_3_plus = {'Tier 1', 'Tier 2', 'Tier 3'}
     accounts_df['Tier'] = accounts_df[account_id_col].map(account_tiers)
-    accounts_df['IsT4Plus'] = accounts_df['Tier'].isin(tier_4_plus)
+    accounts_df['IsT3Plus'] = accounts_df['Tier'].isin(tier_3_plus)
 
-    # === CALCULATE 12-MONTH TIER STATUS FOR 2024 COHORTS ===
-    # For fair comparison, calculate T4+ based on 12-month activity window from signup
-    # This is only done for 2024 cohorts which have full 12-month data
-    print("    Calculating 12-month T4+ status for 2024 cohorts...")
+    # === CALCULATE 12-MONTH TIER STATUS FOR COHORTS WITH FULL DATA ===
+    # For fair comparison, calculate Tier 3+ based on 12-month activity window from signup
+    # Only for years where full 12-month data is available (year + 1 <= current_year)
+    years_with_full_data = [y for y in funnel_years if y + 1 <= current_year]
+    if years_with_full_data:
+        print(f"    Calculating 12-month Tier 3+ status for {years_with_full_data} cohorts...")
 
-    # Pre-calculate 12-month T4+ status for each 2024 month cohort
-    t4_plus_12m_by_month = {}
+    # Pre-calculate 12-month Tier 3+ status keyed by (year, month)
+    t3_plus_12m = {}
 
-    for month in range(1, 13):
-        # Get accounts created in this month of 2024
-        cohort_start = pd.Timestamp(f'2024-{month:02d}-01', tz='UTC')
-        if month == 12:
-            cohort_end = pd.Timestamp('2024-12-31 23:59:59', tz='UTC')
-        else:
-            cohort_end = pd.Timestamp(f'2024-{month+1:02d}-01', tz='UTC') - pd.Timedelta(seconds=1)
+    for t3_year in years_with_full_data:
+        for month in funnel_months:
+            cohort_start = pd.Timestamp(f'{t3_year}-{month:02d}-01', tz='UTC')
+            if month == 12:
+                cohort_end = pd.Timestamp(f'{t3_year}-12-31 23:59:59', tz='UTC')
+            else:
+                cohort_end = pd.Timestamp(f'{t3_year}-{month+1:02d}-01', tz='UTC') - pd.Timedelta(seconds=1)
 
-        # 12-month window ends 12 months after cohort start
-        window_end = cohort_start + pd.DateOffset(months=12)
+            # 12-month window ends 12 months after cohort start
+            window_end = cohort_start + pd.DateOffset(months=12)
 
-        # Get account IDs for this cohort
-        cohort_accounts = accounts_df[
-            (accounts_df['Created_Year'] == 2024) &
-            (accounts_df['Created_Month'] == month)
-        ]
+            # Get account IDs for this cohort
+            cohort_accounts = accounts_df[
+                (accounts_df['Created_Year'] == t3_year) &
+                (accounts_df['Created_Month'] == month)
+            ]
 
-        if len(cohort_accounts) == 0:
-            t4_plus_12m_by_month[month] = 0
-            continue
+            if len(cohort_accounts) == 0:
+                t3_plus_12m[(t3_year, month)] = 0
+                continue
 
-        cohort_account_ids = cohort_accounts[account_id_col].tolist()
+            cohort_account_ids = cohort_accounts[account_id_col].tolist()
 
-        # Filter bookings to this cohort's 12-month window
-        cohort_bookings = booking_df[
-            (booking_df['AccountId'].isin(cohort_account_ids)) &
-            (booking_df['TransactionDate'] >= cohort_start) &
-            (booking_df['TransactionDate'] < window_end)
-        ]
+            # Filter bookings to this cohort's 12-month window
+            cohort_bookings = booking_df[
+                (booking_df['AccountId'].isin(cohort_account_ids)) &
+                (booking_df['TransactionDate'] >= cohort_start) &
+                (booking_df['TransactionDate'] < window_end)
+            ]
 
-        if len(cohort_bookings) == 0:
-            t4_plus_12m_by_month[month] = 0
-            continue
+            if len(cohort_bookings) == 0:
+                t3_plus_12m[(t3_year, month)] = 0
+                continue
 
-        # Calculate metrics for tier assignment within this 12-month window
-        # Aggregate fees and tickets per account
-        fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
-        existing_fee_cols = [col for col in fee_cols if col in cohort_bookings.columns]
-        cohort_bookings_copy = cohort_bookings.copy()
-        for col in existing_fee_cols:
-            cohort_bookings_copy[col] = cohort_bookings_copy[col].fillna(0)
-        cohort_bookings_copy['total_fees'] = cohort_bookings_copy[existing_fee_cols].sum(axis=1) if existing_fee_cols else 0
+            # Calculate metrics for tier assignment within this 12-month window
+            # Aggregate fees and tickets per account
+            fee_cols = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
+            existing_fee_cols = [col for col in fee_cols if col in cohort_bookings.columns]
+            cohort_bookings_copy = cohort_bookings.copy()
+            for col in existing_fee_cols:
+                cohort_bookings_copy[col] = cohort_bookings_copy[col].fillna(0)
+            cohort_bookings_copy['total_fees'] = cohort_bookings_copy[existing_fee_cols].sum(axis=1) if existing_fee_cols else 0
 
-        account_metrics = cohort_bookings_copy.groupby('AccountId').agg({
-            'total_fees': 'sum',
-            'TicketQuantity': 'sum'
-        }).reset_index()
+            account_metrics = cohort_bookings_copy.groupby('AccountId').agg({
+                'total_fees': 'sum',
+                'TicketQuantity': 'sum'
+            }).reset_index()
 
-        if len(account_metrics) == 0:
-            t4_plus_12m_by_month[month] = 0
-            continue
+            if len(account_metrics) == 0:
+                t3_plus_12m[(t3_year, month)] = 0
+                continue
 
-        # Calculate percentiles within this cohort's activity
-        account_metrics['fees_pct'] = account_metrics['total_fees'].rank(pct=True) * 100
-        account_metrics['tickets_pct'] = account_metrics['TicketQuantity'].rank(pct=True) * 100
+            # Calculate percentiles within this cohort's activity
+            account_metrics['fees_pct'] = account_metrics['total_fees'].rank(pct=True) * 100
 
-        # Assign tiers based on percentiles (same logic as main tier calculation)
-        # T4+ = 75th percentile or above
-        account_metrics['max_pct'] = account_metrics[['fees_pct', 'tickets_pct']].max(axis=1)
-        t4_plus_count = (account_metrics['max_pct'] >= 75).sum()
+            # Tier 3+ = top 25% by fees within cohort
+            t3_plus_count = (account_metrics['fees_pct'] >= 75).sum()
 
-        t4_plus_12m_by_month[month] = t4_plus_count
+            t3_plus_12m[(t3_year, month)] = t3_plus_count
 
     # === CALCULATE FUNNEL METRICS BY MONTH ===
     funnel_rows = []
 
-    for year in [2024, 2025]:
-        for month in range(1, 13):
+    for year in funnel_years:
+        for month in funnel_months:
             # Filter accounts created in this month
             month_accounts = accounts_df[
                 (accounts_df['Created_Year'] == year) &
@@ -7543,12 +8100,12 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
             pct_activated_30d = round(activated_30d / total * 100, 1)
             pct_activated_90d = round(activated_90d / total * 100, 1)
 
-            # T4+ accounts - use 12-month window for 2024, show None for 2025
-            if year == 2024:
-                t4_plus_count = t4_plus_12m_by_month.get(month, 0)
+            # Tier 3+ accounts - use 12-month window for years with full data
+            if (year, month) in t3_plus_12m:
+                t3_plus_count = t3_plus_12m[(year, month)]
             else:
-                # 2025 cohorts don't have 12 months of data yet
-                t4_plus_count = None
+                # Cohorts without 12 months of data yet
+                t3_plus_count = None
 
             funnel_rows.append({
                 'Month': month,
@@ -7569,19 +8126,25 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
                 'Activated Within 7 Days %': pct_activated_7d,
                 'Activated Within 30 Days %': pct_activated_30d,
                 'Activated Within 90 Days %': pct_activated_90d,
-                'Reached T4+ (12m)': t4_plus_count
+                'Reached Tier 3+ (12m)': t3_plus_count
             })
 
     # Create DataFrame
     funnel_df = pd.DataFrame(funnel_rows)
 
-    # === ADD TOTAL ROWS FOR 2024 AND 2025 ===
-    for year in [2024, 2025]:
+    # === ADD TOTAL ROWS (one per year) ===
+    # In MBR mode with a single month, TOTAL rows are effectively the same as the
+    # monthly rows, but we still include them for consistency and the CHANGE row.
+    for year in funnel_years:
         year_data = funnel_df[funnel_df['Year'] == year]
         if len(year_data) == 0:
             continue
 
-        year_accounts = accounts_df[accounts_df['Created_Year'] == year]
+        # Filter accounts to the months being analysed for this year
+        year_accounts = accounts_df[
+            (accounts_df['Created_Year'] == year) &
+            (accounts_df['Created_Month'].isin(funnel_months))
+        ]
         total = len(year_accounts)
 
         if total > 0:
@@ -7608,11 +8171,9 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
             activated_30d = (year_accounts['DaysToFirstEvent'] <= 30).sum() if has_days_to_event else 0
             activated_90d = (year_accounts['DaysToFirstEvent'] <= 90).sum() if has_days_to_event else 0
 
-            # T4+ total - sum from monthly data for 2024, None for 2025
-            if year == 2024:
-                t4_plus = sum(t4_plus_12m_by_month.values())
-            else:
-                t4_plus = None
+            # Tier 3+ total - sum from monthly data for years with full data
+            t3_vals = [t3_plus_12m.get((year, m), 0) for m in funnel_months if (year, m) in t3_plus_12m]
+            t3_plus = sum(t3_vals) if t3_vals else None
 
             total_row = pd.DataFrame([{
                 'Month': 99,  # Sort to end
@@ -7633,48 +8194,52 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
                 'Activated Within 7 Days %': round(activated_7d / total * 100, 1),
                 'Activated Within 30 Days %': round(activated_30d / total * 100, 1),
                 'Activated Within 90 Days %': round(activated_90d / total * 100, 1),
-                'Reached T4+ (12m)': t4_plus
+                'Reached Tier 3+ (12m)': t3_plus
             }])
             funnel_df = pd.concat([funnel_df, total_row], ignore_index=True)
 
-    # === ADD CHANGE ROW (2025 vs 2024) ===
-    total_2024 = funnel_df[(funnel_df['Year'] == 2024) & (funnel_df['Month'] == 99)]
-    total_2025 = funnel_df[(funnel_df['Year'] == 2025) & (funnel_df['Month'] == 99)]
+    # === ADD CHANGE ROW (most recent year vs previous year) ===
+    change_year_new = funnel_years[-1]
+    change_year_old = funnel_years[-2]
+    total_old = funnel_df[(funnel_df['Year'] == change_year_old) & (funnel_df['Month'] == 99)]
+    total_new = funnel_df[(funnel_df['Year'] == change_year_new) & (funnel_df['Month'] == 99)]
 
-    if len(total_2024) > 0 and len(total_2025) > 0:
-        t24 = total_2024.iloc[0]
-        t25 = total_2025.iloc[0]
+    if len(total_old) > 0 and len(total_new) > 0:
+        t_old = total_old.iloc[0]
+        t_new = total_new.iloc[0]
 
-        def calc_change(v25, v24):
-            if pd.isna(v25) or pd.isna(v24):
+        def calc_change(v_new, v_old):
+            if pd.isna(v_new) or pd.isna(v_old):
                 return None
-            return v25 - v24
+            return v_new - v_old
 
-        def calc_pct_change(v25, v24):
-            if pd.isna(v25) or pd.isna(v24) or v24 == 0:
+        def calc_pct_change(v_new, v_old):
+            if pd.isna(v_new) or pd.isna(v_old) or v_old == 0:
                 return None
-            return round((v25 - v24) / v24 * 100, 1)
+            return round((v_new - v_old) / v_old * 100, 1)
+
+        change_label = f'{change_year_new} vs {change_year_old}'
 
         change_row = pd.DataFrame([{
             'Month': 100,  # Sort after totals
             'Year': 'CHANGE',
-            'Month Name': '2025 vs 2024',
-            'Accounts Created': f"{calc_change(t25['Accounts Created'], t24['Accounts Created']):+,} ({calc_pct_change(t25['Accounts Created'], t24['Accounts Created']):+.1f}%)" if calc_change(t25['Accounts Created'], t24['Accounts Created']) is not None else None,
-            'Created Any Event': f"{calc_change(t25['Created Any Event'], t24['Created Any Event']):+,} ({calc_pct_change(t25['Created Any Event'], t24['Created Any Event']):+.1f}%)" if calc_change(t25['Created Any Event'], t24['Created Any Event']) is not None else None,
-            'Created Paid Event': f"{calc_change(t25['Created Paid Event'], t24['Created Paid Event']):+,} ({calc_pct_change(t25['Created Paid Event'], t24['Created Paid Event']):+.1f}%)" if calc_change(t25['Created Paid Event'], t24['Created Paid Event']) is not None else None,
-            'Sold Free Only': f"{calc_change(t25['Sold Free Only'], t24['Sold Free Only']):+,} ({calc_pct_change(t25['Sold Free Only'], t24['Sold Free Only']):+.1f}%)" if calc_change(t25['Sold Free Only'], t24['Sold Free Only']) is not None else None,
-            'Sold Paid Tickets': f"{calc_change(t25['Sold Paid Tickets'], t24['Sold Paid Tickets']):+,} ({calc_pct_change(t25['Sold Paid Tickets'], t24['Sold Paid Tickets']):+.1f}%)" if calc_change(t25['Sold Paid Tickets'], t24['Sold Paid Tickets']) is not None else None,
-            'Conversion Rate (Paid) %': f"{calc_change(t25['Conversion Rate (Paid) %'], t24['Conversion Rate (Paid) %']):+.1f}pp" if calc_change(t25['Conversion Rate (Paid) %'], t24['Conversion Rate (Paid) %']) is not None else None,
-            '% Free Events': f"{calc_change(t25['% Free Events'], t24['% Free Events']):+.1f}pp" if calc_change(t25['% Free Events'], t24['% Free Events']) is not None else None,
-            '% Paid Events': f"{calc_change(t25['% Paid Events'], t24['% Paid Events']):+.1f}pp" if calc_change(t25['% Paid Events'], t24['% Paid Events']) is not None else None,
-            'Avg Days to First Event': f"{calc_change(t25['Avg Days to First Event'], t24['Avg Days to First Event']):+.1f}" if calc_change(t25['Avg Days to First Event'], t24['Avg Days to First Event']) is not None else None,
-            'Avg Days to First Sale': f"{calc_change(t25['Avg Days to First Sale'], t24['Avg Days to First Sale']):+.1f}" if calc_change(t25['Avg Days to First Sale'], t24['Avg Days to First Sale']) is not None else None,
-            'Activated Within 1 Day %': f"{calc_change(t25['Activated Within 1 Day %'], t24['Activated Within 1 Day %']):+.1f}pp" if calc_change(t25['Activated Within 1 Day %'], t24['Activated Within 1 Day %']) is not None else None,
-            'Activated Within 3 Days %': f"{calc_change(t25['Activated Within 3 Days %'], t24['Activated Within 3 Days %']):+.1f}pp" if calc_change(t25['Activated Within 3 Days %'], t24['Activated Within 3 Days %']) is not None else None,
-            'Activated Within 7 Days %': f"{calc_change(t25['Activated Within 7 Days %'], t24['Activated Within 7 Days %']):+.1f}pp" if calc_change(t25['Activated Within 7 Days %'], t24['Activated Within 7 Days %']) is not None else None,
-            'Activated Within 30 Days %': f"{calc_change(t25['Activated Within 30 Days %'], t24['Activated Within 30 Days %']):+.1f}pp" if calc_change(t25['Activated Within 30 Days %'], t24['Activated Within 30 Days %']) is not None else None,
-            'Activated Within 90 Days %': f"{calc_change(t25['Activated Within 90 Days %'], t24['Activated Within 90 Days %']):+.1f}pp" if calc_change(t25['Activated Within 90 Days %'], t24['Activated Within 90 Days %']) is not None else None,
-            'Reached T4+ (12m)': None,  # Cannot compare: 2025 cohorts don't have 12 months of data yet
+            'Month Name': change_label,
+            'Accounts Created': f"{calc_change(t_new['Accounts Created'], t_old['Accounts Created']):+,} ({calc_pct_change(t_new['Accounts Created'], t_old['Accounts Created']):+.1f}%)" if calc_change(t_new['Accounts Created'], t_old['Accounts Created']) is not None else None,
+            'Created Any Event': f"{calc_change(t_new['Created Any Event'], t_old['Created Any Event']):+,} ({calc_pct_change(t_new['Created Any Event'], t_old['Created Any Event']):+.1f}%)" if calc_change(t_new['Created Any Event'], t_old['Created Any Event']) is not None else None,
+            'Created Paid Event': f"{calc_change(t_new['Created Paid Event'], t_old['Created Paid Event']):+,} ({calc_pct_change(t_new['Created Paid Event'], t_old['Created Paid Event']):+.1f}%)" if calc_change(t_new['Created Paid Event'], t_old['Created Paid Event']) is not None else None,
+            'Sold Free Only': f"{calc_change(t_new['Sold Free Only'], t_old['Sold Free Only']):+,} ({calc_pct_change(t_new['Sold Free Only'], t_old['Sold Free Only']):+.1f}%)" if calc_change(t_new['Sold Free Only'], t_old['Sold Free Only']) is not None else None,
+            'Sold Paid Tickets': f"{calc_change(t_new['Sold Paid Tickets'], t_old['Sold Paid Tickets']):+,} ({calc_pct_change(t_new['Sold Paid Tickets'], t_old['Sold Paid Tickets']):+.1f}%)" if calc_change(t_new['Sold Paid Tickets'], t_old['Sold Paid Tickets']) is not None else None,
+            'Conversion Rate (Paid) %': f"{calc_change(t_new['Conversion Rate (Paid) %'], t_old['Conversion Rate (Paid) %']):+.1f}pp" if calc_change(t_new['Conversion Rate (Paid) %'], t_old['Conversion Rate (Paid) %']) is not None else None,
+            '% Free Events': f"{calc_change(t_new['% Free Events'], t_old['% Free Events']):+.1f}pp" if calc_change(t_new['% Free Events'], t_old['% Free Events']) is not None else None,
+            '% Paid Events': f"{calc_change(t_new['% Paid Events'], t_old['% Paid Events']):+.1f}pp" if calc_change(t_new['% Paid Events'], t_old['% Paid Events']) is not None else None,
+            'Avg Days to First Event': f"{calc_change(t_new['Avg Days to First Event'], t_old['Avg Days to First Event']):+.1f}" if calc_change(t_new['Avg Days to First Event'], t_old['Avg Days to First Event']) is not None else None,
+            'Avg Days to First Sale': f"{calc_change(t_new['Avg Days to First Sale'], t_old['Avg Days to First Sale']):+.1f}" if calc_change(t_new['Avg Days to First Sale'], t_old['Avg Days to First Sale']) is not None else None,
+            'Activated Within 1 Day %': f"{calc_change(t_new['Activated Within 1 Day %'], t_old['Activated Within 1 Day %']):+.1f}pp" if calc_change(t_new['Activated Within 1 Day %'], t_old['Activated Within 1 Day %']) is not None else None,
+            'Activated Within 3 Days %': f"{calc_change(t_new['Activated Within 3 Days %'], t_old['Activated Within 3 Days %']):+.1f}pp" if calc_change(t_new['Activated Within 3 Days %'], t_old['Activated Within 3 Days %']) is not None else None,
+            'Activated Within 7 Days %': f"{calc_change(t_new['Activated Within 7 Days %'], t_old['Activated Within 7 Days %']):+.1f}pp" if calc_change(t_new['Activated Within 7 Days %'], t_old['Activated Within 7 Days %']) is not None else None,
+            'Activated Within 30 Days %': f"{calc_change(t_new['Activated Within 30 Days %'], t_old['Activated Within 30 Days %']):+.1f}pp" if calc_change(t_new['Activated Within 30 Days %'], t_old['Activated Within 30 Days %']) is not None else None,
+            'Activated Within 90 Days %': f"{calc_change(t_new['Activated Within 90 Days %'], t_old['Activated Within 90 Days %']):+.1f}pp" if calc_change(t_new['Activated Within 90 Days %'], t_old['Activated Within 90 Days %']) is not None else None,
+            'Reached Tier 3+ (12m)': None,
         }])
         funnel_df = pd.concat([funnel_df, change_row], ignore_index=True)
 
@@ -7687,7 +8252,7 @@ def generate_new_account_conversion_funnel_csv(accounts_df: pd.DataFrame, bookin
         'Sold Free Only', 'Sold Paid Tickets', 'Conversion Rate (Paid) %',
         '% Free Events', '% Paid Events', 'Avg Days to First Event', 'Avg Days to First Sale',
         'Activated Within 1 Day %', 'Activated Within 3 Days %', 'Activated Within 7 Days %',
-        'Activated Within 30 Days %', 'Activated Within 90 Days %', 'Reached T4+ (12m)'
+        'Activated Within 30 Days %', 'Activated Within 90 Days %', 'Reached Tier 3+ (12m)'
     ]
     funnel_df = funnel_df[[c for c in columns if c in funnel_df.columns]]
 
@@ -7714,7 +8279,7 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, accounts_
     - Mean/Median Transaction Value (ATV) (paid only - so price × tickets ≈ ATV)
     - Mean/Median Fees Per Account (all accounts)
     - Free vs Paid Event Split
-    - High Value % of Fees (Key Account + High Value tiers)
+    - Tier 1+2 % of Fees (Tier 1 + Tier 2 accounts)
     - % Fees from Mature (accounts 12+ months old)
     - % Fees from New (accounts in month 0)
 
@@ -7767,7 +8332,7 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, accounts_
                 'Median Fees Per Account': None,
                 '% Free Events': None,
                 '% Paid Events': None,
-                'High Value % of Fees': None,
+                'Tier 1+2 % of Fees': None,
                 '% Fees from New': None,
                 '% Fees from Mature': None
             })
@@ -7823,9 +8388,9 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, accounts_
         pct_free_events = round(free_events / total_events * 100, 1) if total_events > 0 else 0
         pct_paid_events = round(paid_events / total_events * 100, 1) if total_events > 0 else 0
 
-        # === HIGH VALUE % OF FEES ===
-        # High Value = Key Account + High Value tiers
-        high_value_tiers = {'Key Account', 'High Value'}
+        # === TIER 1+2 % OF FEES ===
+        # Top tier accounts = Tier 1 + Tier 2
+        high_value_tiers = {'Tier 1', 'Tier 2'}
         year_df['Tier'] = year_df['AccountId'].map(account_tiers)
         year_df['IsHighValue'] = year_df['Tier'].isin(high_value_tiers)
 
@@ -7857,7 +8422,7 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, accounts_
             'Median Fees Per Account': median_fees_per_account,
             '% Free Events': pct_free_events,
             '% Paid Events': pct_paid_events,
-            'High Value % of Fees': pct_high_value_fees,
+            'Tier 1+2 % of Fees': pct_high_value_fees,
             '% Fees from New': pct_fees_from_new,
             '% Fees from Mature': pct_fees_from_mature
         })
@@ -7886,7 +8451,7 @@ def generate_average_transaction_metrics_csv(booking_df: pd.DataFrame, accounts_
 def generate_top_accounts_list_csv(booking_df: pd.DataFrame, accounts_df: pd.DataFrame,
                                     account_tiers: dict, output_file: str) -> dict:
     """
-    Generate a list of top accounts (Key Account + High Value tiers) sorted by 2025 fees.
+    Generate a list of top accounts (Tier 1 + Tier 2) sorted by 2025 fees.
 
     Output columns:
     - Rank
@@ -7914,8 +8479,8 @@ def generate_top_accounts_list_csv(booking_df: pd.DataFrame, accounts_df: pd.Dat
 
     print("  Generating top accounts list...")
 
-    # Filter to High Value tiers only (Key Account + High Value)
-    high_value_tiers = {'Key Account', 'High Value'}
+    # Filter to top tier accounts only (Tier 1 + Tier 2)
+    high_value_tiers = {'Tier 1', 'Tier 2'}
     high_value_accounts = {acc_id for acc_id, tier in account_tiers.items() if tier in high_value_tiers}
 
     if not high_value_accounts:
@@ -8177,9 +8742,324 @@ def generate_top_5_percent_revenue_csv(booking_df: pd.DataFrame, accounts_df: pd
     return output_files
 
 
+def run_monthly_review(args):
+    """
+    Run Monthly Business Review (MBR) report generation.
+
+    Produces two views — the review month and year-to-date — each with YoY
+    comparisons. Only generates the subset of reports needed for the PPTX template.
+
+    Args:
+        args: Parsed command line arguments with monthly_review set
+    """
+    today = datetime.now(UK_TZ)
+
+    # Determine review month
+    if args.monthly_review == 'auto':
+        # Previous complete month
+        review_date = datetime(today.year, today.month, 1) - relativedelta(months=1)
+        review_year = review_date.year
+        review_month = review_date.month
+    else:
+        review_date = datetime.strptime(args.monthly_review, '%Y-%m')
+        review_year = review_date.year
+        review_month = review_date.month
+
+    review_label = f"{review_year}-{review_month:02d}"
+    print(f"\n=== Monthly Business Review: {calendar.month_name[review_month]} {review_year} ===")
+    print(f"Generated: {today.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+
+    # Calculate date ranges
+    month_range, ytd_range = get_monthly_review_ranges(review_year, review_month)
+
+    is_january = review_month == 1
+    if is_january:
+        print(f"\nJanuary review — month and YTD are identical, producing month view only.")
+    else:
+        print(f"\nMonth view: {calendar.month_name[review_month]} {review_year}")
+        print(f"YTD view:   Jan–{calendar.month_name[review_month]} {review_year}")
+
+    # Load data once
+    accounts_df, booking_df = load_all_data()
+
+    # Calculate tiers once (current + historical for YoY)
+    print("\nCalculating account tiers...")
+    from datetime import date
+    today_date = date.today()
+    one_year_ago = today_date - timedelta(days=365)
+
+    account_tiers_current = calculate_account_tiers(accounts_df, booking_df)
+    print("  Calculating historical tiers for YoY comparison...")
+    account_tiers_previous = calculate_account_tiers(accounts_df, booking_df, as_of_date=one_year_ago)
+
+    # Set up output base directory
+    base_dir = f"mbr_{review_label}"
+    os.makedirs(base_dir, exist_ok=True)
+
+    # Define the views to generate
+    views = [('month', month_range)]
+    if not is_january:
+        views.append(('ytd', ytd_range))
+
+    for view_name, months in views:
+        print(f"\n{'=' * 60}")
+        print(f"  Generating {view_name.upper()} view ({len(months)} month{'s' if len(months) > 1 else ''})...")
+        print(f"{'=' * 60}")
+
+        # Set up output path for this view
+        view_dir = os.path.join(base_dir, view_name)
+        os.makedirs(view_dir, exist_ok=True)
+        for folder in OUTPUT_FOLDERS.values():
+            os.makedirs(os.path.join(view_dir, folder), exist_ok=True)
+
+        output_file = os.path.join(view_dir, f"mbr_{review_label}_{view_name}.csv")
+
+        # --- Core monthly metrics + YoY ---
+        print("\n  Calculating monthly metrics...")
+        results = []
+        previous_year_cache = {}
+
+        for year, month in months:
+            print(f"    Processing {calendar.month_name[month]} {year}...", end=" ")
+            metrics = calculate_monthly_metrics(accounts_df, booking_df, year, month)
+
+            # Add Tier 3+ new accounts count
+            tier3_plus_count = count_tier3_plus_new_accounts(accounts_df, account_tiers_current, year, month)
+            metrics['New Accounts Tier 3+'] = tier3_plus_count
+
+            # YoY comparison
+            prev_year = year - 1
+            prev_key = (prev_year, month)
+
+            if prev_key not in previous_year_cache:
+                prev_metrics = calculate_monthly_metrics(accounts_df, booking_df, prev_year, month)
+                prev_tier3_plus = count_tier3_plus_new_accounts(accounts_df, account_tiers_previous, prev_year, month)
+                prev_metrics['New Accounts Tier 3+'] = prev_tier3_plus
+                previous_year_cache[prev_key] = prev_metrics
+            else:
+                prev_metrics = previous_year_cache[prev_key]
+
+            metrics = calculate_yoy_metrics(metrics, prev_metrics)
+            results.append(metrics)
+            print(f"✓ ({metrics['Total New Accounts']:,} new accounts)")
+
+        results_df = pd.DataFrame(results)
+
+        # --- Period totals ---
+        print("\n  Calculating period totals...")
+        period_totals = calculate_period_totals(accounts_df, booking_df, months)
+        py_months = [(year - 1, month) for year, month in months]
+        py_period_totals = calculate_period_totals(accounts_df, booking_df, py_months)
+
+        # Save main monthly CSV
+        results_df.to_csv(output_file, index=False, float_format='%.2f')
+        print(f"\n  ✓ Monthly metrics: {output_file}")
+
+        # --- Summary CSV ---
+        summary_file = generate_summary_csv(results_df, output_file, period_totals, py_period_totals)
+        print(f"  ✓ Summary: {summary_file}")
+
+        # --- Report subset for MBR PPTX ---
+        print("\n  Generating MBR report suite...")
+
+        # Monthly performance YoY (Slide 5)
+        perf_files = generate_monthly_performance_yoy_csv(booking_df, output_file)
+        if perf_files:
+            print(f"  ✓ Monthly performance YoY: {len(perf_files)} reports")
+
+        # Planning model / targets (Slide 3)
+        generate_planning_model_csv(results_df, accounts_df, booking_df, output_file)
+        print(f"  ✓ Planning model")
+
+        # Industry breakdown (Slides 8-10)
+        ind_file = generate_industry_breakdown_csv(accounts_df, booking_df, months, output_file)
+        if ind_file:
+            print(f"  ✓ Industry breakdown: {ind_file}")
+
+        # Industry/sub-industry (Slides 8-10)
+        ind_sub_file = generate_industry_subindustry_breakdown_csv(accounts_df, booking_df, months, output_file)
+        if ind_sub_file:
+            print(f"  ✓ Industry/sub-industry: {ind_sub_file}")
+
+        # Industry by tier segment (Slides 8-10)
+        ind_tier_file = generate_industry_by_tier_csv(
+            accounts_df, booking_df, account_tiers_current, months, output_file,
+            review_year=review_year, review_month=review_month
+        )
+        if ind_tier_file:
+            print(f"  ✓ Industry by tier segment: {ind_tier_file}")
+
+        # Fee structure — free vs paid (Slide 11)
+        # Generate for the review month (CY + PY) and YTD (CY + PY)
+        cy_start, cy_end = get_month_boundaries(review_year, review_month)
+        py_start, py_end = get_month_boundaries(review_year - 1, review_month)
+        cy_month_label = f"{calendar.month_name[review_month]} {review_year}"
+        py_month_label = f"{calendar.month_name[review_month]} {review_year - 1}"
+
+        # YTD boundaries: Jan 1 to end of review month
+        ytd_cy_start, _ = get_month_boundaries(review_year, 1)
+        ytd_py_start, _ = get_month_boundaries(review_year - 1, 1)
+        ytd_cy_label = f"YTD {review_year} (Jan\u2013{calendar.month_abbr[review_month]})"
+        ytd_py_label = f"YTD {review_year - 1} (Jan\u2013{calendar.month_abbr[review_month]})"
+
+        base_name_fee = output_file.rsplit('.', 1)[0]
+        industry_dir = os.path.join(view_dir, 'industry')
+        os.makedirs(industry_dir, exist_ok=True)
+
+        def _gen_free_paid(bookings_slice, suffix):
+            """Generate free vs paid CSV and rename to a consistent filename."""
+            files = generate_fee_structure_analysis_csv(bookings_slice, output_file)
+            if files.get('free_vs_paid_by_industry'):
+                src = files['free_vs_paid_by_industry']
+                dst = os.path.join(industry_dir, os.path.basename(base_name_fee) + f'_free_vs_paid_{suffix}.csv')
+                os.rename(src, dst)
+                return dst
+            return None
+
+        # Monthly CY + PY
+        cy_bookings = booking_df[
+            (booking_df['TransactionDate'] >= cy_start) & (booking_df['TransactionDate'] <= cy_end)
+        ]
+        py_bookings = booking_df[
+            (booking_df['TransactionDate'] >= py_start) & (booking_df['TransactionDate'] <= py_end)
+        ]
+        cy_month_file = _gen_free_paid(cy_bookings, 'cy')
+        py_month_file = _gen_free_paid(py_bookings, 'py')
+
+        # YTD CY + PY
+        ytd_cy_bookings = booking_df[
+            (booking_df['TransactionDate'] >= ytd_cy_start) & (booking_df['TransactionDate'] <= cy_end)
+        ]
+        ytd_py_bookings = booking_df[
+            (booking_df['TransactionDate'] >= ytd_py_start) & (booking_df['TransactionDate'] <= py_end)
+        ]
+        ytd_cy_file = _gen_free_paid(ytd_cy_bookings, 'ytd_cy')
+        ytd_py_file = _gen_free_paid(ytd_py_bookings, 'ytd_py')
+
+        # Write labels so the chart knows what to title them
+        label_file = os.path.join(industry_dir, '_free_paid_labels.csv')
+        pd.DataFrame({
+            'Period': ['CY', 'PY', 'YTD_CY', 'YTD_PY'],
+            'Label': [cy_month_label, py_month_label, ytd_cy_label, ytd_py_label]
+        }).to_csv(label_file, index=False)
+
+        fee_count = sum(1 for f in [cy_month_file, py_month_file, ytd_cy_file, ytd_py_file] if f)
+        if fee_count:
+            print(f"  ✓ Fee structure: {fee_count} reports ({cy_month_label}, {py_month_label}, YTD)")
+
+        # Average transaction metrics (Slide 12) — full year
+        avg_files = generate_average_transaction_metrics_csv(
+            booking_df, accounts_df, account_tiers_current, output_file
+        )
+        if avg_files:
+            print(f"  ✓ Average transaction metrics: {len(avg_files)} reports")
+
+        # Average transaction metrics (Slide 12) — same month across years
+        monthly_avg_files = generate_monthly_avg_transaction_metrics_csv(
+            booking_df, accounts_df, review_month, output_file
+        )
+        if monthly_avg_files:
+            print(f"  ✓ Monthly avg transaction metrics: {len(monthly_avg_files)} reports")
+
+        # Expansion revenue (Slide 6)
+        generate_expansion_revenue_analysis_csv(booking_df, accounts_df, output_file)
+        print(f"  ✓ Expansion revenue")
+
+        # Monthly revenue summary (Slide 6 — same month across years)
+        rev_summary_files = generate_monthly_revenue_summary_csv(
+            booking_df, accounts_df, review_month, output_file
+        )
+        if rev_summary_files:
+            print(f"  ✓ Monthly revenue summary: {len(rev_summary_files)} reports")
+
+        # Top 5% revenue (Slide 6)
+        top5_files = generate_top_5_percent_revenue_csv(
+            booking_df, accounts_df, account_tiers_current, output_file
+        )
+        if top5_files:
+            print(f"  ✓ Top 5% revenue: {len(top5_files)} reports")
+
+        # Organiser concentration (Slide 6 — top 5%)
+        conc_files = generate_organiser_concentration_csv(
+            booking_df, accounts_df, output_file, account_tiers=account_tiers_current
+        )
+        if conc_files:
+            print(f"  ✓ Organiser concentration: {len(conc_files)} reports")
+
+        # Activation by signup month (Slide 15)
+        act_files = generate_activation_by_month_csv(
+            accounts_df, booking_df, output_file,
+            review_year=review_year, review_month=review_month
+        )
+        if act_files:
+            print(f"  ✓ Activation by month: {len(act_files)} reports")
+
+        # Conversion funnel (Slide 15)
+        funnel_files = generate_new_account_conversion_funnel_csv(
+            accounts_df, booking_df, account_tiers_current, output_file,
+            review_year=review_year, review_month=review_month
+        )
+        if funnel_files:
+            print(f"  ✓ Conversion funnel: {len(funnel_files)} reports")
+
+        # Keyword analysis (Slides 17-20)
+        kw_files = generate_keyword_analysis_csvs(booking_df, output_file, output_folder='keywords')
+        if kw_files:
+            print(f"  ✓ Keyword analysis: {len(kw_files)} reports")
+
+        # CY vs PY keyword frequency for chart slides
+        cy_kw_start, cy_kw_end = get_month_boundaries(review_year, review_month)
+        py_kw_start, py_kw_end = get_month_boundaries(review_year - 1, review_month)
+        base_name = output_file.rsplit('.', 1)[0]
+
+        for label, kw_start, kw_end in [('cy', cy_kw_start, cy_kw_end), ('py', py_kw_start, py_kw_end)]:
+            kw_bookings = booking_df[
+                (booking_df['TransactionDate'] >= pd.Timestamp(kw_start)) &
+                (booking_df['TransactionDate'] <= pd.Timestamp(kw_end))
+            ]
+            kw_freq = build_keyword_frequency_table(kw_bookings)
+            if len(kw_freq) > 0:
+                kw_path = get_output_path(base_name, 'keywords', f'_keywords_frequency_{label}.csv')
+                kw_freq.to_csv(kw_path, index=False, float_format='%.2f')
+                print(f"    ✓ Keyword frequency ({label.upper()}): {kw_path}")
+
+        # Account LTV (Slide 14)
+        ltv_files = generate_account_ltv_analysis_csv(booking_df, accounts_df, output_file)
+        if ltv_files:
+            print(f"  ✓ Account LTV: {len(ltv_files)} reports")
+
+        # Dormancy analysis (Slide 14)
+        dorm_files = generate_dormancy_analysis_csv(booking_df, accounts_df, output_file)
+        if dorm_files:
+            print(f"  ✓ Dormancy analysis: {len(dorm_files)} reports")
+
+        # Cohort revenue curves (Slide 14)
+        cohort_files = generate_cohort_revenue_curves_csv(booking_df, accounts_df, output_file)
+        if cohort_files:
+            print(f"  ✓ Cohort revenue curves")
+
+        # --- Generate charts from CSVs ---
+        print("\n  Generating MBR charts...")
+        try:
+            from modules.mbr_charts import generate_all_charts
+            chart_files = generate_all_charts(view_dir)
+        except ImportError:
+            print("  ⚠ matplotlib not installed — skipping chart generation")
+        except Exception as e:
+            print(f"  ⚠ Chart generation failed: {e}")
+
+    print(f"\n=== Monthly Business Review Complete ===")
+    print(f"Output directory: {base_dir}/")
+
+
 def main():
     """Main execution function."""
     args = parse_args()
+
+    # Monthly Business Review mode — separate orchestration path
+    if args.monthly_review:
+        run_monthly_review(args)
+        return
 
     print(f"\n=== End of Year Planning Report ===")
     print(f"Generated: {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')}")
@@ -8212,9 +9092,9 @@ def main():
         print(f"  Processing {calendar.month_name[month]} {year}...", end=" ")
         metrics = calculate_monthly_metrics(accounts_df, booking_df, year, month)
 
-        # Add Tier 4+ new accounts count (uses current tiers for current year)
-        tier4_plus_count = count_tier4_plus_new_accounts(accounts_df, account_tiers_current, year, month)
-        metrics['New Accounts Tier 4+'] = tier4_plus_count
+        # Add Tier 3+ new accounts count (uses current tiers for current year)
+        tier3_plus_count = count_tier3_plus_new_accounts(accounts_df, account_tiers_current, year, month)
+        metrics['New Accounts Tier 3+'] = tier3_plus_count
 
         # Calculate YoY comparison
         prev_year = year - 1
@@ -8224,9 +9104,9 @@ def main():
         if prev_key not in previous_year_cache:
             print(f"(calculating {prev_year} baseline)...", end=" ")
             prev_metrics = calculate_monthly_metrics(accounts_df, booking_df, prev_year, month)
-            # Add Tier 4+ for previous year using HISTORICAL tiers (fair comparison)
-            prev_tier4_plus = count_tier4_plus_new_accounts(accounts_df, account_tiers_previous, prev_year, month)
-            prev_metrics['New Accounts Tier 4+'] = prev_tier4_plus
+            # Add Tier 3+ for previous year using HISTORICAL tiers (fair comparison)
+            prev_tier3_plus = count_tier3_plus_new_accounts(accounts_df, account_tiers_previous, prev_year, month)
+            prev_metrics['New Accounts Tier 3+'] = prev_tier3_plus
             previous_year_cache[prev_key] = prev_metrics
         else:
             prev_metrics = previous_year_cache[prev_key]
@@ -8235,7 +9115,7 @@ def main():
         metrics = calculate_yoy_metrics(metrics, prev_metrics)
 
         results.append(metrics)
-        print(f"✓ ({metrics['Total New Accounts']:,} new accounts, {tier4_plus_count} T4+)")
+        print(f"✓ ({metrics['Total New Accounts']:,} new accounts, {tier3_plus_count} T3+)")
 
     # Create results DataFrame
     results_df = pd.DataFrame(results)
@@ -8416,7 +9296,7 @@ def main():
     if avg_metrics_files:
         print(f"  ✓ Average transaction metrics: {len(avg_metrics_files)} reports generated")
 
-    # Top accounts list (Key Account + High Value tiers)
+    # Top accounts list (Tier 1 + Tier 2)
     top_accounts_files = generate_top_accounts_list_csv(booking_df, accounts_df, account_tiers_current, output_file)
     if top_accounts_files:
         print(f"  ✓ Top accounts list: {len(top_accounts_files)} reports generated")

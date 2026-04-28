@@ -13,6 +13,7 @@ on:
           - 'year_2025'
           - 'year_2024'
           - 'custom'
+          - 'monthly_review'
       custom_start:
         description: 'Custom start month (YYYY-MM, only for custom type)'
         required: false
@@ -20,6 +21,11 @@ on:
         type: string
       custom_end:
         description: 'Custom end month (YYYY-MM, only for custom type)'
+        required: false
+        default: ''
+        type: string
+      review_month:
+        description: 'Review month (YYYY-MM, only for monthly_review type — leave blank for previous month)'
         required: false
         default: ''
         type: string
@@ -42,6 +48,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install boto3 pandas requests pytz python-dateutil
           pip install google-analytics-data google-auth google-auth-oauthlib google-auth-httplib2
+          pip install matplotlib wordcloud
 
       - name: Get current date
         id: date
@@ -87,6 +94,16 @@ jobs:
 
             echo "Running custom report from $CUSTOM_START to $CUSTOM_END..."
             python3 eoy_planning_report.py --start "$CUSTOM_START" --end "$CUSTOM_END" --output "$OUTPUT_FILE"
+          elif [ "$REPORT_TYPE" = "monthly_review" ]; then
+            REVIEW_MONTH="${{ github.event.inputs.review_month }}"
+
+            if [ -z "$REVIEW_MONTH" ]; then
+              echo "Running monthly review (auto-detecting previous month)..."
+              python3 eoy_planning_report.py --monthly-review
+            else
+              echo "Running monthly review for $REVIEW_MONTH..."
+              python3 eoy_planning_report.py --monthly-review "$REVIEW_MONTH"
+            fi
           fi
 
           # Store output filename for artifact upload
@@ -106,6 +123,15 @@ jobs:
               echo ""
             fi
           done
+          echo ""
+          echo "=== MBR directories ==="
+          for mbr_dir in mbr_*/; do
+            if [ -d "$mbr_dir" ]; then
+              echo "$mbr_dir:"
+              find "$mbr_dir" -type f | head -50
+              echo ""
+            fi
+          done
 
       - name: Upload EOY Planning Report
         uses: actions/upload-artifact@v4
@@ -122,4 +148,5 @@ jobs:
             keywords/
             ppc/
             boxoffice/
+            mbr_*/
           retention-days: 90

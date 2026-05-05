@@ -329,6 +329,76 @@ def find_sample_moves_per_kind(
     return [results[i][1] for i in range(len(kinds_list)) if i in results]
 
 
+def find_latest_day_with_relevant_moves(
+    history: Dict, owned_tiers: Iterable[str]
+) -> Tuple[Optional[str], List[Dict]]:
+    """Walk history backwards by day, find the latest day with at least one
+    owned-tier-touching change, and return all such moves on that day.
+
+    A move is owned-tier-touching when previous_tier or current_tier is in
+    `owned_tiers`. Used by the TEST_MODE preview to surface a real-world
+    snapshot of "what would tomorrow's emails have looked like on the most
+    recent active day," rather than synthesising controlled examples.
+
+    Returns (day_iso, [move_dicts]). If no relevant moves are found
+    anywhere in history returns (None, []).
+
+    Each move dict matches detect_changes' output shape:
+        {AccountId, Account_Name, previous_tier, current_tier, direction}
+    Account_Name is empty here — caller should fill from a fresh
+    account_lookup, since the history file doesn't carry names.
+    """
+    from .tier_codes import INT_TO_TIER, TIER_ORDER_BEST_TO_WORST
+
+    accounts = history.get("accounts", [])
+    days = history.get("days", [])
+    tiers_matrix = history.get("tiers", [])
+    if not accounts or len(days) < 2:
+        return (None, [])
+
+    owned_set = set(owned_tiers)
+    rank = {t: i for i, t in enumerate(TIER_ORDER_BEST_TO_WORST)}
+
+    # Walk day columns from newest to oldest.
+    for col_idx in range(len(days) - 1, 0, -1):
+        moves: List[Dict] = []
+        for row_idx, account_id in enumerate(accounts):
+            curr_code = tiers_matrix[row_idx][col_idx]
+            if curr_code is None:
+                continue
+            # Find the most recent prior non-null tier for this account.
+            prev_code = None
+            for back_idx in range(col_idx - 1, -1, -1):
+                cand = tiers_matrix[row_idx][back_idx]
+                if cand is not None:
+                    prev_code = cand
+                    break
+            if prev_code is None or prev_code == curr_code:
+                continue
+            prev_tier = INT_TO_TIER.get(prev_code)
+            curr_tier = INT_TO_TIER.get(curr_code)
+            if prev_tier is None or curr_tier is None:
+                continue
+            if prev_tier not in owned_set and curr_tier not in owned_set:
+                continue
+            prev_rank = rank.get(prev_tier)
+            curr_rank = rank.get(curr_tier)
+            if prev_rank is None or curr_rank is None:
+                continue
+            direction = "up" if curr_rank < prev_rank else "down"
+            moves.append({
+                "AccountId": int(account_id),
+                "Account_Name": "",
+                "previous_tier": prev_tier,
+                "current_tier": curr_tier,
+                "direction": direction,
+            })
+        if moves:
+            return (days[col_idx], moves)
+
+    return (None, [])
+
+
 def find_most_recent_relevant_move(history: Dict, owned_tiers: Iterable[str]) -> Optional[Dict]:
     """Walk the history file backwards looking for the most recent T1/T2-touching
     tier change, for use as a TEST_MODE preview when today has no real moves.

@@ -211,22 +211,18 @@ def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df
     # produces a representative email. Real production runs (TEST_MODE=false)
     # remain quiet on no-movement days.
     if relevant.empty and TEST_MODE:
-        # Sampler: one of each owner-relevant transition shape. For drops,
-        # we key on the *previous* tier (the owned band the account left) —
-        # current_tier varies (T3, T4, T5...) and isn't the interesting
-        # piece for a preview email.
-        sample_kinds = [
-            {"direction": "up",   "current_tier":  "Tier 1"},  # promotion to top
-            {"direction": "up",   "current_tier":  "Tier 2"},  # promotion into T2
-            {"direction": "down", "previous_tier": "Tier 1"},  # dropped out of T1
-            {"direction": "down", "previous_tier": "Tier 2"},  # dropped out of T2
-        ]
-        samples = tier_history.find_sample_moves_per_kind(history, sample_kinds)
+        # Replay the latest real-world day with owned-tier movement. Walks
+        # tier_history.json backwards day-by-day until it finds one where
+        # at least one account moved into or out of a Tier 1 / Tier 2
+        # state, then surfaces every such move on that day. Gives a
+        # production-realistic preview (one or many emails) rather than
+        # synthesised controlled examples.
+        day_iso, samples = tier_history.find_latest_day_with_relevant_moves(
+            history, owned_tiers=TIER_OWNERS.keys()
+        )
         if samples:
-            logger.info("TEST_MODE: no real movement today; previewing %d "
-                        "sample historical moves (%s).",
-                        len(samples),
-                        ", ".join(f"{s['previous_tier']}->{s['current_tier']}" for s in samples))
+            logger.info("TEST_MODE: no real movement today; replaying %d "
+                        "real moves from %s.", len(samples), day_iso)
             rows = []
             for sample in samples:
                 # Carry the account name from v2 data if we still have it

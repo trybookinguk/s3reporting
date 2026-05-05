@@ -144,18 +144,22 @@ def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[flo
     # a y-range; within a scored band the line position is computed from
     # the composite score along a linear-then-log mapping that gives the
     # smaller (better) bands visibly more room than a pure linear scale.
+    # band_specs entries:
+    #   (data_label, display_label, score_lo, score_hi, colour, y_lo, y_hi)
+    # data_label matches what extract_account_history yields (full tier name);
+    # display_label is what we render on the y-axis tick.
     band_specs = [
-        # (label, score_lo, score_hi, colour, y_lo, y_hi)
-        # y axis: 0 (best) at top, ~7 (worst) at bottom.
-        ("T1",   0,   2,   "#dcfce7", 0.0, 1.4),
-        ("T2",   2,   10,  "#ecfccb", 1.4, 2.6),
-        ("T3",   10,  25,  "#fef9c3", 2.6, 3.6),
-        ("T4",   25,  50,  "#fed7aa", 3.6, 4.5),
-        ("T5",   50,  100, "#fecaca", 4.5, 5.4),
-        ("Free", None, None, "#e5e7eb", 5.4, 6.2),
-        ("Nil",  None, None, "#d1d5db", 6.2, 7.0),
+        ("Tier 1", "T1",   0,    2,    "#dcfce7", 0.0, 1.4),
+        ("Tier 2", "T2",   2,    10,   "#ecfccb", 1.4, 2.6),
+        ("Tier 3", "T3",   10,   25,   "#fef9c3", 2.6, 3.6),
+        ("Tier 4", "T4",   25,   50,   "#fed7aa", 3.6, 4.5),
+        ("Tier 5", "T5",   50,   100,  "#fecaca", 4.5, 5.4),
+        ("Free",   "Free", None, None, "#e5e7eb", 5.4, 6.2),
+        ("Nil",    "Nil",  None, None, "#d1d5db", 6.2, 7.0),
     ]
-    # Lookup helpers
+    # Lookup by data_label so a "Tier 3" history entry actually finds the
+    # T3 band — earlier this used the short labels and silently dropped
+    # every Tier 1-5 row to the Nil band.
     band_by_label = {b[0]: b for b in band_specs}
 
     def score_to_y(label: str, score: Optional[float]) -> float:
@@ -170,7 +174,7 @@ def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[flo
         spec = band_by_label.get(label)
         if spec is None:
             return 7.0
-        _, lo, hi, _, y_lo, y_hi = spec
+        _, _, lo, hi, _, y_lo, y_hi = spec
         if lo is None or score is None:
             return (y_lo + y_hi) / 2
         # Clamp to band bounds (calculator guarantees this but be safe)
@@ -191,7 +195,7 @@ def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[flo
     ax.set_facecolor("#fafbfc")
 
     # Render bands as solid horizontal regions.
-    for label, _lo, _hi, colour, y_lo, y_hi in band_specs:
+    for _data_label, _disp, _lo, _hi, colour, y_lo, y_hi in band_specs:
         ax.axhspan(y_lo, y_hi, facecolor=colour, alpha=0.7, zorder=0)
 
     # The line — TryBooking accent colour, slightly thicker so it reads
@@ -203,8 +207,9 @@ def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[flo
 
     # Y-axis: only band labels, at band centres. Free uses the warm tint
     # we used elsewhere in the design.
-    tick_positions = [(spec[4] + spec[5]) / 2 for spec in band_specs]
-    tick_labels = [spec[0] for spec in band_specs]
+    # tick at the centre of each band's y-range, label with the short display name.
+    tick_positions = [(spec[5] + spec[6]) / 2 for spec in band_specs]
+    tick_labels = [spec[1] for spec in band_specs]
     ax.set_yticks(tick_positions)
     ax.set_yticklabels(tick_labels)
     ax.set_ylim(7.0, 0.0)  # inverted: T1 at top

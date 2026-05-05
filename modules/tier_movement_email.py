@@ -134,32 +134,29 @@ def _format_years_loyalty(value) -> str:
     return f"{n} year{'s' if n != 1 else ''} active"
 
 
-def _format_rank_with_change(rank, prev_rank) -> Tuple[str, str]:
-    """Format a revenue rank with an optional year-on-year delta marker.
+def _format_rank_with_change(rank, prev_rank) -> Tuple[str, str, str]:
+    """Format a revenue rank into a stacked main / delta display.
 
-    Returns (display_string, css_class) where css_class is one of:
-      "up"        — improved YoY (lower rank number = better)
-      "down"      — worsened YoY
-      "unchanged" — same as prev or no prior rank to compare
-      "missing"   — no current rank at all (no revenue this period)
+    Returns (main, delta, css_class) where:
+      main     — the prominent rank line, e.g. "▲ #15" or "#15" or "—"
+      delta    — supporting detail, e.g. "7 from #22 vs last year" (or "")
+      css_class — "up" | "down" | "unchanged" | "missing", drives colour
+                 in the template.
 
-    Examples (with class):
-      ("#15 ▲ 7 from #22", "up")
-      ("#15 ▼ 3 from #12", "down")
-      ("#15", "unchanged")
-      ("—", "missing")
+    The two-line layout keeps the rank number prominent and makes the YoY
+    change a sub-detail rather than competing for attention.
     """
     if rank is None or (isinstance(rank, float) and pd.isna(rank)):
-        return ("—", "missing")
-    out = f"#{int(rank):,}"
+        return ("—", "", "missing")
+    rank_str = f"#{int(rank):,}"
     if prev_rank is None or (isinstance(prev_rank, float) and pd.isna(prev_rank)):
-        return (out, "unchanged")
-    delta = int(prev_rank) - int(rank)  # positive = improved (rank dropped)
+        return (rank_str, "", "unchanged")
+    delta = int(prev_rank) - int(rank)  # positive = improved (lower rank)
     if delta == 0:
-        return (out, "unchanged")
+        return (rank_str, "unchanged from last year", "unchanged")
     if delta > 0:
-        return (f"{out} ▲ {delta:,} from #{int(prev_rank):,}", "up")
-    return (f"{out} ▼ {abs(delta):,} from #{int(prev_rank):,}", "down")
+        return (f"▲ {rank_str}", f"{delta:,} from #{int(prev_rank):,} vs last year", "up")
+    return (f"▼ {rank_str}", f"{abs(delta):,} from #{int(prev_rank):,} vs last year", "down")
 
 
 def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[float]]]) -> str:
@@ -446,10 +443,10 @@ def compose_and_send(
     created_disp, _ = _format_date(account_meta.get("account_created"))
     years_loyalty_disp = _format_years_loyalty(account_meta.get("years_loyalty"))
 
-    rank_current_disp, rank_current_class = _format_rank_with_change(
+    rank_current_main, rank_current_delta, rank_current_class = _format_rank_with_change(
         account_meta.get("rank_current"), account_meta.get("rank_current_prev")
     )
-    rank_lifetime_disp, rank_lifetime_class = _format_rank_with_change(
+    rank_lifetime_main, rank_lifetime_delta, rank_lifetime_class = _format_rank_with_change(
         account_meta.get("rank_lifetime"), account_meta.get("rank_lifetime_prev")
     )
 
@@ -468,9 +465,11 @@ def compose_and_send(
         "tickets_365d": _format_int(account_meta.get("tickets_365d")),
         "last_ticket_sale": html.escape(last_sale_disp),
         "last_event_created": html.escape(last_event_disp),
-        "rank_current": html.escape(rank_current_disp),
+        "rank_current_main": html.escape(rank_current_main),
+        "rank_current_delta": html.escape(rank_current_delta),
         "rank_current_class": rank_current_class,
-        "rank_lifetime": html.escape(rank_lifetime_disp),
+        "rank_lifetime_main": html.escape(rank_lifetime_main),
+        "rank_lifetime_delta": html.escape(rank_lifetime_delta),
         "rank_lifetime_class": rank_lifetime_class,
         "tier_history_svg": chart_svg,
     }

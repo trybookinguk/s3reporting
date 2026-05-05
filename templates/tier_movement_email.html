@@ -145,20 +145,28 @@
       margin: 0 0 4px 0;
     }
     .rank-value {
-      font-size: 15px;
+      font-size: 18px;
       font-weight: 600;
       margin: 0;
+      line-height: 1.2;
     }
     .rank-value.up        { color: #047857; }  /* green-700 */
     .rank-value.down      { color: #b91c1c; }  /* red-700 */
     .rank-value.unchanged { color: #1f2937; }  /* slate-800 */
     .rank-value.missing   { color: #9ca3af; font-style: italic; }
+    .rank-delta {
+      font-size: 12px;
+      color: #6b7280;
+      margin: 4px 0 0 0;
+    }
+    .rank-delta.up   { color: #047857; }
+    .rank-delta.down { color: #b91c1c; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>{{headline}}</h1>
-    <p class="account-id">Account #{{account_id}} · {{account_name}}</p>
+    <p class="account-id">Account #{{account_id}}</p>
 
     <div class="movement {{direction}}">
       <span class="from">{{previous_tier_label}}</span>
@@ -187,11 +195,13 @@
         <tr>
           <td class="left">
             <p class="rank-label">12 month revenue</p>
-            <p class="rank-value {{rank_current_class}}">{{rank_current}}</p>
+            <p class="rank-value {{rank_current_class}}">{{rank_current_main}}</p>
+            <p class="rank-delta {{rank_current_class}}">{{rank_current_delta}}</p>
           </td>
           <td class="right">
             <p class="rank-label">Lifetime revenue</p>
-            <p class="rank-value {{rank_lifetime_class}}">{{rank_lifetime}}</p>
+            <p class="rank-value {{rank_lifetime_class}}">{{rank_lifetime_main}}</p>
+            <p class="rank-delta {{rank_lifetime_class}}">{{rank_lifetime_delta}}</p>
           </td>
         </tr>
       </table>

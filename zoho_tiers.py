@@ -10,9 +10,6 @@ import logging
 import os
 from datetime import datetime
 
-# Disable caching to avoid stale data issues
-os.environ['NO_CACHE'] = '1'
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,

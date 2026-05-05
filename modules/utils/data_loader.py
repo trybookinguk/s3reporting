@@ -58,32 +58,40 @@ def calculate_previous_month(year: int, month: int) -> Tuple[int, int]:
         return year, month - 1
 
 
-def find_booking_files_in_month(s3_client, bucket: str, year: int, month: int) -> Tuple[List[str], List[str]]:
-    """Find BookingDataAll and BookingData files in a specific month."""
+def find_booking_files_in_month(s3_client, bucket: str, year: int, month: int,
+                                require_non_empty: bool = False) -> Tuple[List[str], List[str]]:
+    """Find BookingDataAll and BookingData files in a specific month.
+
+    Args:
+        require_non_empty: If True, exclude files with zero ContentLength. Used by the
+            fallback walk-back so empty CSVs (which fail to parse) don't terminate the search.
+    """
     prefix = f"{year:04d}/{month:02d}/"
-    
+
     try:
         response = s3_client.list_objects_v2(
             Bucket=bucket,
             Prefix=prefix
         )
-        
+
         booking_data_all_files = []
         booking_data_files = []
-        
+
         if 'Contents' in response:
             for obj in response['Contents']:
                 key = obj['Key']
+                if require_non_empty and obj.get('Size', 0) == 0:
+                    continue
                 if 'BookingDataAll-TBUK.csv' in key:
                     booking_data_all_files.append(key)
                 elif 'BookingData-TBUK.csv' in key and 'BookingDataAll' not in key:
                     booking_data_files.append(key)
-        
+
         booking_data_all_files.sort()
         booking_data_files.sort()
-        
+
         return booking_data_all_files, booking_data_files
-        
+
     except Exception as e:
         logger.error(f"Error listing files in {prefix}: {e}")
         return [], []
@@ -118,13 +126,16 @@ def get_fallback_keys(s3_client, bucket: str, current_year: int, current_month: 
     booking_all_key: Optional[str] = None
     booking_all_year_month: Optional[Tuple[int, int]] = None
 
-    # Walk back month-by-month until we find a BookingDataAll file or hit the lookback cap
+    # Walk back month-by-month until we find a non-empty BookingDataAll file or hit the
+    # lookback cap. We filter on Size > 0 here because empty CSVs (the bug we're working
+    # around) still appear in S3 listings — without this filter the loop would "find" them
+    # and stop searching.
     search_year, search_month = calculate_previous_month(current_year, current_month)
     for step in range(MAX_FALLBACK_MONTHS):
         logger.info(f"Searching for BookingDataAll in {search_year:04d}/{search_month:02d}/ "
                     f"(step {step + 1}/{MAX_FALLBACK_MONTHS})")
         booking_all_files, _ = find_booking_files_in_month(
-            s3_client, bucket, search_year, search_month
+            s3_client, bucket, search_year, search_month, require_non_empty=True
         )
         if booking_all_files:
             booking_all_key = booking_all_files[-1]  # Newest in that month

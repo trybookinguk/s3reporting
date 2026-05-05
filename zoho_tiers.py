@@ -125,10 +125,23 @@ def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df
     v2_df["Account_Name"] = v2_df["AccountId"].astype(int).map(name_lookup)
 
     previous_snapshot = tier_snapshot.load_previous_snapshot(graph_token, SHAREPOINT_DRIVE_ID)
+    is_first_run = not previous_snapshot
     changes = tier_snapshot.detect_changes(previous_snapshot, v2_df)
     relevant = tier_snapshot.filter_email_relevant_moves(changes)
     logger.info("Tier movements: %d total, %d email-relevant (T1/T2-touching).",
                 len(changes), len(relevant))
+
+    # First-run guard: with no baseline snapshot, every account looks "new",
+    # so every T1/T2 account would generate a new-direction email. That's
+    # noise, not signal — suppress sends and let tomorrow's diff be the
+    # first real one. The snapshot is still saved at the end so tomorrow
+    # has a baseline. TEST_MODE bypasses this so we can still preview a
+    # historical movement on day zero.
+    if is_first_run and not TEST_MODE and not relevant.empty:
+        logger.info("First run (no previous snapshot) — suppressing %d new-direction "
+                    "emails. Snapshot will be saved as the baseline; real movement "
+                    "detection starts from the next run.", len(relevant))
+        relevant = relevant.iloc[0:0]
 
     history = tier_history.load_history(graph_token, SHAREPOINT_DRIVE_ID)
     today = datetime.now(UK_TZ).date()

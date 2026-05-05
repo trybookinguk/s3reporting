@@ -138,6 +138,77 @@ def append_day(history: Dict, day: date, current_df: pd.DataFrame) -> Dict:
     return history
 
 
+def find_most_recent_relevant_move(history: Dict, owned_tiers: Iterable[str]) -> Optional[Dict]:
+    """Walk the history file backwards looking for the most recent T1/T2-touching
+    tier change, for use as a TEST_MODE preview when today has no real moves.
+
+    A move is "relevant" if either side of the transition (the held tier
+    immediately before, or the held tier immediately at/after) is in
+    `owned_tiers`. We pick the latest such move across all accounts.
+
+    Returns a dict shaped like one row of detect_changes' output:
+        {AccountId, Account_Name, previous_tier, current_tier, direction, day}
+    or None if no relevant move is found.
+
+    "day" is the ISO date the move was first observed (i.e. the day the
+    history column shows the new tier).
+    """
+    from .tier_codes import INT_TO_TIER, TIER_ORDER_BEST_TO_WORST
+
+    accounts = history.get("accounts", [])
+    days = history.get("days", [])
+    tiers_matrix = history.get("tiers", [])
+    if not accounts or len(days) < 2:
+        return None
+
+    owned_set = set(owned_tiers)
+    rank = {t: i for i, t in enumerate(TIER_ORDER_BEST_TO_WORST)}
+
+    best: Optional[Dict] = None
+    best_day_idx = -1
+
+    for row_idx, account_id in enumerate(accounts):
+        row = tiers_matrix[row_idx]
+        # Walk backwards through the row tracking the new (most-recent) tier;
+        # the transition is at the first column where the older code differs.
+        # transition_day_idx is the column where the new tier *first* appeared.
+        new_tier_code = None
+        transition_day_idx = None  # earliest column showing the new tier
+        for col_idx in range(len(row) - 1, -1, -1):
+            code = row[col_idx]
+            if code is None:
+                continue
+            if new_tier_code is None:
+                new_tier_code = code
+                transition_day_idx = col_idx
+                continue
+            if code == new_tier_code:
+                # Same tier as the new run; push transition_day back further
+                transition_day_idx = col_idx
+                continue
+            # Different code — this is the older (previous) tier. Record the
+            # transition and stop scanning this account.
+            prev_tier = INT_TO_TIER.get(code)
+            curr_tier = INT_TO_TIER.get(new_tier_code)
+            if (prev_tier in owned_set) or (curr_tier in owned_set):
+                if transition_day_idx > best_day_idx:
+                    prev_rank = rank.get(prev_tier)
+                    curr_rank = rank.get(curr_tier)
+                    direction = "up" if curr_rank < prev_rank else "down"
+                    best = {
+                        "AccountId": int(account_id),
+                        "Account_Name": "",
+                        "previous_tier": prev_tier,
+                        "current_tier": curr_tier,
+                        "direction": direction,
+                        "day": days[transition_day_idx],
+                    }
+                    best_day_idx = transition_day_idx
+            break
+
+    return best
+
+
 def extract_account_history(history: Dict, account_id: int) -> List[Tuple[str, Optional[str], Optional[float]]]:
     """Slice one account's full timeline out of the history.
 

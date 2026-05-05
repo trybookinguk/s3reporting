@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import from our modules
-from modules.utils.config import UK_TZ
+from modules.utils.config import UK_TZ, TEST_MODE, TIER_OWNERS
 from modules.utils.data_loader import get_s3_client, load_multiple_booking_files, download_s3_file_cached
 from modules.booking_aggregator import BookingAggregator
 from modules.utils.config import CUTOFF_365, CUTOFF_730, EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS
@@ -84,11 +84,15 @@ def _build_account_meta_lookup(booking_data_df, account_lookup, account_ids):
     return out
 
 
-def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df, zoho_token):
+def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df,
+                                zoho_token, dry_run: bool = False):
     """Run the v2 calculator, detect changes, send emails, update SharePoint state.
 
     Self-contained — failure here does not bubble up into the main run.
     Assumes Zoho upsert succeeded; safe to call after.
+
+    `dry_run`: if True, skip all SharePoint writes (history/snapshot remain
+    untouched). Useful for local validation without affecting production state.
     """
     if not SHAREPOINT_DRIVE_ID:
         logger.warning("SHAREPOINT_DRIVE_ID not set — skipping tier-movement pipeline.")
@@ -120,12 +124,39 @@ def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df
     logger.info("Tier movements: %d total, %d email-relevant (T1/T2-touching).",
                 len(changes), len(relevant))
 
-    if not relevant.empty:
-        history = tier_history.load_history(graph_token, SHAREPOINT_DRIVE_ID)
-        # Append today before the email render so the chart includes today's point
-        today = datetime.now(UK_TZ).date()
-        tier_history.append_day(history, today, v2_df)
+    history = tier_history.load_history(graph_token, SHAREPOINT_DRIVE_ID)
+    today = datetime.now(UK_TZ).date()
+    tier_history.append_day(history, today, v2_df)
 
+    # TEST_MODE preview fallback: if there are no real T1/T2-touching moves
+    # today, surface the most recent historical one so a TEST_MODE run still
+    # produces a representative email. Real production runs (TEST_MODE=false)
+    # remain quiet on no-movement days.
+    if relevant.empty and TEST_MODE:
+        fallback = tier_history.find_most_recent_relevant_move(
+            history, owned_tiers=TIER_OWNERS.keys()
+        )
+        if fallback:
+            logger.info("TEST_MODE: no real movement today; previewing most "
+                        "recent historical move (%s: %s -> %s on %s).",
+                        fallback["AccountId"], fallback["previous_tier"],
+                        fallback["current_tier"], fallback["day"])
+            # Carry the account name from v2 data if we still have it
+            name_match = v2_df.loc[v2_df["AccountId"] == fallback["AccountId"], "Account_Name"]
+            if not name_match.empty and pd.notna(name_match.iloc[0]):
+                fallback["Account_Name"] = name_match.iloc[0]
+            relevant = pd.DataFrame([{
+                "AccountId": fallback["AccountId"],
+                "Account_Name": fallback["Account_Name"],
+                "previous_tier": fallback["previous_tier"],
+                "current_tier": fallback["current_tier"],
+                "direction": fallback["direction"],
+            }])
+        else:
+            logger.info("TEST_MODE: no real movement today and no historical "
+                        "T1/T2 movement found in history file.")
+
+    if not relevant.empty:
         account_meta = _build_account_meta_lookup(
             booking_data_df, account_lookup, relevant["AccountId"].tolist()
         )
@@ -138,22 +169,18 @@ def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df
         )
         logger.info("Tier-movement emails: %d sent, %d failed.", sent, failed)
 
-        # Save history (only if any change-detection work happened — keeps the
-        # write cadence aligned with email runs; backfill flag handles the
-        # initial seed)
-        tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, history)
+    # Persist state — skipped only when --dry-run is passed. TEST_MODE alone
+    # still writes (it only redirects emails); dry-run is the explicit opt-out.
+    if dry_run:
+        logger.info("--dry-run: skipping SharePoint writes "
+                    "(tier_history.json, tier_snapshot.json untouched).")
     else:
-        # Still append today's column even when no relevant moves — keeps history complete
-        history = tier_history.load_history(graph_token, SHAREPOINT_DRIVE_ID)
-        tier_history.append_day(history, datetime.now(UK_TZ).date(), v2_df)
         tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, history)
-
-    # Always overwrite the daily snapshot last
-    tier_snapshot.save_snapshot(graph_token, SHAREPOINT_DRIVE_ID, v2_df)
-    logger.info("Tier snapshot saved.")
+        tier_snapshot.save_snapshot(graph_token, SHAREPOINT_DRIVE_ID, v2_df)
+        logger.info("Tier history and snapshot saved.")
 
 
-def main():
+def main(dry_run: bool = False):
     """Main execution function."""
     start_time = time.time()
     
@@ -552,7 +579,8 @@ def main():
     try:
         if zoho_token is None:
             zoho_token = get_access_token()
-        _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df, zoho_token)
+        _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df,
+                                    zoho_token, dry_run=dry_run)
     except Exception as e:
         logger.error(f"Tier-movement pipeline failed: {e}")
         print(f"ERROR: Tier-movement pipeline failed: {e}")
@@ -677,6 +705,13 @@ if __name__ == "__main__":
         default=None,
         help="End date for --rebuild-history (YYYY-MM-DD). Default: today.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run the pipeline but skip SharePoint writes (tier_history.json, "
+             "tier_snapshot.json untouched). Email sending still happens — pair "
+             "with TEST_MODE=true to redirect emails to the test recipient.",
+    )
     args = parser.parse_args()
 
     if args.rebuild_history:
@@ -684,4 +719,4 @@ if __name__ == "__main__":
         start = pd.Timestamp(args.history_from) if args.history_from else end - pd.DateOffset(years=12)
         _replay_history(start, end)
     else:
-        main()
+        main(dry_run=args.dry_run)

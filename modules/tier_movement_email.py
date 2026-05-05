@@ -112,79 +112,75 @@ def _format_int(value) -> str:
 def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[float]]]) -> str:
     """Build a base64-embedded PNG chart of the tier history.
 
-    Returns an <img> tag with a data: URI. The function is named *_svg for
-    historical reasons — the original implementation rendered inline SVG, but
-    classic Outlook on Windows strips SVG and the chart came through as a
-    flat row of text. PNG renders identically across every email client at
-    the cost of a matplotlib dependency.
+    Y-axis: composite score (0 = best, 100 = worst), matching the v2
+    calculator's percentile-rank semantics. Tier band thresholds (T1=2,
+    T2=10, T3=25, T4=50, T5=100) are rendered as horizontal coloured
+    bands behind the score line so the band an account sits in *is* the
+    tier. Free / Nil samples have no composite score (not paid-activated)
+    and create gaps in the line.
 
-    history_points is a list of (day_iso, tier_name, composite_score) ordered
-    oldest-first (as returned by tier_history.extract_account_history). Days
-    where tier_name is None are skipped (account didn't exist that day).
+    Returns an <img> tag with a data: URI. PNG renders identically across
+    every email client; the original SVG implementation got stripped by
+    classic Outlook on Windows.
+
+    history_points is a list of (day_iso, tier_name, composite_score)
+    ordered oldest-first (as returned by tier_history.extract_account_history).
     """
-    visible = [(d, t) for d, t, _s in history_points if t is not None]
+    # Visible = days where the account had a composite score we can plot.
+    visible = [(d, t, s) for d, t, s in history_points
+               if t is not None and s is not None]
     if not visible:
         return '<p class="history-empty">No tier history recorded yet.</p>'
 
-    # Lazy-import matplotlib so the dependency is only required when an
-    # email actually fires. Important: use the Agg backend before importing
-    # pyplot so it works in headless CI.
     import io
     import base64
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    # Tier -> y-axis position. Lower y = better tier (T1 at top).
-    tier_y = {
-        "Tier 1": 6, "Tier 2": 5, "Tier 3": 4,
-        "Tier 4": 3, "Tier 5": 2, "Free": 1, "Nil": 0,
-    }
+    xs = [date.fromisoformat(d) for d, _, _ in visible]
+    ys = [float(s) for _, _, s in visible]
 
-    xs = [date.fromisoformat(d) for d, _ in visible]
-    ys = [tier_y[t] for _, t in visible]
-
-    # Build a step-style line by interleaving each transition with a hold
-    # at the previous y-value.
-    step_xs = [xs[0]]
-    step_ys = [ys[0]]
-    for i in range(1, len(xs)):
-        if ys[i] != ys[i - 1]:
-            step_xs.append(xs[i])
-            step_ys.append(ys[i - 1])
-        step_xs.append(xs[i])
-        step_ys.append(ys[i])
-
-    fig, ax = plt.subplots(figsize=(7.0, 1.8), dpi=140)
+    fig, ax = plt.subplots(figsize=(7.0, 3.0), dpi=140)
     fig.patch.set_facecolor("#fafbfc")
     ax.set_facecolor("#fafbfc")
 
-    # Free band tint — y in [0.5, 1.5] covers the Free row.
-    ax.axhspan(0.5, 1.5, facecolor="#f5efe6", zorder=0)
+    # Tier band colours — blended green-to-red gradient matching the
+    # business intuition ("top tier = healthy, bottom tier = at risk").
+    # Bands span TIER_BANDS thresholds; lower score is better, so the
+    # band order top-to-bottom on screen is T1 (0-2), T2 (2-10), etc.
+    band_specs = [
+        (0,   2,   "#dcfce7", "T1"),  # green-50
+        (2,   10,  "#ecfccb", "T2"),  # lime-50
+        (10,  25,  "#fef9c3", "T3"),  # yellow-50
+        (25,  50,  "#fed7aa", "T4"),  # orange-100
+        (50,  100, "#fecaca", "T5"),  # red-100
+    ]
+    for ymin, ymax, colour, label in band_specs:
+        ax.axhspan(ymin, ymax, facecolor=colour, alpha=0.6, zorder=0)
+        # Right-edge label so each band is named without crowding the y-axis.
+        ax.text(1.005, (ymin + ymax) / 2, label,
+                transform=ax.get_yaxis_transform(),
+                fontsize=8, color="#6b7280",
+                va="center", ha="left")
 
-    # Gridlines at each band.
-    for y in range(7):
-        ax.axhline(y, color="#e5e7eb" if y in (0, 6) else "#f3f4f6",
-                   linewidth=0.8, zorder=1)
-
-    # The chart line — TryBooking accent colour, rounded joins.
-    ax.plot(step_xs, step_ys, color="#0589A3", linewidth=2.0,
+    # The score line — TryBooking accent colour. Use NaN-aware plotting so
+    # gaps appear where score is missing (Free/Nil days are filtered out
+    # above so the line itself is contiguous, but if we ever stop filtering
+    # this is the safer pattern).
+    ax.plot(xs, ys, color="#0589A3", linewidth=2.0,
             solid_joinstyle="round", solid_capstyle="round", zorder=3)
-    # Highlight the latest point.
-    ax.plot([xs[-1]], [ys[-1]], marker="o", markersize=6,
+    ax.plot([xs[-1]], [ys[-1]], marker="o", markersize=7,
             color="#0589A3", zorder=4)
 
-    # Y-axis: tier labels at the right band positions.
-    ax.set_yticks(list(tier_y.values()))
-    ax.set_yticklabels(list(tier_y.keys()))
-    ax.set_ylim(-0.5, 6.5)
+    # Y-axis: composite score 0–100, lower is better.
+    ax.set_ylim(100, 0)  # inverted so T1 sits at the top
+    ax.set_yticks([0, 10, 25, 50, 100])
     for label in ax.get_yticklabels():
-        label.set_color("#6b7280")
+        label.set_color("#9ca3af")
         label.set_fontsize(8)
-        if label.get_text() == "Free":
-            label.set_color("#a08a5e")
 
-    # X-axis: year ticks only, and only the years actually spanned.
+    # X-axis: year ticks only, spanning the actual data range.
     first_year = xs[0].year
     last_year = xs[-1].year
     year_ticks = [date(y, 1, 1) for y in range(first_year, last_year + 1)
@@ -196,7 +192,6 @@ def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[flo
         label.set_color("#9ca3af")
         label.set_fontsize(8)
 
-    # Strip frame and axis ticks for a cleaner look.
     for spine in ax.spines.values():
         spine.set_visible(False)
     ax.tick_params(left=False, bottom=False)
@@ -229,9 +224,10 @@ def _render_email(template: str, replacements: Dict[str, str]) -> str:
 
 def _subject(account_name: str, previous_tier: Optional[str], current_tier: str) -> str:
     direction = _direction_label(previous_tier, current_tier)
-    if direction == "new":
-        return f"[Tier Change] {account_name}: (new) → {current_tier}"
-    return f"[Tier Change] {account_name}: {previous_tier} → {current_tier} ({direction})"
+    # Drops get their own prefix so a quick scan of the inbox surfaces
+    # losses immediately. Upgrades and "new" entrants share [Tier Change].
+    prefix = "[Tier Drop]" if direction == "down" else "[Tier Change]"
+    return f"{prefix} {account_name}"
 
 
 def _recipients_for_move(
@@ -318,14 +314,20 @@ def compose_and_send(
     industry = account_meta.get("industry") or "—"
     sub_industry = account_meta.get("sub_industry") or "—"
 
+    direction = _direction_label(previous_tier, current_tier)
+    # Up arrow for upgrades (and new entrants), down arrow for drops. Plus
+    # sign for "new" so first-time entrants don't read like they merely
+    # held a tier — though current filters mean "new" never reaches here
+    # in production, only in TEST_MODE previews of historical data.
+    arrow = {"up": "↑", "down": "↓", "new": "+"}.get(direction, "•")
     replacements = {
         "headline": html.escape(_headline(account_name, previous_tier, current_tier)),
         "account_id": str(account_id),
         "account_name": html.escape(account_name),
         "previous_tier_label": html.escape(previous_tier or "(new)"),
         "current_tier_label": html.escape(current_tier),
-        "direction": _direction_label(previous_tier, current_tier),
-        "direction_label": _direction_label(previous_tier, current_tier),
+        "direction": direction,
+        "direction_label": arrow,
         "zoho_url": zoho_url or "#",
         "industry": html.escape(str(industry)),
         "sub_industry": html.escape(str(sub_industry)),

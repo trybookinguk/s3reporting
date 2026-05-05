@@ -21,9 +21,9 @@ from .utils.zoho_api import get_session, retry_with_backoff
 
 log = logging.getLogger(__name__)
 
-# Zoho's web URL is region-specific. Override via ZOHO_CRM_WEB_BASE if needed
-# (e.g. crm.zoho.com for US accounts). EU is the TryBooking default.
-CRM_WEB_BASE = os.environ.get("ZOHO_CRM_WEB_BASE", "https://crm.zoho.eu")
+# Zoho's web URL is region-specific. Override via ZOHO_CRM_WEB_BASE if your
+# org lives on a different region (e.g. crm.zoho.eu for EU data residency).
+CRM_WEB_BASE = os.environ.get("ZOHO_CRM_WEB_BASE", "https://crm.zoho.com")
 
 # Number of Account_Name predicates to OR into a single search call. Zoho's
 # criteria string has a practical length cap; 20 is comfortably safe.

@@ -265,10 +265,10 @@ def main(dry_run: bool = False):
         logger.info(f"Loading Account report from S3: {key_account}")
         account_df = download_s3_file_cached(s3_client, key_account)
         
-        # Create lookup dictionary: AccountId -> {LastEventCreation, Industry, DateTimeCreated, AccountName, AccountStatus, LastLogIn}
+        # Create lookup dictionary: AccountId -> {LastEventCreation, Industry, SubIndustry, DateTimeCreated, AccountName, AccountStatus, LastLogIn}
         account_lookup = {}
         required_cols = ['Id', 'LastEventCreation', 'Industry', 'Postcode', 'DateTimeCreated']
-        optional_cols = ['AccountName', 'AccountStatus', 'LastLogIn']
+        optional_cols = ['AccountName', 'AccountStatus', 'LastLogIn', 'SubIndustry']
 
         # Determine which columns to include in lookup
         lookup_cols = ['LastEventCreation', 'Industry', 'Postcode', 'DateTimeCreated']

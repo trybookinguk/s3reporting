@@ -284,19 +284,14 @@ def find_sample_moves_per_kind(
             return False
         return True
 
-    # Use index-keyed results so kinds compare by position, not dict-equality.
-    results: Dict[int, Dict] = {}
+    # Per-kind result: the *most recent* transition seen anywhere in the
+    # matrix. We track day_idx so a later match can overwrite an earlier
+    # one. day_idx is the global column index — comparable across accounts
+    # because all accounts share the same day axis.
+    results: Dict[int, Tuple[int, Dict]] = {}
 
     for row_idx, account_id in enumerate(accounts):
-        if len(results) == len(kinds_list):
-            break  # Every slot filled
         row = tiers_matrix[row_idx]
-        # Walk left-to-right, recording each tier transition (compared
-        # against the previous non-null sample). We use the first matching
-        # transition per kind across the dataset, scanned in account-major
-        # order — exactly which historical sample each slot holds doesn't
-        # matter much for a preview, only that every owner-relevant case
-        # is represented.
         prev_code: Optional[int] = None
         for col_idx, code in enumerate(row):
             if code is None:
@@ -317,23 +312,21 @@ def find_sample_moves_per_kind(
                 continue
             direction = "up" if curr_rank < prev_rank else "down"
             for k_idx, kind in enumerate(kinds_list):
-                if k_idx in results:
+                if not _matches(kind, direction, prev_tier, curr_tier):
                     continue
-                if _matches(kind, direction, prev_tier, curr_tier):
-                    results[k_idx] = {
+                existing = results.get(k_idx)
+                if existing is None or col_idx > existing[0]:
+                    results[k_idx] = (col_idx, {
                         "AccountId": int(account_id),
                         "Account_Name": "",
                         "previous_tier": prev_tier,
                         "current_tier": curr_tier,
                         "direction": direction,
                         "day": days[col_idx],
-                    }
-                    break  # one match per transition
-            if len(results) == len(kinds_list):
-                break  # All slots filled
+                    })
 
     # Return in requested kinds order; missing kinds drop out silently.
-    return [results[i] for i in range(len(kinds_list)) if i in results]
+    return [results[i][1] for i in range(len(kinds_list)) if i in results]
 
 
 def find_most_recent_relevant_move(history: Dict, owned_tiers: Iterable[str]) -> Optional[Dict]:

@@ -112,75 +112,109 @@ def _format_int(value) -> str:
 def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[float]]]) -> str:
     """Build a base64-embedded PNG chart of the tier history.
 
-    Y-axis: composite score (0 = best, 100 = worst), matching the v2
-    calculator's percentile-rank semantics. Tier band thresholds (T1=2,
-    T2=10, T3=25, T4=50, T5=100) are rendered as horizontal coloured
-    bands behind the score line so the band an account sits in *is* the
-    tier. Free / Nil samples have no composite score (not paid-activated)
-    and create gaps in the line.
+    Layout: tier bands (T1 -> Nil, top to bottom) as coloured horizontal
+    regions. The line traces through them. Within each scored band (T1-T5)
+    the line position is composite-score-driven — so trajectory inside a
+    band is visible — but the y-axis labels only the tiers, not numeric
+    scores. Free and Nil have no composite score and sit at fixed band
+    centres.
+
+    Y-axis transform: linear-then-log. Linear inside T1 (0-2) so the
+    smallest band still has visible space; log-scaled from 2 onwards so
+    T1/T2/T3 don't get crushed against the top. Free / Nil are appended
+    below the score range as a fixed-width band each.
 
     Returns an <img> tag with a data: URI. PNG renders identically across
     every email client; the original SVG implementation got stripped by
     classic Outlook on Windows.
-
-    history_points is a list of (day_iso, tier_name, composite_score)
-    ordered oldest-first (as returned by tier_history.extract_account_history).
     """
-    # Visible = days where the account had a composite score we can plot.
-    visible = [(d, t, s) for d, t, s in history_points
-               if t is not None and s is not None]
+    visible = [(d, t, s) for d, t, s in history_points if t is not None]
     if not visible:
         return '<p class="history-empty">No tier history recorded yet.</p>'
 
     import io
     import base64
+    import math
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    xs = [date.fromisoformat(d) for d, _, _ in visible]
-    ys = [float(s) for _, _, s in visible]
+    # Visual coordinate system: y increases downward (worse). We render
+    # bands top-to-bottom T1, T2, T3, T4, T5, Free, Nil. Each band gets
+    # a y-range; within a scored band the line position is computed from
+    # the composite score along a linear-then-log mapping that gives the
+    # smaller (better) bands visibly more room than a pure linear scale.
+    band_specs = [
+        # (label, score_lo, score_hi, colour, y_lo, y_hi)
+        # y axis: 0 (best) at top, ~7 (worst) at bottom.
+        ("T1",   0,   2,   "#dcfce7", 0.0, 1.4),
+        ("T2",   2,   10,  "#ecfccb", 1.4, 2.6),
+        ("T3",   10,  25,  "#fef9c3", 2.6, 3.6),
+        ("T4",   25,  50,  "#fed7aa", 3.6, 4.5),
+        ("T5",   50,  100, "#fecaca", 4.5, 5.4),
+        ("Free", None, None, "#e5e7eb", 5.4, 6.2),
+        ("Nil",  None, None, "#d1d5db", 6.2, 7.0),
+    ]
+    # Lookup helpers
+    band_by_label = {b[0]: b for b in band_specs}
 
-    fig, ax = plt.subplots(figsize=(7.0, 3.0), dpi=140)
+    def score_to_y(label: str, score: Optional[float]) -> float:
+        """Map (tier label, composite score) to a y-coordinate.
+
+        For scored bands (T1-T5) the score is mapped to the band's
+        [y_lo, y_hi] range via a log transform so the lower scores
+        (better accounts) sit higher in the band. For Free/Nil the
+        composite score is undefined; we just place the line at the
+        band's centre.
+        """
+        spec = band_by_label.get(label)
+        if spec is None:
+            return 7.0
+        _, lo, hi, _, y_lo, y_hi = spec
+        if lo is None or score is None:
+            return (y_lo + y_hi) / 2
+        # Clamp to band bounds (calculator guarantees this but be safe)
+        s = max(lo, min(hi, float(score)))
+        # Log-style position within band: log1p so the start of the band
+        # gets visible space even when lo is 0.
+        if hi == lo:
+            t = 0.5
+        else:
+            t = math.log1p(s - lo) / math.log1p(hi - lo)
+        return y_lo + t * (y_hi - y_lo)
+
+    xs = [date.fromisoformat(d) for d, _, _ in visible]
+    ys = [score_to_y(t, s) for _, t, s in visible]
+
+    fig, ax = plt.subplots(figsize=(7.0, 3.2), dpi=140)
     fig.patch.set_facecolor("#fafbfc")
     ax.set_facecolor("#fafbfc")
 
-    # Tier band colours — blended green-to-red gradient matching the
-    # business intuition ("top tier = healthy, bottom tier = at risk").
-    # Bands span TIER_BANDS thresholds; lower score is better, so the
-    # band order top-to-bottom on screen is T1 (0-2), T2 (2-10), etc.
-    band_specs = [
-        (0,   2,   "#dcfce7", "T1"),  # green-50
-        (2,   10,  "#ecfccb", "T2"),  # lime-50
-        (10,  25,  "#fef9c3", "T3"),  # yellow-50
-        (25,  50,  "#fed7aa", "T4"),  # orange-100
-        (50,  100, "#fecaca", "T5"),  # red-100
-    ]
-    for ymin, ymax, colour, label in band_specs:
-        ax.axhspan(ymin, ymax, facecolor=colour, alpha=0.6, zorder=0)
-        # Right-edge label so each band is named without crowding the y-axis.
-        ax.text(1.005, (ymin + ymax) / 2, label,
-                transform=ax.get_yaxis_transform(),
-                fontsize=8, color="#6b7280",
-                va="center", ha="left")
+    # Render bands as solid horizontal regions.
+    for label, _lo, _hi, colour, y_lo, y_hi in band_specs:
+        ax.axhspan(y_lo, y_hi, facecolor=colour, alpha=0.7, zorder=0)
 
-    # The score line — TryBooking accent colour. Use NaN-aware plotting so
-    # gaps appear where score is missing (Free/Nil days are filtered out
-    # above so the line itself is contiguous, but if we ever stop filtering
-    # this is the safer pattern).
-    ax.plot(xs, ys, color="#0589A3", linewidth=2.0,
+    # The line — TryBooking accent colour, slightly thicker so it reads
+    # against the busy banded background.
+    ax.plot(xs, ys, color="#0589A3", linewidth=2.2,
             solid_joinstyle="round", solid_capstyle="round", zorder=3)
     ax.plot([xs[-1]], [ys[-1]], marker="o", markersize=7,
             color="#0589A3", zorder=4)
 
-    # Y-axis: composite score 0–100, lower is better.
-    ax.set_ylim(100, 0)  # inverted so T1 sits at the top
-    ax.set_yticks([0, 10, 25, 50, 100])
-    for label in ax.get_yticklabels():
-        label.set_color("#9ca3af")
-        label.set_fontsize(8)
+    # Y-axis: only band labels, at band centres. Free uses the warm tint
+    # we used elsewhere in the design.
+    tick_positions = [(spec[4] + spec[5]) / 2 for spec in band_specs]
+    tick_labels = [spec[0] for spec in band_specs]
+    ax.set_yticks(tick_positions)
+    ax.set_yticklabels(tick_labels)
+    ax.set_ylim(7.0, 0.0)  # inverted: T1 at top
+    for tick_label in ax.get_yticklabels():
+        tick_label.set_color("#6b7280")
+        tick_label.set_fontsize(8)
+        if tick_label.get_text() == "Free":
+            tick_label.set_color("#a08a5e")
 
-    # X-axis: year ticks only, spanning the actual data range.
+    # X-axis: year ticks only, spanning actual data range.
     first_year = xs[0].year
     last_year = xs[-1].year
     year_ticks = [date(y, 1, 1) for y in range(first_year, last_year + 1)
@@ -188,9 +222,9 @@ def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[flo
     if year_ticks:
         ax.set_xticks(year_ticks)
         ax.set_xticklabels([str(d.year) for d in year_ticks])
-    for label in ax.get_xticklabels():
-        label.set_color("#9ca3af")
-        label.set_fontsize(8)
+    for tick_label in ax.get_xticklabels():
+        tick_label.set_color("#9ca3af")
+        tick_label.set_fontsize(8)
 
     for spine in ax.spines.values():
         spine.set_visible(False)

@@ -152,28 +152,39 @@ def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df
     # produces a representative email. Real production runs (TEST_MODE=false)
     # remain quiet on no-movement days.
     if relevant.empty and TEST_MODE:
-        fallback = tier_history.find_most_recent_relevant_move(
-            history, owned_tiers=TIER_OWNERS.keys()
-        )
-        if fallback:
-            logger.info("TEST_MODE: no real movement today; previewing most "
-                        "recent historical move (%s: %s -> %s on %s).",
-                        fallback["AccountId"], fallback["previous_tier"],
-                        fallback["current_tier"], fallback["day"])
-            # Carry the account name from v2 data if we still have it
-            name_match = v2_df.loc[v2_df["AccountId"] == fallback["AccountId"], "Account_Name"]
-            if not name_match.empty and pd.notna(name_match.iloc[0]):
-                fallback["Account_Name"] = name_match.iloc[0]
-            relevant = pd.DataFrame([{
-                "AccountId": fallback["AccountId"],
-                "Account_Name": fallback["Account_Name"],
-                "previous_tier": fallback["previous_tier"],
-                "current_tier": fallback["current_tier"],
-                "direction": fallback["direction"],
-            }])
+        # Sampler: one of each owner-relevant transition shape. For drops,
+        # we key on the *previous* tier (the owned band the account left) —
+        # current_tier varies (T3, T4, T5...) and isn't the interesting
+        # piece for a preview email.
+        sample_kinds = [
+            {"direction": "up",   "current_tier":  "Tier 1"},  # promotion to top
+            {"direction": "up",   "current_tier":  "Tier 2"},  # promotion into T2
+            {"direction": "down", "previous_tier": "Tier 1"},  # dropped out of T1
+            {"direction": "down", "previous_tier": "Tier 2"},  # dropped out of T2
+        ]
+        samples = tier_history.find_sample_moves_per_kind(history, sample_kinds)
+        if samples:
+            logger.info("TEST_MODE: no real movement today; previewing %d "
+                        "sample historical moves (%s).",
+                        len(samples),
+                        ", ".join(f"{s['previous_tier']}->{s['current_tier']}" for s in samples))
+            rows = []
+            for sample in samples:
+                # Carry the account name from v2 data if we still have it
+                name_match = v2_df.loc[v2_df["AccountId"] == sample["AccountId"], "Account_Name"]
+                if not name_match.empty and pd.notna(name_match.iloc[0]):
+                    sample["Account_Name"] = name_match.iloc[0]
+                rows.append({
+                    "AccountId": sample["AccountId"],
+                    "Account_Name": sample["Account_Name"],
+                    "previous_tier": sample["previous_tier"],
+                    "current_tier": sample["current_tier"],
+                    "direction": sample["direction"],
+                })
+            relevant = pd.DataFrame(rows)
         else:
             logger.info("TEST_MODE: no real movement today and no historical "
-                        "T1/T2 movement found in history file.")
+                        "T1/T2 movements found in history file.")
 
     if not relevant.empty:
         account_meta = _build_account_meta_lookup(

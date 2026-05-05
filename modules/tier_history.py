@@ -240,6 +240,102 @@ class HistoryBuilder:
         }
 
 
+def find_sample_moves_per_kind(
+    history: Dict,
+    kinds: Iterable[Dict],
+) -> List[Dict]:
+    """Find one example transition per requested kind.
+
+    Each kind is a dict with these optional matchers:
+        direction: 'up' | 'down'
+        current_tier: e.g. 'Tier 1' (the new tier after the move)
+        previous_tier: e.g. 'Tier 2' (the tier the account left)
+
+    A transition matches a kind iff every key in the kind dict is satisfied.
+    Used by the TEST_MODE preview to surface a sampler — typically:
+        {direction: 'up',   current_tier:  'Tier 1'}    — promotion to top
+        {direction: 'up',   current_tier:  'Tier 2'}    — promotion into T2
+        {direction: 'down', previous_tier: 'Tier 1'}    — drop out of T1
+        {direction: 'down', previous_tier: 'Tier 2'}    — drop out of T2
+
+    Returns at most one move per kind, in the requested kinds order. Kinds
+    with no matching transition anywhere in history are silently absent.
+    "previous_tier" here is yesterday's-tier in the snapshot sense — the
+    held tier on the column immediately before the transition — not the
+    365-day-ago YoY comparison column from tier_calculator_v2.
+    """
+    from .tier_codes import INT_TO_TIER, TIER_ORDER_BEST_TO_WORST
+
+    accounts = history.get("accounts", [])
+    days = history.get("days", [])
+    tiers_matrix = history.get("tiers", [])
+    if not accounts or len(days) < 2:
+        return []
+
+    rank = {t: i for i, t in enumerate(TIER_ORDER_BEST_TO_WORST)}
+    kinds_list = list(kinds)
+
+    def _matches(kind: Dict, direction: str, prev_tier: str, curr_tier: str) -> bool:
+        if "direction" in kind and kind["direction"] != direction:
+            return False
+        if "current_tier" in kind and kind["current_tier"] != curr_tier:
+            return False
+        if "previous_tier" in kind and kind["previous_tier"] != prev_tier:
+            return False
+        return True
+
+    # Use index-keyed results so kinds compare by position, not dict-equality.
+    results: Dict[int, Dict] = {}
+
+    for row_idx, account_id in enumerate(accounts):
+        if len(results) == len(kinds_list):
+            break  # Every slot filled
+        row = tiers_matrix[row_idx]
+        # Walk left-to-right, recording each tier transition (compared
+        # against the previous non-null sample). We use the first matching
+        # transition per kind across the dataset, scanned in account-major
+        # order — exactly which historical sample each slot holds doesn't
+        # matter much for a preview, only that every owner-relevant case
+        # is represented.
+        prev_code: Optional[int] = None
+        for col_idx, code in enumerate(row):
+            if code is None:
+                continue
+            if prev_code is None:
+                prev_code = code
+                continue
+            if code == prev_code:
+                continue
+            prev_tier = INT_TO_TIER.get(prev_code)
+            curr_tier = INT_TO_TIER.get(code)
+            prev_code = code
+            if prev_tier is None or curr_tier is None:
+                continue
+            prev_rank = rank.get(prev_tier)
+            curr_rank = rank.get(curr_tier)
+            if prev_rank is None or curr_rank is None:
+                continue
+            direction = "up" if curr_rank < prev_rank else "down"
+            for k_idx, kind in enumerate(kinds_list):
+                if k_idx in results:
+                    continue
+                if _matches(kind, direction, prev_tier, curr_tier):
+                    results[k_idx] = {
+                        "AccountId": int(account_id),
+                        "Account_Name": "",
+                        "previous_tier": prev_tier,
+                        "current_tier": curr_tier,
+                        "direction": direction,
+                        "day": days[col_idx],
+                    }
+                    break  # one match per transition
+            if len(results) == len(kinds_list):
+                break  # All slots filled
+
+    # Return in requested kinds order; missing kinds drop out silently.
+    return [results[i] for i in range(len(kinds_list)) if i in results]
+
+
 def find_most_recent_relevant_move(history: Dict, owned_tiers: Iterable[str]) -> Optional[Dict]:
     """Walk the history file backwards looking for the most recent T1/T2-touching
     tier change, for use as a TEST_MODE preview when today has no real moves.

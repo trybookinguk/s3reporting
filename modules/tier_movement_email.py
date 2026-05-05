@@ -132,6 +132,19 @@ def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[flo
     if not visible:
         return '<p class="history-empty">No tier history recorded yet.</p>'
 
+    # Cap the rendered window to the most recent 3 years. The full history
+    # is still stored on SharePoint for backfill / future analysis; the email
+    # itself only shows recent trajectory because that's what's actionable
+    # for an owner. If the account has less than 3 years of data, all of it
+    # renders (no padding back to a fictitious start).
+    last_date = date.fromisoformat(visible[-1][0])
+    try:
+        cutoff_date = date(last_date.year - 3, last_date.month, last_date.day)
+    except ValueError:
+        # Feb 29 in a non-leap year three years prior — clamp to Feb 28.
+        cutoff_date = date(last_date.year - 3, last_date.month, 28)
+    visible = [(d, t, s) for d, t, s in visible if date.fromisoformat(d) >= cutoff_date]
+
     import io
     import base64
     import math
@@ -148,14 +161,16 @@ def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[flo
     #   (data_label, display_label, score_lo, score_hi, colour, y_lo, y_hi)
     # data_label matches what extract_account_history yields (full tier name);
     # display_label is what we render on the y-axis tick.
+    # Colours are at Tailwind's -50 level — barely-there pastels so the
+    # data line reads cleanly against the band background.
     band_specs = [
-        ("Tier 1", "T1",   0,    2,    "#dcfce7", 0.0, 1.4),
-        ("Tier 2", "T2",   2,    10,   "#ecfccb", 1.4, 2.6),
-        ("Tier 3", "T3",   10,   25,   "#fef9c3", 2.6, 3.6),
-        ("Tier 4", "T4",   25,   50,   "#fed7aa", 3.6, 4.5),
-        ("Tier 5", "T5",   50,   100,  "#fecaca", 4.5, 5.4),
-        ("Free",   "Free", None, None, "#e5e7eb", 5.4, 6.2),
-        ("Nil",    "Nil",  None, None, "#d1d5db", 6.2, 7.0),
+        ("Tier 1", "T1",   0,    2,    "#f0fdf4", 0.0, 1.4),
+        ("Tier 2", "T2",   2,    10,   "#f7fee7", 1.4, 2.6),
+        ("Tier 3", "T3",   10,   25,   "#fefce8", 2.6, 3.6),
+        ("Tier 4", "T4",   25,   50,   "#fff7ed", 3.6, 4.5),
+        ("Tier 5", "T5",   50,   100,  "#fef2f2", 4.5, 5.4),
+        ("Free",   "Free", None, None, "#f3f4f6", 5.4, 6.2),
+        ("Nil",    "Nil",  None, None, "#e5e7eb", 6.2, 7.0),
     ]
     # Lookup by data_label so a "Tier 3" history entry actually finds the
     # T3 band — earlier this used the short labels and silently dropped

@@ -109,6 +109,42 @@ def _format_int(value) -> str:
         return str(value)
 
 
+def _format_years_loyalty(value) -> str:
+    """Format the years_loyalty field. The aggregator caps it at 5, so any
+    account at the cap may have been around longer — show '5+'."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "—"
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return "—"
+    if n <= 0:
+        return "less than 1 year active"
+    if n >= 5:
+        return "5+ years active"
+    return f"{n} year{'s' if n != 1 else ''} active"
+
+
+def _format_rank_with_change(rank, prev_rank) -> str:
+    """Format a revenue rank with an optional year-on-year delta marker.
+
+    "#15 (▲ 7 from #22)" — moved up 7 positions
+    "#15 (▼ 3 from #12)" — moved down
+    "#15"                 — no prior rank to compare (e.g. account had no
+                            revenue in the previous period)
+    """
+    if rank is None or (isinstance(rank, float) and pd.isna(rank)):
+        return "—"
+    out = f"#{int(rank):,}"
+    if prev_rank is None or (isinstance(prev_rank, float) and pd.isna(prev_rank)):
+        return out
+    delta = int(prev_rank) - int(rank)  # positive = improved (rank dropped)
+    if delta == 0:
+        return f"{out} (unchanged)"
+    arrow = "▲" if delta > 0 else "▼"
+    return f"{out} ({arrow} {abs(delta):,} from #{int(prev_rank):,})"
+
+
 def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[float]]]) -> str:
     """Build a base64-embedded PNG chart of the tier history.
 
@@ -385,6 +421,18 @@ def compose_and_send(
     # held a tier — though current filters mean "new" never reaches here
     # in production, only in TEST_MODE previews of historical data.
     arrow = {"up": "↑", "down": "↓", "new": "+"}.get(direction, "•")
+
+    # Account created — same date-with-relative-age formatter as last_sale.
+    created_disp, _ = _format_date(account_meta.get("account_created"))
+    years_loyalty_disp = _format_years_loyalty(account_meta.get("years_loyalty"))
+
+    rank_current_disp = _format_rank_with_change(
+        account_meta.get("rank_current"), account_meta.get("rank_current_prev")
+    )
+    rank_lifetime_disp = _format_rank_with_change(
+        account_meta.get("rank_lifetime"), account_meta.get("rank_lifetime_prev")
+    )
+
     replacements = {
         "headline": html.escape(_headline(account_name, previous_tier, current_tier)),
         "account_id": str(account_id),
@@ -396,9 +444,12 @@ def compose_and_send(
         "zoho_url": zoho_url or "#",
         "industry": html.escape(industry),
         "sub_industry": html.escape(sub_industry),
+        "account_created": html.escape(f"{created_disp} · {years_loyalty_disp}"),
         "tickets_365d": _format_int(account_meta.get("tickets_365d")),
         "last_ticket_sale": html.escape(last_sale_disp),
         "last_event_created": html.escape(last_event_disp),
+        "rank_current": html.escape(rank_current_disp),
+        "rank_lifetime": html.escape(rank_lifetime_disp),
         "tier_history_svg": chart_svg,
     }
 

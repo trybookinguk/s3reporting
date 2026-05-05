@@ -275,6 +275,9 @@ def calculate_composite_tiers(account_metrics: Dict[int, Dict[str, Any]]) -> pd.
     df['Tier_Movement'] = _calculate_movement(df['Current_Tier'], df['Previous_Tier'])
 
     # --- Build output DataFrame ---
+    # Revenue_Current_Prev / Revenue_Lifetime_Prev are the same metrics 365 days
+    # ago, surfaced for downstream rank-vs-year-ago comparisons in the
+    # tier-movement email. Internally already computed for percentile ranking.
     result = pd.DataFrame({
         'AccountId': df['AccountId'],
         'Current_Tier': df['Current_Tier'],
@@ -284,6 +287,8 @@ def calculate_composite_tiers(account_metrics: Dict[int, Dict[str, Any]]) -> pd.
         'Previous_Composite_Score': df['Previous_Composite_Score'],
         'Revenue_Current': df['revenue_current'].round(2),
         'Revenue_Lifetime': df['revenue_lifetime'].round(2),
+        'Revenue_Current_Prev': df['revenue_current_prev'].round(2),
+        'Revenue_Lifetime_Prev': df['revenue_lifetime_prev'].round(2),
         'Tickets_Current': df['tickets_current'],
         'Years_Loyalty': df['years_loyalty'],
         'A_Percentile': df['revenue_current_pct'].round(2),

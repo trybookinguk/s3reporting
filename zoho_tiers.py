@@ -38,11 +38,55 @@ SHAREPOINT_DRIVE_ID = os.environ.get("SHAREPOINT_DRIVE_ID")
 ZOHO_ORG_ID = os.environ.get("ZOHO_ORG_ID")
 
 
-def _build_account_meta_lookup(booking_data_df, account_lookup, account_ids):
+def _build_revenue_ranks(v2_df):
+    """Compute current and 12-months-ago revenue ranks per AccountId.
+
+    Returns {AccountId: {rank_current, rank_current_prev, rank_lifetime,
+    rank_lifetime_prev}}. Ranks are 1-indexed against the *paid-activated*
+    population (revenue > 0 in the relevant period), so #1 is the highest
+    revenue. Accounts without revenue in a period get None for that period's
+    rank — the email caller can treat that as "no rank to display".
+    """
+    out = {}
+    if v2_df is None or v2_df.empty:
+        return out
+
+    def _ranks_for_column(col_name):
+        if col_name not in v2_df.columns:
+            return {}
+        col = pd.to_numeric(v2_df[col_name], errors="coerce")
+        # Only rank accounts with positive revenue in that period — anything
+        # else has no meaningful "rank by revenue".
+        mask = col > 0
+        if not mask.any():
+            return {}
+        # rank: highest revenue = 1
+        ranks = col[mask].rank(method="min", ascending=False).astype(int)
+        ids = v2_df.loc[mask, "AccountId"].astype(int)
+        return dict(zip(ids, ranks))
+
+    rank_current = _ranks_for_column("Revenue_Current")
+    rank_current_prev = _ranks_for_column("Revenue_Current_Prev")
+    rank_lifetime = _ranks_for_column("Revenue_Lifetime")
+    rank_lifetime_prev = _ranks_for_column("Revenue_Lifetime_Prev")
+
+    for aid in v2_df["AccountId"].astype(int):
+        out[aid] = {
+            "rank_current": rank_current.get(aid),
+            "rank_current_prev": rank_current_prev.get(aid),
+            "rank_lifetime": rank_lifetime.get(aid),
+            "rank_lifetime_prev": rank_lifetime_prev.get(aid),
+        }
+    return out
+
+
+def _build_account_meta_lookup(booking_data_df, account_lookup, account_ids,
+                               v2_df=None, revenue_ranks=None):
     """Build per-account metadata for the tier-movement emails.
 
     Returns a dict keyed by AccountId with: account_name, industry, sub_industry,
-    last_ticket_sale, last_event_created, tickets_365d.
+    last_ticket_sale, last_event_created, tickets_365d, account_created,
+    years_loyalty, plus revenue rank fields if `revenue_ranks` is provided.
     """
     bk = booking_data_df
     if bk is not None and not bk.empty:
@@ -76,9 +120,18 @@ def _build_account_meta_lookup(booking_data_df, account_lookup, account_ids):
         last_sale = {}
         tickets_365 = {}
 
+    # Pull years_loyalty (capped at 5) per account from v2_df if available.
+    years_loyalty_lookup = {}
+    if v2_df is not None and not v2_df.empty and "Years_Loyalty" in v2_df.columns:
+        years_loyalty_lookup = dict(zip(
+            v2_df["AccountId"].astype(int),
+            v2_df["Years_Loyalty"].fillna(0).astype(int),
+        ))
+
     out = {}
     for aid in account_ids:
         meta = account_lookup.get(aid, {}) if account_lookup else {}
+        ranks = (revenue_ranks or {}).get(int(aid), {})
         out[int(aid)] = {
             "account_name": meta.get("AccountName"),
             "industry": meta.get("Industry"),
@@ -86,6 +139,12 @@ def _build_account_meta_lookup(booking_data_df, account_lookup, account_ids):
             "last_ticket_sale": last_sale.get(aid) or last_sale.get(int(aid)),
             "last_event_created": meta.get("LastEventCreation"),
             "tickets_365d": tickets_365.get(aid) or tickets_365.get(int(aid)) or 0,
+            "account_created": meta.get("DateTimeCreated"),
+            "years_loyalty": years_loyalty_lookup.get(int(aid)),
+            "rank_current": ranks.get("rank_current"),
+            "rank_current_prev": ranks.get("rank_current_prev"),
+            "rank_lifetime": ranks.get("rank_lifetime"),
+            "rank_lifetime_prev": ranks.get("rank_lifetime_prev"),
         }
     return out
 
@@ -187,8 +246,10 @@ def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df
                         "T1/T2 movements found in history file.")
 
     if not relevant.empty:
+        revenue_ranks = _build_revenue_ranks(v2_df)
         account_meta = _build_account_meta_lookup(
-            booking_data_df, account_lookup, relevant["AccountId"].tolist()
+            booking_data_df, account_lookup, relevant["AccountId"].tolist(),
+            v2_df=v2_df, revenue_ranks=revenue_ranks,
         )
         zoho_urls = lookup_account_urls(
             zoho_token, ZOHO_ORG_ID, relevant["AccountId"].tolist()

@@ -122,6 +122,34 @@
       color: #9ca3af;
       font-style: italic;
     }
+    .ranks {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 24px 0 8px 0;
+    }
+    .ranks td {
+      width: 50%;
+      padding: 12px 14px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      vertical-align: top;
+    }
+    .ranks td.left { border-right: none; }
+    .ranks td.right { border-left: none; }
+    .rank-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #6b7280;
+      margin: 0 0 4px 0;
+    }
+    .rank-value {
+      font-size: 16px;
+      font-weight: 600;
+      color: #1f2937;
+      margin: 0;
+    }
   </style>
 </head>
 <body>
@@ -143,10 +171,24 @@
     <dl class="details">
       <dt>Industry</dt><dd>{{industry}}</dd>
       <dt>Sub-industry</dt><dd>{{sub_industry}}</dd>
+      <dt>Account created</dt><dd>{{account_created}}</dd>
       <dt>Tickets (Last 365 days)</dt><dd>{{tickets_365d}}</dd>
       <dt>Last ticket sale</dt><dd>{{last_ticket_sale}}</dd>
       <dt>Last event created</dt><dd>{{last_event_created}}</dd>
     </dl>
+
+    <table class="ranks" role="presentation">
+      <tr>
+        <td class="left">
+          <p class="rank-label">12 month revenue</p>
+          <p class="rank-value">{{rank_current}}</p>
+        </td>
+        <td class="right">
+          <p class="rank-label">Lifetime revenue</p>
+          <p class="rank-value">{{rank_lifetime}}</p>
+        </td>
+      </tr>
+    </table>
 
     <div class="history">
       <p class="history-label">Tier history</p>

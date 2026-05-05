@@ -73,8 +73,13 @@ def _headline(account_name: str, previous_tier: Optional[str], current_tier: str
     return f"{account_name} dropped to {current_tier}"
 
 
-def _format_date(value) -> Tuple[str, str]:
-    """Return (display_string, css_class). Empty/missing values render as italic placeholder."""
+def _format_date(value, with_relative: bool = False) -> Tuple[str, str]:
+    """Return (display_string, css_class).
+
+    If `with_relative` is True, append a "(N days ago)" / "(today)" tail.
+    Otherwise return just the date — used for fields where the absolute
+    date is what matters and the relative tail is noise.
+    """
     if value is None or (isinstance(value, float) and pd.isna(value)) or value == "":
         return ("No record", "empty")
     if isinstance(value, str):
@@ -89,15 +94,19 @@ def _format_date(value) -> Tuple[str, str]:
     else:
         return (str(value), "")
 
+    base = d.strftime("%-d %b %Y")
+    if not with_relative:
+        return (base, "")
+
     today = datetime.now(timezone.utc).date()
     delta = (today - d).days
     if delta == 0:
-        return (d.strftime("%-d %b %Y") + " (today)", "")
+        return (base + " (today)", "")
     if delta == 1:
-        return (d.strftime("%-d %b %Y") + " (yesterday)", "")
+        return (base + " (yesterday)", "")
     if delta > 0:
-        return (d.strftime("%-d %b %Y") + f" ({delta:,} days ago)", "")
-    return (d.strftime("%-d %b %Y") + f" (in {-delta:,} days)", "")
+        return (base + f" ({delta:,} days ago)", "")
+    return (base + f" (in {-delta:,} days)", "")
 
 
 def _format_int(value) -> str:
@@ -125,24 +134,32 @@ def _format_years_loyalty(value) -> str:
     return f"{n} year{'s' if n != 1 else ''} active"
 
 
-def _format_rank_with_change(rank, prev_rank) -> str:
+def _format_rank_with_change(rank, prev_rank) -> Tuple[str, str]:
     """Format a revenue rank with an optional year-on-year delta marker.
 
-    "#15 (▲ 7 from #22)" — moved up 7 positions
-    "#15 (▼ 3 from #12)" — moved down
-    "#15"                 — no prior rank to compare (e.g. account had no
-                            revenue in the previous period)
+    Returns (display_string, css_class) where css_class is one of:
+      "up"        — improved YoY (lower rank number = better)
+      "down"      — worsened YoY
+      "unchanged" — same as prev or no prior rank to compare
+      "missing"   — no current rank at all (no revenue this period)
+
+    Examples (with class):
+      ("#15 ▲ 7 from #22", "up")
+      ("#15 ▼ 3 from #12", "down")
+      ("#15", "unchanged")
+      ("—", "missing")
     """
     if rank is None or (isinstance(rank, float) and pd.isna(rank)):
-        return "—"
+        return ("—", "missing")
     out = f"#{int(rank):,}"
     if prev_rank is None or (isinstance(prev_rank, float) and pd.isna(prev_rank)):
-        return out
+        return (out, "unchanged")
     delta = int(prev_rank) - int(rank)  # positive = improved (rank dropped)
     if delta == 0:
-        return f"{out} (unchanged)"
-    arrow = "▲" if delta > 0 else "▼"
-    return f"{out} ({arrow} {abs(delta):,} from #{int(prev_rank):,})"
+        return (out, "unchanged")
+    if delta > 0:
+        return (f"{out} ▲ {delta:,} from #{int(prev_rank):,}", "up")
+    return (f"{out} ▼ {abs(delta):,} from #{int(prev_rank):,}", "down")
 
 
 def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[float]]]) -> str:
@@ -404,6 +421,9 @@ def compose_and_send(
 
     last_sale_disp, last_sale_class = _format_date(account_meta.get("last_ticket_sale"))
     last_event_disp, last_event_class = _format_date(account_meta.get("last_event_created"))
+    # last_ticket_sale / last_event_created use the absolute date only —
+    # the "X days ago" tail was clutter. account_created keeps its
+    # relative info because that's framed as "years active".
     # NaN sneaks through `meta.get(...) or "—"` because float('nan') is
     # truthy in Python, so an empty/missing value rendered as "nan" not "—".
     # pd.isna catches both None and NaN; empty strings get the same treatment.
@@ -426,10 +446,10 @@ def compose_and_send(
     created_disp, _ = _format_date(account_meta.get("account_created"))
     years_loyalty_disp = _format_years_loyalty(account_meta.get("years_loyalty"))
 
-    rank_current_disp = _format_rank_with_change(
+    rank_current_disp, rank_current_class = _format_rank_with_change(
         account_meta.get("rank_current"), account_meta.get("rank_current_prev")
     )
-    rank_lifetime_disp = _format_rank_with_change(
+    rank_lifetime_disp, rank_lifetime_class = _format_rank_with_change(
         account_meta.get("rank_lifetime"), account_meta.get("rank_lifetime_prev")
     )
 
@@ -449,7 +469,9 @@ def compose_and_send(
         "last_ticket_sale": html.escape(last_sale_disp),
         "last_event_created": html.escape(last_event_disp),
         "rank_current": html.escape(rank_current_disp),
+        "rank_current_class": rank_current_class,
         "rank_lifetime": html.escape(rank_lifetime_disp),
+        "rank_lifetime_class": rank_lifetime_class,
         "tier_history_svg": chart_svg,
     }
 

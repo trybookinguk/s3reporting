@@ -112,7 +112,7 @@
     }
     .details dt {
       float: left;
-      width: 140px;
+      width: 170px;
       color: #9ca3af;
     }
     .details dd {
@@ -125,12 +125,12 @@
     .ranks {
       width: 100%;
       border-collapse: collapse;
-      margin: 24px 0 8px 0;
+      margin: 14px 0 0 0;
     }
     .ranks td {
       width: 50%;
       padding: 12px 14px;
-      background: #f9fafb;
+      background: #ffffff;
       border: 1px solid #e5e7eb;
       vertical-align: top;
     }
@@ -145,11 +145,14 @@
       margin: 0 0 4px 0;
     }
     .rank-value {
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 600;
-      color: #1f2937;
       margin: 0;
     }
+    .rank-value.up        { color: #047857; }  /* green-700 */
+    .rank-value.down      { color: #b91c1c; }  /* red-700 */
+    .rank-value.unchanged { color: #1f2937; }  /* slate-800 */
+    .rank-value.missing   { color: #9ca3af; font-style: italic; }
   </style>
 </head>
 <body>
@@ -177,22 +180,21 @@
       <dt>Last event created</dt><dd>{{last_event_created}}</dd>
     </dl>
 
-    <table class="ranks" role="presentation">
-      <tr>
-        <td class="left">
-          <p class="rank-label">12 month revenue</p>
-          <p class="rank-value">{{rank_current}}</p>
-        </td>
-        <td class="right">
-          <p class="rank-label">Lifetime revenue</p>
-          <p class="rank-value">{{rank_lifetime}}</p>
-        </td>
-      </tr>
-    </table>
-
     <div class="history">
       <p class="history-label">Tier history</p>
       {{tier_history_svg}}
+      <table class="ranks" role="presentation">
+        <tr>
+          <td class="left">
+            <p class="rank-label">12 month revenue</p>
+            <p class="rank-value {{rank_current_class}}">{{rank_current}}</p>
+          </td>
+          <td class="right">
+            <p class="rank-label">Lifetime revenue</p>
+            <p class="rank-value {{rank_lifetime_class}}">{{rank_lifetime}}</p>
+          </td>
+        </tr>
+      </table>
     </div>
   </div>
 </body>

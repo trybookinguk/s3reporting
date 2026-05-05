@@ -55,11 +55,23 @@ def _get_access_token():
 
 
 def _to_recipient_list(value):
-    """Normalise a string or list of strings into Graph recipient objects."""
+    """Normalise a string or list of strings into Graph recipient objects.
+
+    Accepts comma- or semicolon-separated addresses within a single string so
+    callers carried over from the Mailgun era keep working.
+    """
     if not value:
         return []
-    items = [value] if isinstance(value, str) else list(value)
-    return [{"emailAddress": {"address": addr}} for addr in items if addr]
+    raw_items = [value] if isinstance(value, str) else list(value)
+    addresses = []
+    for item in raw_items:
+        if not item:
+            continue
+        for part in item.replace(";", ",").split(","):
+            addr = part.strip()
+            if addr:
+                addresses.append(addr)
+    return [{"emailAddress": {"address": addr}} for addr in addresses]
 
 
 def _send_via_graph(message):

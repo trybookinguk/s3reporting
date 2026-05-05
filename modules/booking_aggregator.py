@@ -15,24 +15,31 @@ logger = logging.getLogger(__name__)
 class BookingAggregator:
     """Handles aggregation of booking transaction data into account metrics."""
     
-    def __init__(self, cutoff_365: date, cutoff_730: date, 
-                 event_freq_cutoff_current: date, event_freq_cutoff_previous: date):
+    def __init__(self, cutoff_365: date, cutoff_730: date,
+                 event_freq_cutoff_current: date, event_freq_cutoff_previous: date,
+                 skip_event_metrics: bool = False):
         """
         Initialize aggregator with date cutoffs.
-        
+
         Args:
             cutoff_365: Cutoff date for current period (365 days ago)
             cutoff_730: Cutoff date for previous period (730 days ago)
             event_freq_cutoff_current: Cutoff for current event frequency period
             event_freq_cutoff_previous: Cutoff for previous event frequency period
+            skip_event_metrics: When True, event-related fields default to empty
+                instead of being computed. The v2 tier calculator doesn't use
+                them, so the historical-rebuild path sets this for a large
+                speedup. Production daily run leaves this False (the v1 path
+                via account_processor.py needs them).
         """
         self.cutoff_365 = cutoff_365
         self.cutoff_730 = cutoff_730
         self.event_freq_cutoff_current = event_freq_cutoff_current
         self.event_freq_cutoff_previous = event_freq_cutoff_previous
+        self.skip_event_metrics = skip_event_metrics
         self.processed_chunks = 0
         self.total_rows = 0
-        
+
         # OPTIMIZATION: Accumulate all data for bulk processing instead of dict updates
         self.accumulated_chunks = []
         
@@ -176,62 +183,92 @@ class BookingAggregator:
         years_prev_agg = pre_cutoff_data.groupby('AccountId')['Year'].nunique(
         ).to_frame('years_loyalty_prev')
         
-        # Event metrics
-        event_metrics = self._calculate_event_metrics_vectorized(all_data)
-        
-        # OPTIMIZATION: Combine all results efficiently
+        # Event metrics — skipped on rebuild paths since the v2 calculator
+        # doesn't consume them.
+        if self.skip_event_metrics:
+            event_metrics: Dict[int, Dict[str, Any]] = {}
+        else:
+            event_metrics = self._calculate_event_metrics_vectorized(all_data)
+
+        # Combine the four aggregate frames into a single per-account DataFrame
+        # via outer joins, then materialise the dict-of-dicts shape with one
+        # to_dict('index') call. This replaces the previous per-account Python
+        # loop, which paid an O(N) .loc lookup for every account every call —
+        # fine for one daily pass but the dominant cost across thousands of
+        # historical-replay passes.
         logger.debug("Combining aggregated results...")
-        all_accounts = set(basic_agg.index) | set(current_agg.index) | set(previous_agg.index)
-        
-        final_metrics = {}
-        for account_id in all_accounts:
-            # Get metrics with safe defaults
-            basic = basic_agg.loc[account_id] if account_id in basic_agg.index else pd.Series(
-                [0, 0.0, 0, None, None], 
-                index=['tickets_lifetime', 'revenue_lifetime', 'years_loyalty', 'first_booking_date', 'last_booking_date']
-            )
-            current = current_agg.loc[account_id] if account_id in current_agg.index else pd.Series(
-                [0, 0.0], index=['tickets_current', 'revenue_current']
-            )
-            previous = previous_agg.loc[account_id] if account_id in previous_agg.index else pd.Series(
-                [0, 0.0], index=['tickets_prev', 'revenue_prev']
-            )
-            years_prev = years_prev_agg.loc[account_id, 'years_loyalty_prev'] if account_id in years_prev_agg.index else 0
-            
-            # Calculate derived metrics
-            avg_revenue_per_year = basic['revenue_lifetime'] / basic['years_loyalty'] if basic['years_loyalty'] > 0 else 0.0
-            revenue_up_to_prev = basic['revenue_lifetime'] - current['revenue_current']
-            avg_revenue_prev = revenue_up_to_prev / years_prev if years_prev > 0 else 0.0
-            
-            final_metrics[account_id] = {
-                'tickets_lifetime': int(basic['tickets_lifetime']),
-                'revenue_lifetime': float(basic['revenue_lifetime']),
-                'years_loyalty': int(basic['years_loyalty']),
-                'first_booking_date': basic['first_booking_date'],
-                'last_booking_date': basic['last_booking_date'],
-                'tickets_current': int(current['tickets_current']),
-                'revenue_current': float(current['revenue_current']),
-                'tickets_prev': int(previous['tickets_prev']),
-                'revenue_prev': float(previous['revenue_prev']),
-                'years_loyalty_prev': int(years_prev),
-                'avg_revenue_per_year': round(avg_revenue_per_year, 2),
-                'avg_revenue_prev': round(avg_revenue_prev, 2),
-                'seen_tx_ids': 0,  # Not needed for new logic, set to 0
-                **event_metrics.get(account_id, {
-                    'event_months_current': set(),
-                    'event_months_previous': set(),
-                    'event_months_freq_current': set(),
-                    'event_months_freq_previous': set(),
-                    'event_creation_info': {}
-                })
-            }
-        
+        combined = (
+            basic_agg
+            .join(current_agg, how='outer')
+            .join(previous_agg, how='outer')
+            .join(years_prev_agg, how='outer')
+        )
+
+        # Fill numeric defaults; preserve NaT for the date columns.
+        numeric_defaults = {
+            'tickets_lifetime': 0, 'revenue_lifetime': 0.0, 'years_loyalty': 0,
+            'tickets_current': 0, 'revenue_current': 0.0,
+            'tickets_prev': 0, 'revenue_prev': 0.0,
+            'years_loyalty_prev': 0,
+        }
+        for col, default in numeric_defaults.items():
+            if col in combined.columns:
+                combined[col] = combined[col].fillna(default)
+
+        # Derived metrics (vectorised).
+        years = combined['years_loyalty'].astype(float)
+        revenue_lifetime = combined['revenue_lifetime'].astype(float)
+        revenue_current = combined['revenue_current'].astype(float)
+        years_prev = combined['years_loyalty_prev'].astype(float)
+
+        avg_revenue_per_year = pd.Series(0.0, index=combined.index)
+        mask = years > 0
+        avg_revenue_per_year.loc[mask] = (revenue_lifetime[mask] / years[mask])
+
+        revenue_up_to_prev = revenue_lifetime - revenue_current
+        avg_revenue_prev = pd.Series(0.0, index=combined.index)
+        mask_prev = years_prev > 0
+        avg_revenue_prev.loc[mask_prev] = (revenue_up_to_prev[mask_prev] / years_prev[mask_prev])
+
+        combined['avg_revenue_per_year'] = avg_revenue_per_year.round(2)
+        combined['avg_revenue_prev'] = avg_revenue_prev.round(2)
+        combined['seen_tx_ids'] = 0  # Legacy field, kept for downstream contract
+
+        # Lock in the consumer-facing dtypes. fillna can have promoted ints
+        # to float, and synthetic / round-number inputs can leave revenue as
+        # int — the original code forced these casts per row, so we do the
+        # same once across the column.
+        for int_col in ('tickets_lifetime', 'years_loyalty', 'tickets_current',
+                        'tickets_prev', 'years_loyalty_prev'):
+            if int_col in combined.columns:
+                combined[int_col] = combined[int_col].astype(int)
+        for float_col in ('revenue_lifetime', 'revenue_current', 'revenue_prev'):
+            if float_col in combined.columns:
+                combined[float_col] = combined[float_col].astype(float)
+
+        # Materialise to dict-of-dicts (the contract every consumer expects).
+        final_metrics: Dict[int, Dict[str, Any]] = combined.to_dict(orient='index')
+
+        # Splice in event metrics. The empty-defaults pattern matches the
+        # previous behaviour: every account in final_metrics gets the five
+        # event-metric keys, even if event_metrics is empty (skip path or
+        # missing columns).
+        empty_event_defaults = {
+            'event_months_current': set(),
+            'event_months_previous': set(),
+            'event_months_freq_current': set(),
+            'event_months_freq_previous': set(),
+            'event_creation_info': {},
+        }
+        for account_id, metrics in final_metrics.items():
+            metrics.update(event_metrics.get(account_id, empty_event_defaults))
+
         elapsed = (pd.Timestamp.now() - start_time).total_seconds()
         rate = self.total_rows / elapsed if elapsed > 0 else 0
-        
+
         logger.debug(f"Vectorized aggregation complete: {len(final_metrics):,} accounts in {elapsed:.1f}s "
                     f"({rate:.0f} rows/sec)")
-        
+
         return final_metrics
     
     def _calculate_event_metrics_vectorized(self, all_data: pd.DataFrame) -> Dict[int, Dict[str, Any]]:

@@ -617,6 +617,7 @@ def _compute_one_day(target_date_iso: str, bookings: pd.DataFrame):
         cutoff_730=cutoff_730,
         event_freq_cutoff_current=freq_current,
         event_freq_cutoff_previous=freq_previous,
+        skip_event_metrics=True,  # v2 calculator doesn't use them — large speedup
     )
     aggregator.process_chunk(bk_slice)
     metrics = aggregator.finalize_metrics()

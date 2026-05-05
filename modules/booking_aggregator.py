@@ -132,15 +132,20 @@ class BookingAggregator:
         # OPTIMIZATION: Vectorized aggregations using pandas groupby (much faster)
         logger.info("Computing vectorized aggregations...")
         
-        # Basic lifetime metrics
+        # Basic lifetime metrics. Round only the numeric columns —
+        # pandas warns (and will eventually error) on .round() against
+        # datetime/timedelta dtypes, which TransactionDate min/max are.
         basic_agg = all_data.groupby('AccountId').agg({
             'TicketQuantity': 'sum',
-            'Revenue': 'sum', 
+            'Revenue': 'sum',
             'Year': lambda x: len(set(x)),  # unique years
             'TransactionDate': ['min', 'max']
-        }).round(2)
-        basic_agg.columns = ['tickets_lifetime', 'revenue_lifetime', 'years_loyalty', 
+        })
+        basic_agg.columns = ['tickets_lifetime', 'revenue_lifetime', 'years_loyalty',
                             'first_booking_date', 'last_booking_date']
+        basic_agg[['tickets_lifetime', 'revenue_lifetime']] = (
+            basic_agg[['tickets_lifetime', 'revenue_lifetime']].round(2)
+        )
         
         # Current period metrics
         current_data = all_data[all_data['is_current']]

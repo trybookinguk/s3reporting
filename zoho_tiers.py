@@ -594,8 +594,51 @@ def main(dry_run: bool = False):
     print(f"Total execution time: {elapsed_time:.1f} seconds ({elapsed_time/60:.1f} minutes)")
 
 
+def _compute_one_day(target_date_iso: str, bookings: pd.DataFrame):
+    """Worker for the parallel replay. Pure function over a per-day cutoff.
+
+    Returns (target_date_iso, v2_df) or (target_date_iso, None) if the slice
+    has no usable data.
+    """
+    from datetime import date as _date, timedelta
+    target_date = _date.fromisoformat(target_date_iso)
+    target_ts = pd.Timestamp(target_date).tz_localize('UTC')
+    cutoff_365 = target_date - timedelta(days=365)
+    cutoff_730 = cutoff_365 - timedelta(days=365)
+    freq_current = target_date.replace(day=1) - timedelta(days=365)
+    freq_previous = freq_current - timedelta(days=365)
+
+    bk_slice = bookings[bookings['TransactionDate'] <= target_ts]
+    if bk_slice.empty:
+        return target_date_iso, None
+
+    aggregator = BookingAggregator(
+        cutoff_365=cutoff_365,
+        cutoff_730=cutoff_730,
+        event_freq_cutoff_current=freq_current,
+        event_freq_cutoff_previous=freq_previous,
+    )
+    aggregator.process_chunk(bk_slice)
+    metrics = aggregator.finalize_metrics()
+    if not metrics:
+        return target_date_iso, None
+
+    v2_df = calculate_composite_tiers(metrics)
+    if v2_df.empty:
+        return target_date_iso, None
+    return target_date_iso, v2_df
+
+
+# Replay tunables. Threads is conservative — pandas releases the GIL on
+# heavy ops so 4-8 threads can saturate an M-series machine without the
+# memory blowup that a process pool incurs. Checkpoint every ~year of
+# replay so an interrupted run loses at most that much work.
+_REPLAY_THREAD_WORKERS = 6
+_REPLAY_CHECKPOINT_EVERY = 365
+
+
 def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp,
-                    dry_run: bool = False) -> None:
+                    dry_run: bool = False, resume: bool = True) -> None:
     """One-off rebuild of the columnar tier_history.json file.
 
     Replay strategy: load the all-time booking dataset once (using the existing
@@ -608,7 +651,21 @@ def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp,
     Skips Zoho/email entirely. Writes only tier_history.json — unless
     `dry_run` is True, in which case the rebuilt file is computed but not
     uploaded.
+
+    Resumability: if a history file already exists on SharePoint and `resume`
+    is True (default), the replay starts from the day after the last column
+    already in the file. Periodic checkpoint uploads happen every
+    _REPLAY_CHECKPOINT_EVERY days so an interrupted run loses at most that
+    many days of work. Pass resume=False (or use --rebuild-from-scratch) to
+    discard any existing file and start fresh.
+
+    Parallelism: per-day computation runs in a ThreadPoolExecutor. Pandas
+    releases the GIL on aggregation, so threads scale on multi-core machines
+    without the pickle/memory cost of a process pool. Results are appended
+    to the history dict sequentially in date order — the executor preserves
+    order via .map().
     """
+    from concurrent.futures import ThreadPoolExecutor
     from modules.utils.data_loader import load_booking_data
 
     if not SHAREPOINT_DRIVE_ID:
@@ -637,57 +694,72 @@ def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp,
                 bookings['TransactionDate'].min().date(),
                 bookings['TransactionDate'].max().date())
 
-    history = tier_history._empty_history()
-    daterange = pd.date_range(start=start_date, end=end_date, freq='D')
-    logger.info("Replaying tier calculation across %d daily cutoffs (%s → %s)",
-                len(daterange), start_date.date(), end_date.date())
+    # Resume from existing checkpoint if present
+    history = None
+    effective_start = start_date
+    if resume:
+        existing = tier_history.load_history(graph_token, SHAREPOINT_DRIVE_ID)
+        if existing.get("days"):
+            history = existing
+            last_day_iso = existing["days"][-1]
+            resume_from = pd.Timestamp(last_day_iso) + pd.Timedelta(days=1)
+            if resume_from > end_date:
+                logger.info("Existing history already covers %s through %s — nothing to do.",
+                            existing["days"][0], last_day_iso)
+                return
+            if resume_from > start_date:
+                logger.info("Resuming from existing checkpoint: %d days already in history "
+                            "(last = %s). Replaying from %s to %s.",
+                            len(existing["days"]), last_day_iso,
+                            resume_from.date(), end_date.date())
+                effective_start = resume_from
+    if history is None:
+        history = tier_history._empty_history()
 
-    from datetime import timedelta
-    for i, target in enumerate(daterange):
-        target_date = target.date()
-        target_ts = pd.Timestamp(target_date).tz_localize('UTC')
-        cutoff_365 = target_date - timedelta(days=365)
-        cutoff_730 = cutoff_365 - timedelta(days=365)
-        freq_current = target_date.replace(day=1) - timedelta(days=365)
-        freq_previous = freq_current - timedelta(days=365)
+    daterange = pd.date_range(start=effective_start, end=end_date, freq='D')
+    if len(daterange) == 0:
+        logger.info("Nothing to replay.")
+        return
 
-        bk_slice = bookings[bookings['TransactionDate'] <= target_ts]
-        if bk_slice.empty:
-            logger.debug("  %s: no bookings yet, skipping.", target_date)
-            continue
+    logger.info("Replaying tier calculation across %d daily cutoffs "
+                "(%s → %s) using %d threads, checkpoint every %d days.",
+                len(daterange), effective_start.date(), end_date.date(),
+                _REPLAY_THREAD_WORKERS, _REPLAY_CHECKPOINT_EVERY)
 
-        aggregator = BookingAggregator(
-            cutoff_365=cutoff_365,
-            cutoff_730=cutoff_730,
-            event_freq_cutoff_current=freq_current,
-            event_freq_cutoff_previous=freq_previous,
-        )
+    target_isos = [d.date().isoformat() for d in daterange]
 
-        def _chunks(df, size=200000):
-            for j in range(0, len(df), size):
-                yield df.iloc[j:j + size].copy()
+    days_since_checkpoint = 0
+    days_completed = 0
+    with ThreadPoolExecutor(max_workers=_REPLAY_THREAD_WORKERS) as executor:
+        # executor.map preserves submission order, which is what we need so the
+        # history columns end up in chronological order without an explicit sort.
+        for target_iso, v2_df in executor.map(
+            lambda d: _compute_one_day(d, bookings), target_isos
+        ):
+            days_completed += 1
+            if v2_df is None:
+                continue
+            target_date = pd.Timestamp(target_iso).date()
+            tier_history.append_day(history, target_date, v2_df)
+            days_since_checkpoint += 1
 
-        metrics = aggregator.aggregate_bookings(_chunks(bk_slice))
-        if not metrics:
-            continue
+            if days_completed % 30 == 0 or days_completed == len(daterange):
+                logger.info("  Progress: %d/%d days (%s) — %d accounts, %d days in history.",
+                            days_completed, len(daterange), target_iso,
+                            len(history['accounts']), len(history['days']))
 
-        v2_df = calculate_composite_tiers(metrics)
-        if v2_df.empty:
-            continue
-
-        tier_history.append_day(history, target_date, v2_df)
-
-        if (i + 1) % 30 == 0 or i + 1 == len(daterange):
-            logger.info("  Progress: %d/%d days (%s) — %d accounts, %d days in history.",
-                        i + 1, len(daterange), target_date,
-                        len(history['accounts']), len(history['days']))
+            if (not dry_run) and days_since_checkpoint >= _REPLAY_CHECKPOINT_EVERY:
+                logger.info("  Checkpoint upload (%d days since last)...",
+                            days_since_checkpoint)
+                tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, history)
+                days_since_checkpoint = 0
 
     if dry_run:
         logger.info("Replay complete. --dry-run: skipping upload "
                     "(%d accounts × %d days computed, not persisted).",
                     len(history['accounts']), len(history['days']))
     else:
-        logger.info("Replay complete. Uploading history file...")
+        logger.info("Replay complete. Final upload...")
         tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, history)
 
 
@@ -720,11 +792,19 @@ if __name__ == "__main__":
              "tier_snapshot.json untouched). Email sending still happens — pair "
              "with TEST_MODE=true to redirect emails to the test recipient.",
     )
+    parser.add_argument(
+        "--rebuild-from-scratch",
+        action="store_true",
+        help="With --rebuild-history: discard any existing tier_history.json on "
+             "SharePoint and start fresh. Default behaviour resumes from the "
+             "last day already in the file.",
+    )
     args = parser.parse_args()
 
     if args.rebuild_history:
         end = pd.Timestamp(args.history_to) if args.history_to else pd.Timestamp.now(UK_TZ).normalize()
         start = pd.Timestamp(args.history_from) if args.history_from else end - pd.DateOffset(years=12)
-        _replay_history(start, end, dry_run=args.dry_run)
+        _replay_history(start, end, dry_run=args.dry_run,
+                        resume=not args.rebuild_from_scratch)
     else:
         main(dry_run=args.dry_run)

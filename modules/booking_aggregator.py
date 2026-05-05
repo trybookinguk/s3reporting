@@ -109,36 +109,44 @@ class BookingAggregator:
             return {}
         
         start_time = pd.Timestamp.now()
-        logger.info("Starting vectorized bulk aggregation...")
+        # Demoted to debug — fires once per replay pass during a 4k+ day
+        # historical rebuild and adds nothing for the production daily run.
+        logger.debug("Starting vectorized bulk aggregation...")
         
-        # OPTIMIZATION: Combine all chunks into single DataFrame for bulk processing
-        logger.info("Combining accumulated chunks...")
-        # Filter out empty chunks to avoid FutureWarning
-        # Filter out empty and all-NA chunks to avoid FutureWarning
+        # OPTIMIZATION: Combine all chunks into single DataFrame for bulk processing.
+        # Skip the concat when only one usable chunk is fed — common in the
+        # historical replay path where the entire date-filtered slice is passed
+        # as a single chunk. pd.concat on one frame is pure overhead.
         non_empty_chunks = [
-            chunk for chunk in self.accumulated_chunks 
+            chunk for chunk in self.accumulated_chunks
             if not chunk.empty and not chunk.isna().all().all()
         ]
-        if non_empty_chunks:
-            all_data = pd.concat(non_empty_chunks, ignore_index=True)
-        else:
+        if not non_empty_chunks:
             logger.warning("All chunks are empty")
             return {}
-        logger.info(f"Combined {len(all_data):,} rows from {len(self.accumulated_chunks)} chunks")
+        if len(non_empty_chunks) == 1:
+            all_data = non_empty_chunks[0]
+        else:
+            logger.info("Combining accumulated chunks...")
+            all_data = pd.concat(non_empty_chunks, ignore_index=True)
+            logger.info(f"Combined {len(all_data):,} rows from {len(self.accumulated_chunks)} chunks")
         
         # Clear accumulated chunks to free memory
         self.accumulated_chunks = []
         
         # OPTIMIZATION: Vectorized aggregations using pandas groupby (much faster)
-        logger.info("Computing vectorized aggregations...")
+        logger.debug("Computing vectorized aggregations...")
         
         # Basic lifetime metrics. Round only the numeric columns —
         # pandas warns (and will eventually error) on .round() against
         # datetime/timedelta dtypes, which TransactionDate min/max are.
+        # 'nunique' is the vectorised C-level equivalent of len(set(x)) and
+        # is meaningfully faster across many groups (matters during the
+        # historical rebuild where this runs once per day in the daterange).
         basic_agg = all_data.groupby('AccountId').agg({
             'TicketQuantity': 'sum',
             'Revenue': 'sum',
-            'Year': lambda x: len(set(x)),  # unique years
+            'Year': 'nunique',
             'TransactionDate': ['min', 'max']
         })
         basic_agg.columns = ['tickets_lifetime', 'revenue_lifetime', 'years_loyalty',
@@ -163,17 +171,16 @@ class BookingAggregator:
         }).round(2)
         previous_agg.columns = ['tickets_prev', 'revenue_prev']
         
-        # Previous period years
+        # Previous period years — vectorised nunique instead of a Python lambda.
         pre_cutoff_data = all_data[all_data['tx_date'] < self.cutoff_365]
-        years_prev_agg = pre_cutoff_data.groupby('AccountId')['Year'].apply(
-            lambda x: len(set(x))
+        years_prev_agg = pre_cutoff_data.groupby('AccountId')['Year'].nunique(
         ).to_frame('years_loyalty_prev')
         
         # Event metrics
         event_metrics = self._calculate_event_metrics_vectorized(all_data)
         
         # OPTIMIZATION: Combine all results efficiently
-        logger.info("Combining aggregated results...")
+        logger.debug("Combining aggregated results...")
         all_accounts = set(basic_agg.index) | set(current_agg.index) | set(previous_agg.index)
         
         final_metrics = {}
@@ -222,8 +229,8 @@ class BookingAggregator:
         elapsed = (pd.Timestamp.now() - start_time).total_seconds()
         rate = self.total_rows / elapsed if elapsed > 0 else 0
         
-        logger.info(f"Vectorized aggregation complete: {len(final_metrics):,} accounts in {elapsed:.1f}s "
-                   f"({rate:.0f} rows/sec)")
+        logger.debug(f"Vectorized aggregation complete: {len(final_metrics):,} accounts in {elapsed:.1f}s "
+                    f"({rate:.0f} rows/sec)")
         
         return final_metrics
     
@@ -293,16 +300,16 @@ class BookingAggregator:
         Returns:
             Dictionary of aggregated account metrics
         """
-        logger.info("Starting booking data aggregation...")
+        logger.debug("Starting booking data aggregation...")
         start_time = pd.Timestamp.now()
-        
+
         for chunk in chunks_iterator:
             self.process_chunk(chunk)
-        
+
         elapsed = (pd.Timestamp.now() - start_time).total_seconds()
         rate = self.total_rows / elapsed if elapsed > 0 else 0
-        
-        logger.info(f"Aggregation complete: {self.total_rows:,} rows in {elapsed:.1f}s "
-                   f"({rate:.0f} rows/sec)")
+
+        logger.debug(f"Aggregation complete: {self.total_rows:,} rows in {elapsed:.1f}s "
+                    f"({rate:.0f} rows/sec)")
         
         return self.finalize_metrics()

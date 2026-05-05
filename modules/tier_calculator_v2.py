@@ -93,7 +93,7 @@ def _build_metrics_df(account_metrics: Dict[int, Dict[str, Any]]) -> pd.DataFram
 
     # Filter to accounts that have ever transacted
     df = df[df['tickets_lifetime'] > 0].copy()
-    logger.info(f"Metrics DataFrame built: {len(df):,} accounts with lifetime tickets > 0")
+    logger.debug(f"Metrics DataFrame built: {len(df):,} accounts with lifetime tickets > 0")
     return df
 
 
@@ -228,7 +228,7 @@ def calculate_composite_tiers(account_metrics: Dict[int, Dict[str, Any]]) -> pd.
     current_paid_activated = current_activated & current_has_revenue
     # Free: enough tickets but zero revenue — separate "Free" tier
     current_free = current_activated & ~current_has_revenue
-    logger.info(
+    logger.debug(
         f"Activated accounts (current): {current_activated.sum():,} of {len(df):,} "
         f"(paid: {current_paid_activated.sum():,}, free: {current_free.sum():,})"
     )
@@ -291,5 +291,5 @@ def calculate_composite_tiers(account_metrics: Dict[int, Dict[str, Any]]) -> pd.
         'C_Percentile': df['years_loyalty_pct'].round(2),
     })
 
-    logger.info(f"Composite tier calculation complete: {len(result):,} accounts scored")
+    logger.debug(f"Composite tier calculation complete: {len(result):,} accounts scored")
     return result

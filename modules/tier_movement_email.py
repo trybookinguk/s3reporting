@@ -163,14 +163,17 @@ def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[flo
     # display_label is what we render on the y-axis tick.
     # Colours are at Tailwind's -50 level — barely-there pastels so the
     # data line reads cleanly against the band background.
+    # Free/Nil bands are shrunk to ~half height — they're categorical "off
+    # the scale" states, not ranked tiers, so they don't deserve as much
+    # vertical real estate as T1-T5 where the score actually lives.
     band_specs = [
         ("Tier 1", "T1",   0,    2,    "#f0fdf4", 0.0, 1.4),
         ("Tier 2", "T2",   2,    10,   "#f7fee7", 1.4, 2.6),
         ("Tier 3", "T3",   10,   25,   "#fefce8", 2.6, 3.6),
         ("Tier 4", "T4",   25,   50,   "#fff7ed", 3.6, 4.5),
         ("Tier 5", "T5",   50,   100,  "#fef2f2", 4.5, 5.4),
-        ("Free",   "Free", None, None, "#f3f4f6", 5.4, 6.2),
-        ("Nil",    "Nil",  None, None, "#e5e7eb", 6.2, 7.0),
+        ("Free",   "Free", None, None, "#f3f4f6", 5.4, 5.8),
+        ("Nil",    "Nil",  None, None, "#e5e7eb", 5.8, 6.2),
     ]
     # Lookup by data_label so a "Tier 3" history entry actually finds the
     # T3 band — earlier this used the short labels and silently dropped
@@ -188,7 +191,7 @@ def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[flo
         """
         spec = band_by_label.get(label)
         if spec is None:
-            return 7.0
+            return 6.2
         _, _, lo, hi, _, y_lo, y_hi = spec
         if lo is None or score is None:
             return (y_lo + y_hi) / 2
@@ -227,7 +230,7 @@ def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[flo
     tick_labels = [spec[1] for spec in band_specs]
     ax.set_yticks(tick_positions)
     ax.set_yticklabels(tick_labels)
-    ax.set_ylim(7.0, 0.0)  # inverted: T1 at top
+    ax.set_ylim(6.2, 0.0)  # inverted: T1 at top
     for tick_label in ax.get_yticklabels():
         tick_label.set_color("#6b7280")
         tick_label.set_fontsize(8)
@@ -365,8 +368,16 @@ def compose_and_send(
 
     last_sale_disp, last_sale_class = _format_date(account_meta.get("last_ticket_sale"))
     last_event_disp, last_event_class = _format_date(account_meta.get("last_event_created"))
-    industry = account_meta.get("industry") or "—"
-    sub_industry = account_meta.get("sub_industry") or "—"
+    # NaN sneaks through `meta.get(...) or "—"` because float('nan') is
+    # truthy in Python, so an empty/missing value rendered as "nan" not "—".
+    # pd.isna catches both None and NaN; empty strings get the same treatment.
+    def _clean(v):
+        if v is None or (isinstance(v, float) and pd.isna(v)) or v == "":
+            return "—"
+        return str(v)
+
+    industry = _clean(account_meta.get("industry"))
+    sub_industry = _clean(account_meta.get("sub_industry"))
 
     direction = _direction_label(previous_tier, current_tier)
     # Up arrow for upgrades (and new entrants), down arrow for drops. Plus
@@ -383,8 +394,8 @@ def compose_and_send(
         "direction": direction,
         "direction_label": arrow,
         "zoho_url": zoho_url or "#",
-        "industry": html.escape(str(industry)),
-        "sub_industry": html.escape(str(sub_industry)),
+        "industry": html.escape(industry),
+        "sub_industry": html.escape(sub_industry),
         "tickets_365d": _format_int(account_meta.get("tickets_365d")),
         "last_ticket_sale": html.escape(last_sale_disp),
         "last_event_created": html.escape(last_event_disp),

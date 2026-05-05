@@ -89,50 +89,89 @@ def find_booking_files_in_month(s3_client, bucket: str, year: int, month: int) -
         return [], []
 
 
-def get_fallback_keys(s3_client, bucket: str, current_year: int, current_month: int) -> Tuple[Optional[str], Optional[str]]:
+MAX_FALLBACK_MONTHS = 6
+
+
+def get_fallback_keys(s3_client, bucket: str, current_year: int, current_month: int) -> Tuple[Optional[str], List[str]]:
     """
-    Get S3 keys for fallback data when BookingDataAll is missing.
+    Get S3 keys for fallback data when BookingDataAll is missing or empty.
+
+    Walks back up to MAX_FALLBACK_MONTHS months from (current_year, current_month) looking
+    for a BookingDataAll file. Once found, collects the latest BookingData file from each
+    intermediate month (between the BookingDataAll month and the original request month,
+    inclusive) so the combined dataset covers everything up to the present.
 
     Args:
-        current_year: Year of the folder where we looked for BookingDataAll (already previous month)
-        current_month: Month of the folder where we looked for BookingDataAll (already previous month)
+        current_year: Year of the folder where we originally looked for BookingDataAll
+        current_month: Month of the folder where we originally looked for BookingDataAll
 
     Returns:
-        Tuple of (BookingDataAll from 2 months back, BookingData from 1 month back)
+        Tuple of (BookingDataAll key, list of BookingData keys ordered oldest-first).
+        Either may be None/empty if nothing was found within the lookback window.
 
     Example:
-        If looking for September data and 2025/08/BookingDataAll is missing:
-        - Returns 2025/07/BookingDataAll (complete historical data)
-        - Returns 2025/08/BookingData (August's current month data)
+        If looking at 2025/08 and BookingDataAll is missing in 2025/08, 2025/07, and 2025/06,
+        but present in 2025/05:
+        - Returns 2025/05/BookingDataAll
+        - Returns [2025/06/BookingData, 2025/07/BookingData, 2025/08/BookingData]
     """
-    # Get the month before where we already looked (2 months back from original request)
-    prev_prev_year, prev_prev_month = calculate_previous_month(current_year, current_month)
+    booking_all_key: Optional[str] = None
+    booking_all_year_month: Optional[Tuple[int, int]] = None
 
-    logger.info(f"Attempting fallback: BookingDataAll from {prev_prev_year:04d}-{prev_prev_month:02d}, "
-                f"BookingData from {current_year:04d}-{current_month:02d}")
+    # Walk back month-by-month until we find a BookingDataAll file or hit the lookback cap
+    search_year, search_month = calculate_previous_month(current_year, current_month)
+    for step in range(MAX_FALLBACK_MONTHS):
+        logger.info(f"Searching for BookingDataAll in {search_year:04d}/{search_month:02d}/ "
+                    f"(step {step + 1}/{MAX_FALLBACK_MONTHS})")
+        booking_all_files, _ = find_booking_files_in_month(
+            s3_client, bucket, search_year, search_month
+        )
+        if booking_all_files:
+            booking_all_key = booking_all_files[-1]  # Newest in that month
+            booking_all_year_month = (search_year, search_month)
+            logger.info(f"Found BookingDataAll: {booking_all_key}")
+            break
+        search_year, search_month = calculate_previous_month(search_year, search_month)
 
-    # Get BookingDataAll from 2 months back
-    booking_all_files, _ = find_booking_files_in_month(
-        s3_client, bucket, prev_prev_year, prev_prev_month
-    )
+    if booking_all_key is None:
+        logger.warning(f"No BookingDataAll found within {MAX_FALLBACK_MONTHS} months of "
+                       f"{current_year:04d}/{current_month:02d}/")
 
-    # Get BookingData from the folder we were already searching (1 month back)
-    _, booking_data_files = find_booking_files_in_month(
-        s3_client, bucket, current_year, current_month
-    )
+    # Collect the latest BookingData file from each month after the BookingDataAll month,
+    # up to and including the original request month
+    booking_data_keys: List[str] = []
+    if booking_all_year_month is not None:
+        start_year, start_month = calculate_next_month(*booking_all_year_month)
+    else:
+        # No BookingDataAll found — still try to gather BookingData for the original request
+        # month so callers can at least surface partial data.
+        start_year, start_month = current_year, current_month
 
-    prev_booking_all_key = booking_all_files[0] if booking_all_files else None
-    current_booking_data_key = booking_data_files[-1] if booking_data_files else None  # Last day of month
+    cursor_year, cursor_month = start_year, start_month
+    while (cursor_year, cursor_month) <= (current_year, current_month):
+        _, booking_data_files = find_booking_files_in_month(
+            s3_client, bucket, cursor_year, cursor_month
+        )
+        if booking_data_files:
+            latest = booking_data_files[-1]  # Latest snapshot in the month
+            booking_data_keys.append(latest)
+            logger.info(f"Found BookingData for {cursor_year:04d}/{cursor_month:02d}/: {latest}")
+        else:
+            logger.info(f"No BookingData found in {cursor_year:04d}/{cursor_month:02d}/")
+        cursor_year, cursor_month = calculate_next_month(cursor_year, cursor_month)
 
-    if prev_booking_all_key:
-        logger.info(f"Found BookingDataAll (2 months back): {prev_booking_all_key}")
-    if current_booking_data_key:
-        logger.info(f"Found BookingData (1 month back): {current_booking_data_key}")
-
-    if not prev_booking_all_key and not current_booking_data_key:
+    if booking_all_key is None and not booking_data_keys:
         logger.warning("No fallback data found")
 
-    return prev_booking_all_key, current_booking_data_key
+    return booking_all_key, booking_data_keys
+
+
+def calculate_next_month(year: int, month: int) -> Tuple[int, int]:
+    """Calculate the next month from given year and month."""
+    if month == 12:
+        return year + 1, 1
+    else:
+        return year, month + 1
 
 
 def try_load_with_fallback(s3_client, bucket: str, primary_key: str, 
@@ -154,33 +193,33 @@ def try_load_with_fallback(s3_client, bucket: str, primary_key: str,
     # If we get here, primary file is missing or empty
     logger.warning(f"BookingDataAll is missing or empty in folder {current_year:04d}/{current_month:02d}/")
     logger.info("Attempting fallback using older data...")
-    
-    # Get fallback keys
-    prev_all_key, prev_data_key = get_fallback_keys(
+
+    # Get fallback keys (one BookingDataAll + N BookingData files going forward)
+    prev_all_key, booking_data_keys = get_fallback_keys(
         s3_client, bucket, current_year, current_month
     )
-    
+
     # Load fallback data
     dfs_to_combine = []
-    
+
     if prev_all_key:
         try:
             prev_all_df = load_func(s3_client, prev_all_key)
             if prev_all_df is not None and not prev_all_df.empty:
                 dfs_to_combine.append(prev_all_df)
-                logger.info(f"Loaded {len(prev_all_df):,} records from BookingDataAll (2 months back)")
+                logger.info(f"Loaded {len(prev_all_df):,} records from BookingDataAll ({prev_all_key})")
         except Exception as e:
-            logger.error(f"Failed to load BookingDataAll (2 months back): {e}")
+            logger.error(f"Failed to load BookingDataAll ({prev_all_key}): {e}")
 
-    if prev_data_key:
+    for data_key in booking_data_keys:
         try:
-            prev_data_df = load_func(s3_client, prev_data_key)
-            if prev_data_df is not None and not prev_data_df.empty:
-                dfs_to_combine.append(prev_data_df)
-                logger.info(f"Loaded {len(prev_data_df):,} records from BookingData (1 month back)")
+            data_df = load_func(s3_client, data_key)
+            if data_df is not None and not data_df.empty:
+                dfs_to_combine.append(data_df)
+                logger.info(f"Loaded {len(data_df):,} records from BookingData ({data_key})")
         except Exception as e:
-            logger.error(f"Failed to load BookingData (1 month back): {e}")
-    
+            logger.error(f"Failed to load BookingData ({data_key}): {e}")
+
     # Combine and deduplicate
     if dfs_to_combine:
         logger.info(f"Combining {len(dfs_to_combine)} fallback data sources...")
@@ -208,9 +247,9 @@ def yield_chunks_with_fallback(s3_client, bucket: str, primary_key: str,
     """
     Yield chunks of BookingDataAll with automatic fallback if needed.
 
-    Fallback strategy: If BookingDataAll is missing, combines:
-    - BookingDataAll from 2 months back (complete historical data)
-    - BookingData from 1 month back (most recent month's data)
+    Fallback strategy: If BookingDataAll is missing, walks back up to MAX_FALLBACK_MONTHS
+    months to find a populated BookingDataAll, then forward-fills with the latest
+    BookingData snapshot from each intermediate month up to the original request month.
     """
     # First try to load chunks from the primary key
     found_primary = False
@@ -226,37 +265,35 @@ def yield_chunks_with_fallback(s3_client, bucket: str, primary_key: str,
         error_str = str(e)
         if 'NoSuchKey' not in error_str and '404' not in error_str and 'Not Found' not in error_str:
             raise
-    
+
     # If we get here, primary file is missing
     logger.warning(f"BookingDataAll is missing in folder {current_year:04d}/{current_month:02d}/")
     logger.info("Attempting fallback using older data...")
 
-    # Get fallback keys
-    prev_all_key, prev_data_key = get_fallback_keys(
+    # Get fallback keys (one BookingDataAll + N BookingData files going forward)
+    prev_all_key, booking_data_keys = get_fallback_keys(
         s3_client, bucket, current_year, current_month
     )
 
     found_fallback = False
 
-    # Yield chunks from BookingDataAll (2 months back)
     if prev_all_key:
         try:
-            logger.info(f"Loading chunks from BookingDataAll (2 months back): {prev_all_key}")
+            logger.info(f"Loading chunks from BookingDataAll: {prev_all_key}")
             for chunk in load_chunks_func(s3_client, prev_all_key, chunk_size):
                 found_fallback = True
                 yield chunk
         except Exception as e:
-            logger.error(f"Failed to load BookingDataAll (2 months back): {e}")
+            logger.error(f"Failed to load BookingDataAll ({prev_all_key}): {e}")
 
-    # Yield chunks from BookingData (1 month back)
-    if prev_data_key:
+    for data_key in booking_data_keys:
         try:
-            logger.info(f"Loading chunks from BookingData (1 month back): {prev_data_key}")
-            for chunk in load_chunks_func(s3_client, prev_data_key, chunk_size):
+            logger.info(f"Loading chunks from BookingData: {data_key}")
+            for chunk in load_chunks_func(s3_client, data_key, chunk_size):
                 found_fallback = True
                 yield chunk
         except Exception as e:
-            logger.error(f"Failed to load BookingData (1 month back): {e}")
+            logger.error(f"Failed to load BookingData ({data_key}): {e}")
 
     if found_fallback:
         logger.warning(f"⚠️  Using fallback data combination")

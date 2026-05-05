@@ -44,9 +44,6 @@ def _build_account_meta_lookup(booking_data_df, account_lookup, account_ids):
     Returns a dict keyed by AccountId with: account_name, industry, sub_industry,
     last_ticket_sale, last_event_created, tickets_365d.
     """
-    today = pd.Timestamp.now('UTC').normalize()
-    cutoff_365 = today - pd.Timedelta(days=365)
-
     bk = booking_data_df
     if bk is not None and not bk.empty:
         # Successful txns only — failed txns shouldn't drive "last ticket sale"
@@ -56,8 +53,20 @@ def _build_account_meta_lookup(booking_data_df, account_lookup, account_ids):
             bk_ok = bk
         bk_ok = bk_ok.copy()
         bk_ok['AccountId'] = pd.to_numeric(bk_ok['AccountId'], errors='coerce').astype('Int64')
+
+        # Normalise TransactionDate so the cutoff comparison works regardless
+        # of whether upstream loaded it as tz-aware or tz-naive. Upstream
+        # behaviour drifts depending on the loader path (the v1 revenue
+        # analysis can strip the tz before this helper runs); strip it here
+        # too so we own a consistent reference point.
+        tx_dates = pd.to_datetime(bk_ok['TransactionDate'], errors='coerce')
+        if getattr(tx_dates.dt, 'tz', None) is not None:
+            tx_dates = tx_dates.dt.tz_convert(None)
+        bk_ok = bk_ok.assign(TransactionDate=tx_dates)
+
         last_sale = bk_ok.groupby('AccountId')['TransactionDate'].max().to_dict()
 
+        cutoff_365 = pd.Timestamp.utcnow().tz_localize(None).normalize() - pd.Timedelta(days=365)
         bk_recent = bk_ok[bk_ok['TransactionDate'] >= cutoff_365]
         if 'TicketQuantity' in bk_recent.columns:
             tickets_365 = bk_recent.groupby('AccountId')['TicketQuantity'].sum().to_dict()

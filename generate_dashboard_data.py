@@ -1946,10 +1946,15 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
             events_current=("EventId", "nunique"),
         )
     else:
-        current = pd.DataFrame(
-            columns=["fees_current", "revenue_current", "tickets_current",
-                     "txns_current", "events_current"]
-        )
+        # Use float dtype so the downstream numeric fillna() catches these columns —
+        # an object-dtype empty frame would let NaNs survive into int() conversions.
+        current = pd.DataFrame({
+            "fees_current": pd.Series(dtype="float64"),
+            "revenue_current": pd.Series(dtype="float64"),
+            "tickets_current": pd.Series(dtype="float64"),
+            "txns_current": pd.Series(dtype="float64"),
+            "events_current": pd.Series(dtype="float64"),
+        })
 
     # --- Previous period (365-730 days ago) ---
     cutoff_730 = today - pd.Timedelta(days=730)
@@ -1961,9 +1966,11 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
             tickets_previous=("TicketQuantity", "sum"),
         )
     else:
-        previous = pd.DataFrame(
-            columns=["fees_previous", "revenue_previous", "tickets_previous"]
-        )
+        previous = pd.DataFrame({
+            "fees_previous": pd.Series(dtype="float64"),
+            "revenue_previous": pd.Series(dtype="float64"),
+            "tickets_previous": pd.Series(dtype="float64"),
+        })
 
     # --- Dominant gateway per account ---
     gateway_col = None
@@ -2075,7 +2082,23 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
         metrics = metrics.join(bo_lifetime, how="left")
     if not bo_current.empty:
         metrics = metrics.join(bo_current, how="left")
-    # Fill numeric columns only (preserve NaT in datetime columns)
+    # Fill numeric columns only (preserve NaT in datetime columns).
+    # Cast first so columns that arrived via empty placeholders (object dtype) become
+    # numeric and get filled — otherwise NaNs survive into int() conversions downstream.
+    metric_count_cols = [
+        "fees_lifetime", "revenue_lifetime", "tickets_lifetime",
+        "txns_lifetime", "events_lifetime", "years_active",
+        "fees_current", "revenue_current", "tickets_current",
+        "txns_current", "events_current",
+        "fees_previous", "revenue_previous", "tickets_previous",
+        "fees_box_office_lifetime", "revenue_box_office_lifetime",
+        "tickets_box_office_lifetime", "txns_box_office_lifetime",
+        "fees_box_office_current", "revenue_box_office_current",
+        "tickets_box_office_current",
+    ]
+    for col in metric_count_cols:
+        if col in metrics.columns:
+            metrics[col] = pd.to_numeric(metrics[col], errors="coerce").fillna(0)
     numeric_cols = metrics.select_dtypes(include="number").columns
     metrics[numeric_cols] = metrics[numeric_cols].fillna(0)
 

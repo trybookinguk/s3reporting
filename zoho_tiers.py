@@ -66,7 +66,7 @@ def _build_account_meta_lookup(booking_data_df, account_lookup, account_ids):
 
         last_sale = bk_ok.groupby('AccountId')['TransactionDate'].max().to_dict()
 
-        cutoff_365 = pd.Timestamp.utcnow().tz_localize(None).normalize() - pd.Timedelta(days=365)
+        cutoff_365 = pd.Timestamp.now('UTC').tz_localize(None).normalize() - pd.Timedelta(days=365)
         bk_recent = bk_ok[bk_ok['TransactionDate'] >= cutoff_365]
         if 'TicketQuantity' in bk_recent.columns:
             tickets_365 = bk_recent.groupby('AccountId')['TicketQuantity'].sum().to_dict()

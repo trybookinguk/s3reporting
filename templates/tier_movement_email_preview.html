@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Tier Movement — Acme Theatre</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #1a1a1a;
+      margin: 0;
+      padding: 24px;
+      background: #f6f7f9;
+    }
+    .card {
+      max-width: 560px;
+      margin: 0 auto;
+      background: #ffffff;
+      border-radius: 8px;
+      padding: 28px 32px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      margin: 0 0 4px 0;
+      line-height: 1.3;
+    }
+    .account-id {
+      font-size: 13px;
+      color: #6b7280;
+      margin: 0 0 24px 0;
+    }
+    .movement {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 18px;
+      font-weight: 600;
+      padding: 16px 18px;
+      border-radius: 6px;
+      background: #f3f4f6;
+      margin: 0 0 24px 0;
+    }
+    .movement.up   { background: #ecfdf5; color: #065f46; }
+    .movement.down { background: #fef2f2; color: #991b1b; }
+    .movement.new  { background: #eff6ff; color: #1e40af; }
+    .from { opacity: 0.7; font-weight: 500; }
+    .arrow { opacity: 0.5; font-weight: 400; }
+    .direction-tag {
+      margin-left: auto;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.06);
+    }
+    .history {
+      margin: 24px 0 0 0;
+      padding: 16px 18px;
+      background: #fafbfc;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+    }
+    .history-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #6b7280;
+      margin: 0 0 10px 0;
+    }
+    .history-empty {
+      font-size: 13px;
+      color: #9ca3af;
+      font-style: italic;
+      margin: 0;
+    }
+    .history svg {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    .actions {
+      margin: 0 0 24px 0;
+      font-size: 0;
+    }
+    .btn {
+      display: inline-block;
+      padding: 11px 16px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      text-align: center;
+      background: #0589A3;
+      color: #ffffff;
+      width: calc(50% - 5px);
+      box-sizing: border-box;
+    }
+    .btn + .btn {
+      margin-left: 10px;
+    }
+    .details {
+      font-size: 13px;
+      color: #4b5563;
+      border-top: 1px solid #e5e7eb;
+      padding-top: 16px;
+      margin: 0;
+    }
+    .details dt {
+      float: left;
+      width: 140px;
+      color: #9ca3af;
+    }
+    .details dd {
+      margin: 0 0 6px 0;
+    }
+    .details dd.empty {
+      color: #9ca3af;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Acme Theatre moved up to Tier 1</h1>
+    <p class="account-id">Account #12345 · Acme Theatre</p>
+
+    <div class="movement up">
+      <span class="from">Tier 2</span>
+      <span class="arrow">→</span>
+      <span class="to">Tier 1</span>
+      <span class="direction-tag">up</span>
+    </div>
+
+    <div class="actions">
+      <a class="btn" href="https://crm.zoho.eu/crm/org123/tab/Accounts/12345">Open in Zoho</a><a class="btn" href="https://portal.trybooking.com/uk/admin/impersonate;redirectTo=%2Fdashboard;accountId=12345;userId=undefined">Access TryBooking Account</a>
+    </div>
+
+    <dl class="details">
+      <dt>Industry</dt><dd>Performing Arts</dd>
+      <dt>Sub-industry</dt><dd>Theatre</dd>
+      <dt>Tickets (365d)</dt><dd>14,238</dd>
+      <dt>Last ticket sale</dt><dd>2 May 2026 (3 days ago)</dd>
+      <dt>Last event created</dt><dd>28 Apr 2026 (7 days ago)</dd>
+    </dl>
+
+    <div class="history">
+      <p class="history-label">Tier history</p>
+      <!--
+        Sample step chart — y-axis (top→bottom): T1, T2, T3, T4, T5, Free, Nil.
+        Real history starts 2021-08, with movement events at:
+          2021-08: new   → T4
+          2022-03: T4    → T3
+          2023-01: T3    → T5
+          2023-09: T5    → Nil
+          2024-04: Nil   → Free
+          2024-09: Free  → T4
+          2024-11: T4    → T2
+          2026-05: T2    → T1
+
+        Y positions (7 bands, ~14px apart):
+          T1=10, T2=24, T3=38, T4=52, T5=66, Free=80, Nil=94
+
+        Rounded step corners use cubic Beziers with a 6px corner radius.
+        At each transition, we ease out of the held tier (horizontal) into
+        the next held tier (also horizontal) — small handle keeps the
+        change visibly discrete but not jagged.
+      -->
+      <svg viewBox="0 0 560 114" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none" role="img" aria-label="Tier history step chart from August 2021 to May 2026">
+        <!-- Free band tint — sits between T5 gridline (y=66) and Nil gridline (y=94) -->
+        <rect x="40" y="73" width="510" height="14" fill="#f5efe6"/>
+
+        <!-- Gridlines -->
+        <g>
+          <line x1="40" y1="10" x2="550" y2="10" stroke="#e5e7eb" stroke-width="1"/>
+          <line x1="40" y1="24" x2="550" y2="24" stroke="#f3f4f6" stroke-width="1"/>
+          <line x1="40" y1="38" x2="550" y2="38" stroke="#f3f4f6" stroke-width="1"/>
+          <line x1="40" y1="52" x2="550" y2="52" stroke="#f3f4f6" stroke-width="1"/>
+          <line x1="40" y1="66" x2="550" y2="66" stroke="#f3f4f6" stroke-width="1"/>
+          <line x1="40" y1="80" x2="550" y2="80" stroke="#f3f4f6" stroke-width="1"/>
+          <line x1="40" y1="94" x2="550" y2="94" stroke="#e5e7eb" stroke-width="1"/>
+        </g>
+
+        <!-- Y-axis labels -->
+        <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="9" fill="#9ca3af">
+          <text x="34" y="13" text-anchor="end">T1</text>
+          <text x="34" y="27" text-anchor="end">T2</text>
+          <text x="34" y="41" text-anchor="end">T3</text>
+          <text x="34" y="55" text-anchor="end">T4</text>
+          <text x="34" y="69" text-anchor="end">T5</text>
+          <text x="34" y="83" text-anchor="end" fill="#a08a5e">Free</text>
+          <text x="34" y="97" text-anchor="end">Nil</text>
+        </g>
+
+        <!--
+          Rounded step path.
+          Time scale: Aug 2021 → x=40, May 2026 → x=550 (510px over 57 months ≈ 8.95px/month).
+          Event x positions:
+            Aug 2021 = 40,  Mar 2022 = 103, Jan 2023 = 192, Sep 2023 = 264,
+            Apr 2024 = 326, Sep 2024 = 371, Nov 2024 = 389, May 2026 = 550
+          Y positions: T1=10, T2=24, T3=38, T4=52, T5=66, Free=80, Nil=94.
+
+          Each transition is L up to (event_x - r), then C with two
+          handles to (event_x + r) at the new y, then L through the held
+          segment. r=5.
+        -->
+        <path
+          fill="none"
+          stroke="#0589A3"
+          stroke-width="2"
+          stroke-linejoin="round"
+          stroke-linecap="round"
+          d="M 40,52
+             L 98,52
+             C 102,52 103,52 103,48
+             L 103,42
+             C 103,38 104,38 108,38
+             L 187,38
+             C 191,38 192,38 192,42
+             L 192,62
+             C 192,66 193,66 197,66
+             L 259,66
+             C 263,66 264,66 264,70
+             L 264,90
+             C 264,94 265,94 269,94
+             L 321,94
+             C 325,94 326,94 326,90
+             L 326,84
+             C 326,80 327,80 331,80
+             L 366,80
+             C 370,80 371,80 371,76
+             L 371,56
+             C 371,52 372,52 376,52
+             L 384,52
+             C 388,52 389,52 389,48
+             L 389,28
+             C 389,24 390,24 394,24
+             L 550,24"
+        />
+
+        <!-- Latest point — filled dot -->
+        <circle cx="550" cy="24" r="4" fill="#0589A3"/>
+
+        <!-- X-axis year labels -->
+        <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="9" fill="#9ca3af">
+          <text x="40"  y="110" text-anchor="start">2021</text>
+          <text x="142" y="110" text-anchor="middle">2022</text>
+          <text x="244" y="110" text-anchor="middle">2023</text>
+          <text x="346" y="110" text-anchor="middle">2024</text>
+          <text x="448" y="110" text-anchor="middle">2025</text>
+          <text x="550" y="110" text-anchor="end">2026</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

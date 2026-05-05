@@ -89,6 +89,15 @@ EVENT_FREQUENCY_THRESHOLDS = {
 DEFAULT_RECIPIENT = "alex@trybooking.co.uk"
 CC_RECIPIENT = ""
 
+# Owner email per v2 tier. Only Tier 1 / Tier 2 are owned — movements
+# involving those tiers fire individual per-account notification emails.
+# Tiers absent from this dict are deliberately unowned: no email.
+# Update via PR — values intentionally left as TODO until CS team confirms.
+TIER_OWNERS = {
+    "Tier 1": "TODO@trybooking.co.uk",
+    "Tier 2": "TODO@trybooking.co.uk",
+}
+
 # === REPORT SETTINGS ===
 ANNUAL_EVENT_MIN_REVENUE = 100  # Minimum revenue for annual event filtering
 ANNUAL_EVENT_OUTREACH_DAYS = 30  # Days before typical creation to reach out

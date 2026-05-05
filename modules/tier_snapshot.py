@@ -144,15 +144,21 @@ def filter_email_relevant_moves(changes_df: pd.DataFrame) -> pd.DataFrame:
     TIER_OWNERS. Movements entirely within or between unowned tiers
     (e.g. Tier 4 -> Tier 5) are silently dropped.
 
-    Departed accounts are dropped — see detect_changes docstring; a
-    vanishing account is more likely a data glitch than a real loss.
+    Drops:
+      - "departed" rows (an account vanishing is more likely a data glitch
+        than a real loss).
+      - "new" rows / any row with no previous_tier — without a previous tier
+        the email has nothing meaningful to say about the change. Genuinely
+        new accounts will surface naturally on the day they actually move
+        between tiers.
     """
     if changes_df.empty:
         return changes_df
 
     owned = set(TIER_OWNERS.keys())
+    has_previous = changes_df["previous_tier"].notna()
     mask = (
         changes_df["previous_tier"].isin(owned)
         | changes_df["current_tier"].isin(owned)
-    ) & (changes_df["direction"] != "departed")
+    ) & (changes_df["direction"] != "departed") & has_previous
     return changes_df[mask].copy()

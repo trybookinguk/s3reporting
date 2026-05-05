@@ -110,116 +110,108 @@ def _format_int(value) -> str:
 
 
 def _build_chart_svg(history_points: List[Tuple[str, Optional[str], Optional[float]]]) -> str:
-    """Build the inline tier-history SVG.
+    """Build a base64-embedded PNG chart of the tier history.
+
+    Returns an <img> tag with a data: URI. The function is named *_svg for
+    historical reasons — the original implementation rendered inline SVG, but
+    classic Outlook on Windows strips SVG and the chart came through as a
+    flat row of text. PNG renders identically across every email client at
+    the cost of a matplotlib dependency.
 
     history_points is a list of (day_iso, tier_name, composite_score) ordered
-    oldest-first (as returned by tier_history.extract_account_history).
-
-    Strategy:
-      - Skip points where tier_name is None (account didn't exist on that day).
-        These render as gaps in the line.
-      - Compress consecutive identical tiers into "held segments" so the path
-        is small — (start_x, end_x, y) tuples.
-      - Draw rounded-step transitions between segments via cubic Beziers.
+    oldest-first (as returned by tier_history.extract_account_history). Days
+    where tier_name is None are skipped (account didn't exist that day).
     """
     visible = [(d, t) for d, t, _s in history_points if t is not None]
     if not visible:
         return '<p class="history-empty">No tier history recorded yet.</p>'
 
-    # Map dates to x positions across [_CHART_X_START, _CHART_X_END].
-    first_d = date.fromisoformat(visible[0][0])
-    last_d = date.fromisoformat(visible[-1][0])
-    span_days = max(1, (last_d - first_d).days)
-    width = _CHART_X_END - _CHART_X_START
+    # Lazy-import matplotlib so the dependency is only required when an
+    # email actually fires. Important: use the Agg backend before importing
+    # pyplot so it works in headless CI.
+    import io
+    import base64
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
 
-    def x_for(day_iso: str) -> float:
-        d = date.fromisoformat(day_iso)
-        frac = (d - first_d).days / span_days
-        return _CHART_X_START + frac * width
+    # Tier -> y-axis position. Lower y = better tier (T1 at top).
+    tier_y = {
+        "Tier 1": 6, "Tier 2": 5, "Tier 3": 4,
+        "Tier 4": 3, "Tier 5": 2, "Free": 1, "Nil": 0,
+    }
 
-    # Compress to held segments: list of (x_start, x_end, y).
-    segments: List[Tuple[float, float, int]] = []
-    cur_tier = visible[0][1]
-    cur_x_start = x_for(visible[0][0])
-    last_x = cur_x_start
-    for day_iso, tier in visible[1:]:
-        x = x_for(day_iso)
-        if tier != cur_tier:
-            segments.append((cur_x_start, last_x, _BAND_Y[cur_tier]))
-            cur_tier = tier
-            cur_x_start = last_x  # transition pinned to the previous sample
-        last_x = x
-    segments.append((cur_x_start, last_x, _BAND_Y[cur_tier]))
+    xs = [date.fromisoformat(d) for d, _ in visible]
+    ys = [tier_y[t] for _, t in visible]
 
-    # Build the path. Each segment gets an L; transitions between segments
-    # use a cubic Bezier with a small radius to round the corner.
-    parts = [f"M {segments[0][0]:.1f},{segments[0][2]}"]
-    for i, (sx, ex, y) in enumerate(segments):
-        if i == 0:
-            # Hold the first segment, leaving room before the next corner.
-            next_y = segments[i + 1][2] if i + 1 < len(segments) else y
-            if i + 1 < len(segments):
-                hold_end = ex - _CORNER_RADIUS
-                parts.append(f"L {hold_end:.1f},{y}")
-                # Curve into the next segment's y at ex + r.
-                parts.append(
-                    f"C {ex:.1f},{y} {ex:.1f},{next_y} {ex + _CORNER_RADIUS:.1f},{next_y}"
-                )
-            else:
-                parts.append(f"L {ex:.1f},{y}")
-        else:
-            next_y = segments[i + 1][2] if i + 1 < len(segments) else y
-            if i + 1 < len(segments):
-                hold_end = ex - _CORNER_RADIUS
-                parts.append(f"L {hold_end:.1f},{y}")
-                parts.append(
-                    f"C {ex:.1f},{y} {ex:.1f},{next_y} {ex + _CORNER_RADIUS:.1f},{next_y}"
-                )
-            else:
-                parts.append(f"L {ex:.1f},{y}")
-    path_d = " ".join(parts)
+    # Build a step-style line by interleaving each transition with a hold
+    # at the previous y-value.
+    step_xs = [xs[0]]
+    step_ys = [ys[0]]
+    for i in range(1, len(xs)):
+        if ys[i] != ys[i - 1]:
+            step_xs.append(xs[i])
+            step_ys.append(ys[i - 1])
+        step_xs.append(xs[i])
+        step_ys.append(ys[i])
 
-    # Year ticks across the x-axis.
-    year_first = first_d.year
-    year_last = last_d.year
-    year_ticks = []
-    for yr in range(year_first, year_last + 1):
-        anchor = max(first_d, date(yr, 1, 1))
-        if anchor > last_d:
-            break
-        x = x_for(anchor.isoformat())
-        align = "start" if yr == year_first else "end" if yr == year_last else "middle"
-        year_ticks.append(f'<text x="{x:.1f}" y="110" text-anchor="{align}">{yr}</text>')
-    year_ticks_svg = "\n          ".join(year_ticks)
+    fig, ax = plt.subplots(figsize=(7.0, 1.8), dpi=140)
+    fig.patch.set_facecolor("#fafbfc")
+    ax.set_facecolor("#fafbfc")
 
-    last_x_val, last_y = last_x, segments[-1][2]
+    # Free band tint — y in [0.5, 1.5] covers the Free row.
+    ax.axhspan(0.5, 1.5, facecolor="#f5efe6", zorder=0)
 
-    return f"""<svg viewBox="0 0 560 {_CHART_VIEW_HEIGHT}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none" role="img" aria-label="Tier history chart">
-        <rect x="{_CHART_X_START}" y="73" width="{_CHART_X_END - _CHART_X_START}" height="14" fill="#f5efe6"/>
-        <g>
-          <line x1="{_CHART_X_START}" y1="10" x2="{_CHART_X_END}" y2="10" stroke="#e5e7eb" stroke-width="1"/>
-          <line x1="{_CHART_X_START}" y1="24" x2="{_CHART_X_END}" y2="24" stroke="#f3f4f6" stroke-width="1"/>
-          <line x1="{_CHART_X_START}" y1="38" x2="{_CHART_X_END}" y2="38" stroke="#f3f4f6" stroke-width="1"/>
-          <line x1="{_CHART_X_START}" y1="52" x2="{_CHART_X_END}" y2="52" stroke="#f3f4f6" stroke-width="1"/>
-          <line x1="{_CHART_X_START}" y1="66" x2="{_CHART_X_END}" y2="66" stroke="#f3f4f6" stroke-width="1"/>
-          <line x1="{_CHART_X_START}" y1="80" x2="{_CHART_X_END}" y2="80" stroke="#f3f4f6" stroke-width="1"/>
-          <line x1="{_CHART_X_START}" y1="94" x2="{_CHART_X_END}" y2="94" stroke="#e5e7eb" stroke-width="1"/>
-        </g>
-        <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="9" fill="#9ca3af">
-          <text x="34" y="13" text-anchor="end">T1</text>
-          <text x="34" y="27" text-anchor="end">T2</text>
-          <text x="34" y="41" text-anchor="end">T3</text>
-          <text x="34" y="55" text-anchor="end">T4</text>
-          <text x="34" y="69" text-anchor="end">T5</text>
-          <text x="34" y="83" text-anchor="end" fill="#a08a5e">Free</text>
-          <text x="34" y="97" text-anchor="end">Nil</text>
-        </g>
-        <path fill="none" stroke="#0589A3" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" d="{path_d}"/>
-        <circle cx="{last_x_val:.1f}" cy="{last_y}" r="4" fill="#0589A3"/>
-        <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="9" fill="#9ca3af">
-          {year_ticks_svg}
-        </g>
-      </svg>"""
+    # Gridlines at each band.
+    for y in range(7):
+        ax.axhline(y, color="#e5e7eb" if y in (0, 6) else "#f3f4f6",
+                   linewidth=0.8, zorder=1)
+
+    # The chart line — TryBooking accent colour, rounded joins.
+    ax.plot(step_xs, step_ys, color="#0589A3", linewidth=2.0,
+            solid_joinstyle="round", solid_capstyle="round", zorder=3)
+    # Highlight the latest point.
+    ax.plot([xs[-1]], [ys[-1]], marker="o", markersize=6,
+            color="#0589A3", zorder=4)
+
+    # Y-axis: tier labels at the right band positions.
+    ax.set_yticks(list(tier_y.values()))
+    ax.set_yticklabels(list(tier_y.keys()))
+    ax.set_ylim(-0.5, 6.5)
+    for label in ax.get_yticklabels():
+        label.set_color("#6b7280")
+        label.set_fontsize(8)
+        if label.get_text() == "Free":
+            label.set_color("#a08a5e")
+
+    # X-axis: year ticks only, and only the years actually spanned.
+    first_year = xs[0].year
+    last_year = xs[-1].year
+    year_ticks = [date(y, 1, 1) for y in range(first_year, last_year + 1)
+                  if date(y, 1, 1) >= xs[0] and date(y, 1, 1) <= xs[-1]]
+    if year_ticks:
+        ax.set_xticks(year_ticks)
+        ax.set_xticklabels([str(d.year) for d in year_ticks])
+    for label in ax.get_xticklabels():
+        label.set_color("#9ca3af")
+        label.set_fontsize(8)
+
+    # Strip frame and axis ticks for a cleaner look.
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(left=False, bottom=False)
+
+    fig.tight_layout(pad=0.4)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+    return (
+        f'<img src="data:image/png;base64,{encoded}" '
+        f'alt="Tier history chart" '
+        f'style="display:block;width:100%;height:auto;border-radius:4px;" />'
+    )
 
 
 def _load_template() -> str:
@@ -238,8 +230,8 @@ def _render_email(template: str, replacements: Dict[str, str]) -> str:
 def _subject(account_name: str, previous_tier: Optional[str], current_tier: str) -> str:
     direction = _direction_label(previous_tier, current_tier)
     if direction == "new":
-        return f"[Tier Movement] {account_name}: (new) → {current_tier}"
-    return f"[Tier Movement] {account_name}: {previous_tier} → {current_tier} ({direction})"
+        return f"[Tier Change] {account_name}: (new) → {current_tier}"
+    return f"[Tier Change] {account_name}: {previous_tier} → {current_tier} ({direction})"
 
 
 def _recipients_for_move(

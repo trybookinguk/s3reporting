@@ -47,7 +47,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install boto3 msal requests pandas pytz numpy scipy google-analytics-data
+          pip install boto3 msal requests pandas pytz numpy scipy google-analytics-data matplotlib
 
       - name: Get current date
         id: date

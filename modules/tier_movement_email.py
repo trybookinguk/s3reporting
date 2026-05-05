@@ -22,7 +22,7 @@ import pandas as pd
 
 from .tier_codes import TIER_ORDER_BEST_TO_WORST
 from .tier_history import extract_account_history
-from .utils.config import TIER_OWNERS
+from .utils.config import DEFAULT_RECIPIENT, TEST_MODE, TIER_OWNERS
 from .utils.email_utils import send_html_email
 
 log = logging.getLogger(__name__)
@@ -242,17 +242,45 @@ def _subject(account_name: str, previous_tier: Optional[str], current_tier: str)
     return f"[Tier Movement] {account_name}: {previous_tier} → {current_tier} ({direction})"
 
 
-def _recipients_for_move(previous_tier: Optional[str], current_tier: Optional[str]) -> List[str]:
-    """Owners interested in this move. Both previous and current owners get notified
-    when they differ."""
-    addresses: List[str] = []
-    seen = set()
+def _recipients_for_move(
+    previous_tier: Optional[str], current_tier: Optional[str]
+) -> Tuple[List[str], List[str]]:
+    """Owners interested in this move and the per-tier CCs.
+
+    Both previous and current owners get notified when they differ — they
+    have different operational interest in the move. CC lists from each
+    affected tier are unioned into a single Cc set, with deduplication and
+    suppression of any address that's already in To:.
+
+    Returns (to_list, cc_list).
+    """
+    to_list: List[str] = []
+    cc_list: List[str] = []
+    seen_to = set()
+    seen_cc = set()
     for tier in (previous_tier, current_tier):
-        owner = TIER_OWNERS.get(tier) if tier else None
-        if owner and owner not in seen:
-            addresses.append(owner)
-            seen.add(owner)
-    return addresses
+        if not tier:
+            continue
+        entry = TIER_OWNERS.get(tier)
+        if not entry:
+            continue
+        if isinstance(entry, dict):
+            primary = entry.get("to")
+            ccs = entry.get("cc") or []
+        else:
+            # Backwards-compat for the old flat-string shape, just in case.
+            primary = entry
+            ccs = []
+        if primary and primary not in seen_to:
+            to_list.append(primary)
+            seen_to.add(primary)
+        for cc in ccs:
+            if cc and cc not in seen_cc:
+                cc_list.append(cc)
+                seen_cc.add(cc)
+    # Don't CC anyone who's already on the To: line
+    cc_list = [c for c in cc_list if c not in seen_to]
+    return to_list, cc_list
 
 
 def compose_and_send(
@@ -274,11 +302,21 @@ def compose_and_send(
         log.warning("Skipping departed account %s: nothing to email about.", account_id)
         return False
 
-    recipients = _recipients_for_move(previous_tier, current_tier)
-    if not recipients:
+    to_list, cc_list = _recipients_for_move(previous_tier, current_tier)
+    if not to_list:
         log.info("No owner for movement %s -> %s on account %s; skipping.",
                  previous_tier, current_tier, account_id)
         return False
+
+    # In test mode, redirect to the test recipient and drop CCs so a TEST_MODE=1
+    # run can't spam real owners or copied team members. Subject already gets a
+    # [TEST] prefix from send_html_email.
+    if TEST_MODE:
+        log.info("TEST_MODE: redirecting tier-movement email for account %s "
+                 "(was to=%s cc=%s) to %s.",
+                 account_id, to_list, cc_list, DEFAULT_RECIPIENT)
+        to_list = [DEFAULT_RECIPIENT]
+        cc_list = []
 
     history_points = extract_account_history(history, account_id)
     chart_svg = _build_chart_svg(history_points)
@@ -317,8 +355,9 @@ def compose_and_send(
         )
 
     try:
-        send_html_email(to=recipients, subject=subject, html_content=body)
-        log.info("Sent tier-movement email for account %s to %s", account_id, ", ".join(recipients))
+        send_html_email(to=to_list, cc=cc_list or None, subject=subject, html_content=body)
+        log.info("Sent tier-movement email for account %s (to=%s cc=%s)",
+                 account_id, ", ".join(to_list), ", ".join(cc_list) if cc_list else "—")
         return True
     except Exception as e:
         log.error("Failed to send tier-movement email for account %s: %s", account_id, e)

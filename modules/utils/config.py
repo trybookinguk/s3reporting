@@ -1,14 +1,20 @@
 """
 Configuration and constants for TryBooking tier calculation system.
 """
+
 import os
 from datetime import datetime, timedelta
+
 import pytz
 
 # === ENVIRONMENT VARIABLES ===
 # AWS Credentials - support both naming conventions
-AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY")
-AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_KEY")
+AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get(
+    "AWS_ACCESS_KEY"
+)
+AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get(
+    "AWS_SECRET_KEY"
+)
 
 # Zoho CRM Credentials
 ZOHO_CLIENT_ID = os.environ.get("ZOHO_CLIENT_ID")
@@ -37,7 +43,7 @@ S3_BUCKET = "produk-rdsextracts-438255373632"
 TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
 
 # === DATE AND TIMEZONE SETTINGS ===
-UK_TZ = pytz.timezone('Europe/London')
+UK_TZ = pytz.timezone("Europe/London")
 TODAY = datetime.now(UK_TZ).date()
 
 # Tier calculations use rolling 365-day windows
@@ -52,11 +58,11 @@ EVENT_FREQ_CUTOFF_PREVIOUS = EVENT_FREQ_CUTOFF_CURRENT - timedelta(days=365)
 # === TIER THRESHOLDS ===
 # Percentile thresholds for tier classification
 TIER_PERCENTILES = {
-    "Key Account": 99,    # Top 1%
-    "High Value": 95,     # Top 5%
-    "Tier 4": 75,         # Top 25%
-    "Tier 3": 50,         # Top 50%
-    "Tier 2": 25,         # Top 75%
+    "Key Account": 99,  # Top 1%
+    "High Value": 95,  # Top 5%
+    "Tier 4": 75,  # Top 25%
+    "Tier 3": 50,  # Top 50%
+    "Tier 2": 25,  # Top 75%
 }
 
 # Minimum years loyalty for C+D+E path
@@ -66,7 +72,7 @@ MIN_YEARS_BY_TIER = {
     "Tier 4": 5,
     "Tier 3": 3,
     "Tier 2": 2,
-    "Tier 1": 1
+    "Tier 1": 1,
 }
 
 # === ACTIVITY THRESHOLDS ===
@@ -79,23 +85,25 @@ YEARS_LOYALTY_CAP = 5
 
 # === EVENT FREQUENCY THRESHOLDS ===
 EVENT_FREQUENCY_THRESHOLDS = {
-    "Regular": 4,     # 4+ events
+    "Regular": 4,  # 4+ events
     "Occasional": 2,  # 2-3 events
-    "Annual": 1,      # 1 event
-    "Inactive": 0     # 0 events
+    "Annual": 1,  # 1 event
+    "Inactive": 0,  # 0 events
 }
 
 # === EMAIL SETTINGS ===
 DEFAULT_RECIPIENT = "alex@trybooking.co.uk"
 CC_RECIPIENT = ""
 
-# Owner email per v2 tier. Only Tier 1 / Tier 2 are owned — movements
+# Owner + CC list per v2 tier. Only Tier 1 / Tier 2 are owned — movements
 # involving those tiers fire individual per-account notification emails.
 # Tiers absent from this dict are deliberately unowned: no email.
+# 'to' is the primary owner; 'cc' is a list of additional recipients copied
+# on every email for that tier. Set 'cc' to [] for none.
 # Update via PR — values intentionally left as TODO until CS team confirms.
 TIER_OWNERS = {
-    "Tier 1": "TODO@trybooking.co.uk",
-    "Tier 2": "TODO@trybooking.co.uk",
+    "Tier 1": {"to": "joan@trybooking.co.uk", "cc": ["alex@trybooking.co.uk"]},
+    "Tier 2": {"to": "kathryn@trybooking.co.uk", "cc": ["alex@trybooking.co.uk"]},
 }
 
 # === REPORT SETTINGS ===
@@ -111,9 +119,9 @@ MATURE_ACCOUNT_AGE_DAYS = 180
 
 # Revenue drop thresholds (unified for all account types)
 REVENUE_DROP_THRESHOLDS = {
-    "severe": 0.25,      # <25% of comparison period = 75%+ drop
+    "severe": 0.25,  # <25% of comparison period = 75%+ drop
     "significant": 0.5,  # <50% of comparison period = 50%+ drop
-    "moderate": 0.80     # <80% of comparison period = 20%+ drop
+    "moderate": 0.80,  # <80% of comparison period = 20%+ drop
 }
 
 # Minimum revenue threshold for rapid drop detection (£)
@@ -121,9 +129,9 @@ MIN_REVENUE_FOR_RAPID_DROP = 200
 
 # Quintile drop thresholds
 QUINTILE_DROP_SCORING = {
-    "severe": 4,         # Drop of 4+ quintiles
-    "significant": 3,    # Drop of 3 quintiles
-    "moderate": 2        # Drop of 2 quintiles
+    "severe": 4,  # Drop of 4+ quintiles
+    "significant": 3,  # Drop of 3 quintiles
+    "moderate": 2,  # Drop of 2 quintiles
 }
 
 # Zero revenue tolerance threshold
@@ -131,16 +139,16 @@ ZERO_REVENUE_COMMON_THRESHOLD = 0.3  # If >30% of industry has zero revenue
 
 # New account lifecycle stages (in weeks)
 ACCOUNT_LIFECYCLE_STAGES = {
-    "new_building": 4,      # Weeks 1-4
-    "new_expected": 8,      # Weeks 5-8
-    "establishing": 26,     # Up to 6 months
-    "maturing": 52,         # Up to 12 months
-    "established": 52       # 12+ months
+    "new_building": 4,  # Weeks 1-4
+    "new_expected": 8,  # Weeks 5-8
+    "establishing": 26,  # Up to 6 months
+    "maturing": 52,  # Up to 12 months
+    "established": 52,  # 12+ months
 }
 
 # Comparison period types
 COMPARISON_PERIOD_DAYS = {
-    "current": 28,          # 4 weeks - current period for sudden drop detection
+    "current": 28,  # 4 weeks - current period for sudden drop detection
     "rolling_average": 84,  # 12 weeks - 3 months rolling average
-    "yoy": 365             # Year over year for seasonal accounts
+    "yoy": 365,  # Year over year for seasonal accounts
 }

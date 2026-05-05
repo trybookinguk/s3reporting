@@ -676,6 +676,14 @@ def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp,
         logger.error("Graph auth failed — cannot upload tier history.")
         return
 
+    # Normalise the bounding timestamps to tz-naive — the replay treats
+    # these as calendar markers, and reconstructed checkpoints come back as
+    # tz-naive iso strings, so mixing the two raises TypeError on comparison.
+    if start_date.tzinfo is not None:
+        start_date = start_date.tz_localize(None)
+    if end_date.tzinfo is not None:
+        end_date = end_date.tz_localize(None)
+
     logger.info("Loading all-time booking data (one-shot, cached)...")
     bookings = load_booking_data(target_date=end_date.to_pydatetime(),
                                  data_type='BookingDataAll')

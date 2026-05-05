@@ -3,6 +3,7 @@
 Main runner for Zoho tier updates.
 Calculates account tiers, event frequencies, and activity ratings.
 """
+import argparse
 import time
 import pandas as pd
 import logging
@@ -31,6 +32,125 @@ from modules.utils.report_generator import generate_upcoming_annual_events_repor
 from modules.utils.validation import validate_environment_variables
 from modules.utils.performance import timer_decorator
 from modules.industry_revenue_report import generate_industry_revenue_reports
+from modules.tier_calculator_v2 import calculate_composite_tiers
+from modules import tier_snapshot, tier_history, tier_movement_email
+from modules.zoho_account_links import lookup_account_urls
+from modules.utils.sharepoint import authenticate_graph
+
+SHAREPOINT_DRIVE_ID = os.environ.get("SHAREPOINT_DRIVE_ID")
+ZOHO_ORG_ID = os.environ.get("ZOHO_ORG_ID")
+
+
+def _build_account_meta_lookup(booking_data_df, account_lookup, account_ids):
+    """Build per-account metadata for the tier-movement emails.
+
+    Returns a dict keyed by AccountId with: account_name, industry, sub_industry,
+    last_ticket_sale, last_event_created, tickets_365d.
+    """
+    today = pd.Timestamp.now('UTC').normalize()
+    cutoff_365 = today - pd.Timedelta(days=365)
+
+    bk = booking_data_df
+    if bk is not None and not bk.empty:
+        # Successful txns only — failed txns shouldn't drive "last ticket sale"
+        if 'Status' in bk.columns:
+            bk_ok = bk[bk['Status'] == 'Successful']
+        else:
+            bk_ok = bk
+        bk_ok = bk_ok.copy()
+        bk_ok['AccountId'] = pd.to_numeric(bk_ok['AccountId'], errors='coerce').astype('Int64')
+        last_sale = bk_ok.groupby('AccountId')['TransactionDate'].max().to_dict()
+
+        bk_recent = bk_ok[bk_ok['TransactionDate'] >= cutoff_365]
+        if 'TicketQuantity' in bk_recent.columns:
+            tickets_365 = bk_recent.groupby('AccountId')['TicketQuantity'].sum().to_dict()
+        else:
+            tickets_365 = {}
+    else:
+        last_sale = {}
+        tickets_365 = {}
+
+    out = {}
+    for aid in account_ids:
+        meta = account_lookup.get(aid, {}) if account_lookup else {}
+        out[int(aid)] = {
+            "account_name": meta.get("AccountName"),
+            "industry": meta.get("Industry"),
+            "sub_industry": meta.get("SubIndustry"),
+            "last_ticket_sale": last_sale.get(aid) or last_sale.get(int(aid)),
+            "last_event_created": meta.get("LastEventCreation"),
+            "tickets_365d": tickets_365.get(aid) or tickets_365.get(int(aid)) or 0,
+        }
+    return out
+
+
+def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df, zoho_token):
+    """Run the v2 calculator, detect changes, send emails, update SharePoint state.
+
+    Self-contained — failure here does not bubble up into the main run.
+    Assumes Zoho upsert succeeded; safe to call after.
+    """
+    if not SHAREPOINT_DRIVE_ID:
+        logger.warning("SHAREPOINT_DRIVE_ID not set — skipping tier-movement pipeline.")
+        return
+
+    graph_token = authenticate_graph()
+    if not graph_token:
+        logger.warning("Graph auth failed — skipping tier-movement pipeline.")
+        return
+
+    logger.info("Running v2 composite tier calculation for snapshot/email pipeline...")
+    v2_df = calculate_composite_tiers(account_metrics)
+    if v2_df.empty:
+        logger.warning("v2 calculator returned empty result — nothing to snapshot.")
+        return
+
+    # Attach AccountName for nicer email rendering and snapshot storage
+    name_lookup = {
+        int(aid): meta.get("AccountName")
+        for aid, meta in (account_lookup or {}).items()
+        if meta.get("AccountName")
+    }
+    v2_df = v2_df.copy()
+    v2_df["Account_Name"] = v2_df["AccountId"].astype(int).map(name_lookup)
+
+    previous_snapshot = tier_snapshot.load_previous_snapshot(graph_token, SHAREPOINT_DRIVE_ID)
+    changes = tier_snapshot.detect_changes(previous_snapshot, v2_df)
+    relevant = tier_snapshot.filter_email_relevant_moves(changes)
+    logger.info("Tier movements: %d total, %d email-relevant (T1/T2-touching).",
+                len(changes), len(relevant))
+
+    if not relevant.empty:
+        history = tier_history.load_history(graph_token, SHAREPOINT_DRIVE_ID)
+        # Append today before the email render so the chart includes today's point
+        today = datetime.now(UK_TZ).date()
+        tier_history.append_day(history, today, v2_df)
+
+        account_meta = _build_account_meta_lookup(
+            booking_data_df, account_lookup, relevant["AccountId"].tolist()
+        )
+        zoho_urls = lookup_account_urls(
+            zoho_token, ZOHO_ORG_ID, relevant["AccountId"].tolist()
+        ) if ZOHO_ORG_ID else {}
+
+        sent, failed = tier_movement_email.send_movement_emails(
+            relevant, history, account_meta, zoho_urls
+        )
+        logger.info("Tier-movement emails: %d sent, %d failed.", sent, failed)
+
+        # Save history (only if any change-detection work happened — keeps the
+        # write cadence aligned with email runs; backfill flag handles the
+        # initial seed)
+        tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, history)
+    else:
+        # Still append today's column even when no relevant moves — keeps history complete
+        history = tier_history.load_history(graph_token, SHAREPOINT_DRIVE_ID)
+        tier_history.append_day(history, datetime.now(UK_TZ).date(), v2_df)
+        tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, history)
+
+    # Always overwrite the daily snapshot last
+    tier_snapshot.save_snapshot(graph_token, SHAREPOINT_DRIVE_ID, v2_df)
+    logger.info("Tier snapshot saved.")
 
 
 def main():
@@ -405,17 +525,18 @@ def main():
     if 'Retention_Priority_Score' in zoho_columns:
         print("✓ Retention_Priority_Score will be sent to Zoho")
     
+    zoho_token = None
     if not zoho_updates.empty:
         # Get Zoho token and update
         try:
             print("\nAuthenticating with Zoho...")
             logger.info("Authenticating with Zoho API")
-            token = get_access_token()
-            
+            zoho_token = get_access_token()
+
             print("Updating Zoho CRM...")
             logger.info(f"Updating {len(zoho_updates):,} records in Zoho CRM")
-            upsert_to_zoho(token, zoho_updates)
-            
+            upsert_to_zoho(zoho_token, zoho_updates)
+
         except Exception as e:
             logger.error(f"Zoho update failed: {str(e)}")
             print(f"ERROR: Zoho update failed: {str(e)}")
@@ -424,6 +545,19 @@ def main():
     else:
         logger.info("No updates required")
         print("No updates required.")
+
+    # Tier-movement detection + per-account emails (v2 schema). Runs only after
+    # the Zoho upsert path completes; isolated in its own try-except so SharePoint
+    # or email failures don't take down the rest of the run.
+    try:
+        if zoho_token is None:
+            zoho_token = get_access_token()
+        _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df, zoho_token)
+    except Exception as e:
+        logger.error(f"Tier-movement pipeline failed: {e}")
+        print(f"ERROR: Tier-movement pipeline failed: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Performance stats
     elapsed_time = time.time() - start_time
@@ -432,5 +566,122 @@ def main():
     print(f"Total execution time: {elapsed_time:.1f} seconds ({elapsed_time/60:.1f} minutes)")
 
 
+def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp) -> None:
+    """One-off rebuild of the columnar tier_history.json file.
+
+    Replay strategy: load the all-time booking dataset once (using the existing
+    fallback walk-back if BookingDataAll is empty), then for each target date
+    in [start_date, end_date] filter the bookings to TransactionDate <= target,
+    re-run the BookingAggregator with target-relative cutoffs, and feed the
+    aggregator output into the v2 calculator. Each day's tier results become
+    one column in the history file.
+
+    Skips Zoho/email entirely. Writes only tier_history.json.
+    """
+    from modules.utils.data_loader import load_booking_data
+
+    if not SHAREPOINT_DRIVE_ID:
+        logger.error("SHAREPOINT_DRIVE_ID not set — cannot upload tier history.")
+        return
+    graph_token = authenticate_graph()
+    if not graph_token:
+        logger.error("Graph auth failed — cannot upload tier history.")
+        return
+
+    logger.info("Loading all-time booking data (one-shot, cached)...")
+    bookings = load_booking_data(target_date=end_date.to_pydatetime(),
+                                 data_type='BookingDataAll')
+    if bookings is None or bookings.empty:
+        logger.error("No booking data loaded — cannot rebuild history.")
+        return
+
+    if 'TransactionDate' not in bookings.columns:
+        logger.error("BookingDataAll missing TransactionDate column.")
+        return
+    bookings = bookings.copy()
+    bookings['TransactionDate'] = pd.to_datetime(bookings['TransactionDate'], errors='coerce', utc=True)
+    bookings = bookings.dropna(subset=['TransactionDate'])
+    logger.info("Loaded %d transactions, range %s to %s",
+                len(bookings),
+                bookings['TransactionDate'].min().date(),
+                bookings['TransactionDate'].max().date())
+
+    history = tier_history._empty_history()
+    daterange = pd.date_range(start=start_date, end=end_date, freq='D')
+    logger.info("Replaying tier calculation across %d daily cutoffs (%s → %s)",
+                len(daterange), start_date.date(), end_date.date())
+
+    from datetime import timedelta
+    for i, target in enumerate(daterange):
+        target_date = target.date()
+        target_ts = pd.Timestamp(target_date).tz_localize('UTC')
+        cutoff_365 = target_date - timedelta(days=365)
+        cutoff_730 = cutoff_365 - timedelta(days=365)
+        freq_current = target_date.replace(day=1) - timedelta(days=365)
+        freq_previous = freq_current - timedelta(days=365)
+
+        bk_slice = bookings[bookings['TransactionDate'] <= target_ts]
+        if bk_slice.empty:
+            logger.debug("  %s: no bookings yet, skipping.", target_date)
+            continue
+
+        aggregator = BookingAggregator(
+            cutoff_365=cutoff_365,
+            cutoff_730=cutoff_730,
+            event_freq_cutoff_current=freq_current,
+            event_freq_cutoff_previous=freq_previous,
+        )
+
+        def _chunks(df, size=200000):
+            for j in range(0, len(df), size):
+                yield df.iloc[j:j + size].copy()
+
+        metrics = aggregator.aggregate_bookings(_chunks(bk_slice))
+        if not metrics:
+            continue
+
+        v2_df = calculate_composite_tiers(metrics)
+        if v2_df.empty:
+            continue
+
+        tier_history.append_day(history, target_date, v2_df)
+
+        if (i + 1) % 30 == 0 or i + 1 == len(daterange):
+            logger.info("  Progress: %d/%d days (%s) — %d accounts, %d days in history.",
+                        i + 1, len(daterange), target_date,
+                        len(history['accounts']), len(history['days']))
+
+    logger.info("Replay complete. Uploading history file...")
+    tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, history)
+
+
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Daily Zoho tier update + tier-movement pipeline."
+    )
+    parser.add_argument(
+        "--rebuild-history",
+        action="store_true",
+        help="Replay v2 tier calculation across a date range and rebuild "
+             "tier_history.json from scratch. Skips Zoho/email.",
+    )
+    parser.add_argument(
+        "--history-from",
+        type=str,
+        default=None,
+        help="Start date for --rebuild-history (YYYY-MM-DD). Default: 12 years ago.",
+    )
+    parser.add_argument(
+        "--history-to",
+        type=str,
+        default=None,
+        help="End date for --rebuild-history (YYYY-MM-DD). Default: today.",
+    )
+    args = parser.parse_args()
+
+    if args.rebuild_history:
+        end = pd.Timestamp(args.history_to) if args.history_to else pd.Timestamp.now(UK_TZ).normalize()
+        start = pd.Timestamp(args.history_from) if args.history_from else end - pd.DateOffset(years=12)
+        _replay_history(start, end)
+    else:
+        main()

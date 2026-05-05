@@ -366,9 +366,18 @@ def _recipients_for_move(
             # Backwards-compat for the old flat-string shape, just in case.
             primary = entry
             ccs = []
-        if primary and primary not in seen_to:
-            to_list.append(primary)
-            seen_to.add(primary)
+        # `primary` can be a single string (single owner) or a list of strings
+        # (multiple owners CC'd on the same email). Normalise to a list.
+        if isinstance(primary, str):
+            primary_list = [primary] if primary else []
+        elif isinstance(primary, (list, tuple)):
+            primary_list = [p for p in primary if p]
+        else:
+            primary_list = []
+        for addr in primary_list:
+            if addr not in seen_to:
+                to_list.append(addr)
+                seen_to.add(addr)
         for cc in ccs:
             if cc and cc not in seen_cc:
                 cc_list.append(cc)

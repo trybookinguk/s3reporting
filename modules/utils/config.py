@@ -102,8 +102,8 @@ CC_RECIPIENT = ""
 # on every email for that tier. Set 'cc' to [] for none.
 # Update via PR — values intentionally left as TODO until CS team confirms.
 TIER_OWNERS = {
-    "Tier 1": {"to": "joan@trybooking.co.uk", "cc": ["alex@trybooking.co.uk"]},
-    "Tier 2": {"to": "kathryn@trybooking.co.uk", "cc": ["alex@trybooking.co.uk"]},
+    "Tier 1": {"to": ["joan@trybooking.co.uk", "kathryn@trybooking.co.uk"], "cc": ["alex@trybooking.co.uk"]},
+    "Tier 2": {"to": ["joan@trybooking.co.uk", "kathryn@trybooking.co.uk"], "cc": ["alex@trybooking.co.uk"]},
 }
 
 # === REPORT SETTINGS ===

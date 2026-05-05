@@ -594,7 +594,8 @@ def main(dry_run: bool = False):
     print(f"Total execution time: {elapsed_time:.1f} seconds ({elapsed_time/60:.1f} minutes)")
 
 
-def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp) -> None:
+def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp,
+                    dry_run: bool = False) -> None:
     """One-off rebuild of the columnar tier_history.json file.
 
     Replay strategy: load the all-time booking dataset once (using the existing
@@ -604,7 +605,9 @@ def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp) -> None:
     aggregator output into the v2 calculator. Each day's tier results become
     one column in the history file.
 
-    Skips Zoho/email entirely. Writes only tier_history.json.
+    Skips Zoho/email entirely. Writes only tier_history.json — unless
+    `dry_run` is True, in which case the rebuilt file is computed but not
+    uploaded.
     """
     from modules.utils.data_loader import load_booking_data
 
@@ -679,8 +682,13 @@ def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp) -> None:
                         i + 1, len(daterange), target_date,
                         len(history['accounts']), len(history['days']))
 
-    logger.info("Replay complete. Uploading history file...")
-    tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, history)
+    if dry_run:
+        logger.info("Replay complete. --dry-run: skipping upload "
+                    "(%d accounts × %d days computed, not persisted).",
+                    len(history['accounts']), len(history['days']))
+    else:
+        logger.info("Replay complete. Uploading history file...")
+        tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, history)
 
 
 if __name__ == "__main__":
@@ -717,6 +725,6 @@ if __name__ == "__main__":
     if args.rebuild_history:
         end = pd.Timestamp(args.history_to) if args.history_to else pd.Timestamp.now(UK_TZ).normalize()
         start = pd.Timestamp(args.history_from) if args.history_from else end - pd.DateOffset(years=12)
-        _replay_history(start, end)
+        _replay_history(start, end, dry_run=args.dry_run)
     else:
         main(dry_run=args.dry_run)

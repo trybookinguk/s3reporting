@@ -694,13 +694,15 @@ def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp,
                 bookings['TransactionDate'].min().date(),
                 bookings['TransactionDate'].max().date())
 
-    # Resume from existing checkpoint if present
-    history = None
+    # Resume from existing checkpoint if present. The HistoryBuilder accepts
+    # the existing columnar file as a seed; further per-day adds skip the
+    # quadratic re-pad cost that the in-place append_day path incurs.
+    builder = tier_history.HistoryBuilder()
     effective_start = start_date
     if resume:
         existing = tier_history.load_history(graph_token, SHAREPOINT_DRIVE_ID)
         if existing.get("days"):
-            history = existing
+            builder = tier_history.HistoryBuilder(seed=existing)
             last_day_iso = existing["days"][-1]
             resume_from = pd.Timestamp(last_day_iso) + pd.Timedelta(days=1)
             if resume_from > end_date:
@@ -713,8 +715,6 @@ def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp,
                             len(existing["days"]), last_day_iso,
                             resume_from.date(), end_date.date())
                 effective_start = resume_from
-    if history is None:
-        history = tier_history._empty_history()
 
     daterange = pd.date_range(start=effective_start, end=end_date, freq='D')
     if len(daterange) == 0:
@@ -731,8 +731,9 @@ def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp,
     days_since_checkpoint = 0
     days_completed = 0
     with ThreadPoolExecutor(max_workers=_REPLAY_THREAD_WORKERS) as executor:
-        # executor.map preserves submission order, which is what we need so the
-        # history columns end up in chronological order without an explicit sort.
+        # executor.map preserves submission order. The builder doesn't care
+        # about insertion order (it sorts days at materialisation time), so
+        # this is purely so progress logs read chronologically.
         for target_iso, v2_df in executor.map(
             lambda d: _compute_one_day(d, bookings), target_isos
         ):
@@ -740,27 +741,31 @@ def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp,
             if v2_df is None:
                 continue
             target_date = pd.Timestamp(target_iso).date()
-            tier_history.append_day(history, target_date, v2_df)
+            builder.add_day(target_date, v2_df)
             days_since_checkpoint += 1
 
             if days_completed % 30 == 0 or days_completed == len(daterange):
-                logger.info("  Progress: %d/%d days (%s) — %d accounts, %d days in history.",
+                logger.info("  Progress: %d/%d days (%s) — %d accounts, %d days in builder.",
                             days_completed, len(daterange), target_iso,
-                            len(history['accounts']), len(history['days']))
+                            builder.account_count(), builder.day_count())
 
             if (not dry_run) and days_since_checkpoint >= _REPLAY_CHECKPOINT_EVERY:
                 logger.info("  Checkpoint upload (%d days since last)...",
                             days_since_checkpoint)
-                tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, history)
+                tier_history.save_history(
+                    graph_token, SHAREPOINT_DRIVE_ID, builder.to_history_dict()
+                )
                 days_since_checkpoint = 0
 
+    final_history = builder.to_history_dict()
     if dry_run:
         logger.info("Replay complete. --dry-run: skipping upload "
                     "(%d accounts × %d days computed, not persisted).",
-                    len(history['accounts']), len(history['days']))
+                    len(final_history['accounts']), len(final_history['days']))
     else:
-        logger.info("Replay complete. Final upload...")
-        tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, history)
+        logger.info("Replay complete. Final upload (%d accounts × %d days)...",
+                    len(final_history['accounts']), len(final_history['days']))
+        tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, final_history)
 
 
 if __name__ == "__main__":

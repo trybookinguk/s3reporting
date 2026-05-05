@@ -119,7 +119,7 @@ def append_day(history: Dict, day: date, current_df: pd.DataFrame) -> Dict:
     # Determine the column position — overwrite existing day or append new
     if day_str in days:
         col = days.index(day_str)
-        log.info("Overwriting existing column for %s (column %d).", day_str, col)
+        log.debug("Overwriting existing column for %s (column %d).", day_str, col)
         for i, aid in enumerate(accounts):
             tiers[i][col] = today_tiers.get(aid)
             scores[i][col] = today_scores.get(aid)
@@ -128,14 +128,116 @@ def append_day(history: Dict, day: date, current_df: pd.DataFrame) -> Dict:
         for i, aid in enumerate(accounts):
             tiers[i].append(today_tiers.get(aid))
             scores[i].append(today_scores.get(aid))
-        log.info("Appended column for %s (now %d days × %d accounts).",
-                 day_str, len(days), len(accounts))
+        log.debug("Appended column for %s (now %d days × %d accounts).",
+                  day_str, len(days), len(accounts))
 
     history["accounts"] = accounts
     history["days"] = days
     history["tiers"] = tiers
     history["composite_scores"] = scores
     return history
+
+
+class HistoryBuilder:
+    """O(accounts_today)-per-day builder for bulk history rebuilds.
+
+    `append_day` (above) repaints the columnar matrix in place every call,
+    which is fine for the production daily run (one call per day) but
+    quadratic for a multi-thousand-day rebuild — by day 4,000, every new
+    account costs a 4,000-element pad list, and the in-loop wall clock
+    sags from ~0.2s/day to ~2s/day.
+
+    This builder side-steps that by collecting per-day data into a sparse
+    dict-of-dicts structure during the loop, then materialising the
+    columnar matrix once at the end (or at checkpoint boundaries) via
+    `to_history_dict`. Per-day cost is O(accounts seen today), independent
+    of total days accumulated.
+    """
+
+    def __init__(self, seed: Optional[Dict] = None):
+        # day_iso -> {account_id: (tier_int_or_None, score_or_None)}
+        self._days: Dict[str, Dict[int, Tuple[Optional[int], Optional[float]]]] = {}
+        # Seen account IDs across all days. Order is preserved by the dict
+        # since 3.7+; final accounts list comes from this.
+        self._accounts: Dict[int, None] = {}
+
+        # Seed from an existing history file (used when resuming a rebuild
+        # from a checkpoint). We unpack the columnar layout back into the
+        # sparse form so further appends are cheap.
+        if seed and seed.get("days"):
+            seeded_accounts = seed["accounts"]
+            seeded_days = seed["days"]
+            seeded_tiers = seed["tiers"]
+            seeded_scores = seed["composite_scores"]
+            for aid in seeded_accounts:
+                self._accounts[int(aid)] = None
+            for col, day_iso in enumerate(seeded_days):
+                day_data: Dict[int, Tuple[Optional[int], Optional[float]]] = {}
+                for row, aid in enumerate(seeded_accounts):
+                    t = seeded_tiers[row][col] if col < len(seeded_tiers[row]) else None
+                    s = seeded_scores[row][col] if col < len(seeded_scores[row]) else None
+                    if t is not None or s is not None:
+                        day_data[int(aid)] = (t, s)
+                self._days[day_iso] = day_data
+
+    def add_day(self, day: date, current_df: pd.DataFrame) -> None:
+        """Add (or overwrite) one day's tier results."""
+        day_iso = day.isoformat()
+        day_data: Dict[int, Tuple[Optional[int], Optional[float]]] = {}
+        # Vectorised pass over the dataframe — avoids per-row .iterrows() cost.
+        ids = current_df["AccountId"].astype(int).to_numpy()
+        tier_codes = current_df["Current_Tier"].map(TIER_TO_INT).to_numpy()
+        if "Composite_Score" in current_df.columns:
+            score_vals = pd.to_numeric(current_df["Composite_Score"], errors="coerce").to_numpy()
+        else:
+            score_vals = [None] * len(ids)
+        for aid, t, s in zip(ids, tier_codes, score_vals):
+            aid_int = int(aid)
+            self._accounts.setdefault(aid_int, None)
+            t_val = None if (t is None or pd.isna(t)) else int(t)
+            s_val = None if (s is None or (isinstance(s, float) and pd.isna(s))) else float(s)
+            day_data[aid_int] = (t_val, s_val)
+        self._days[day_iso] = day_data
+
+    def day_count(self) -> int:
+        return len(self._days)
+
+    def account_count(self) -> int:
+        return len(self._accounts)
+
+    def latest_day(self) -> Optional[str]:
+        if not self._days:
+            return None
+        return max(self._days.keys())
+
+    def to_history_dict(self) -> Dict:
+        """Materialise the sparse builder state into the columnar history file
+        layout. Called once at the end of a rebuild (or at each checkpoint)."""
+        accounts = list(self._accounts.keys())
+        days = sorted(self._days.keys())
+        # Pre-compute account index for O(1) row lookup during materialisation
+        account_index = {aid: i for i, aid in enumerate(accounts)}
+
+        n_accounts = len(accounts)
+        n_days = len(days)
+        tiers: List[List[Optional[int]]] = [[None] * n_days for _ in range(n_accounts)]
+        scores: List[List[Optional[float]]] = [[None] * n_days for _ in range(n_accounts)]
+
+        for col, day_iso in enumerate(days):
+            for aid, (t, s) in self._days[day_iso].items():
+                row = account_index[aid]
+                tiers[row][col] = t
+                scores[row][col] = s
+
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "tier_codes": {str(k): v for k, v in INT_TO_TIER.items()},
+            "accounts": accounts,
+            "days": days,
+            "tiers": tiers,
+            "composite_scores": scores,
+        }
 
 
 def find_most_recent_relevant_move(history: Dict, owned_tiers: Iterable[str]) -> Optional[Dict]:

@@ -448,9 +448,12 @@ def compose_and_send(
     # in production, only in TEST_MODE previews of historical data.
     arrow = {"up": "↑", "down": "↓", "new": "+"}.get(direction, "•")
 
-    # Account created — same date-with-relative-age formatter as last_sale.
+    # Account created — just the absolute date. Earlier we appended a
+    # "X years active" tail derived from years_loyalty, but that field
+    # counts unique calendar years with any booking, not elapsed time
+    # since signup — a 7-month-old account with bookings in two calendar
+    # years got "2 years active", which read as misleading. Dropped.
     created_disp, _ = _format_date(account_meta.get("account_created"))
-    years_loyalty_disp = _format_years_loyalty(account_meta.get("years_loyalty"))
 
     rank_current_main, rank_current_delta, rank_current_class = _format_rank_with_change(
         account_meta.get("rank_current"), account_meta.get("rank_current_prev")
@@ -470,7 +473,7 @@ def compose_and_send(
         "zoho_url": zoho_url or "#",
         "industry": html.escape(industry),
         "sub_industry": html.escape(sub_industry),
-        "account_created": html.escape(f"{created_disp} · {years_loyalty_disp}"),
+        "account_created": html.escape(created_disp),
         "tickets_365d": _format_int(account_meta.get("tickets_365d")),
         "last_ticket_sale": html.escape(last_sale_disp),
         "last_event_created": html.escape(last_event_disp),
@@ -490,7 +493,7 @@ def compose_and_send(
     # If Zoho URL lookup failed, swap the Zoho button for a disabled placeholder.
     if not zoho_url:
         body = body.replace(
-            '<a class="btn" href="#">Open in Zoho</a>',
+            '<a class="btn" href="#"><font color="#ffffff">Open in Zoho</font></a>',
             '<span class="btn" style="opacity:0.5;cursor:not-allowed;">Open in Zoho (not linked)</span>',
         )
 

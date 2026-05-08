@@ -3711,8 +3711,7 @@ def generate_planning_model_csv(results_df, accounts_df, booking_df, output_file
     planning_df['Easter Month'] = planning_df['Year'].map(easter_month_map)
     planning_df['Easter Day'] = planning_df['Year'].map(easter_day_map)
 
-    # Vectorised Easter position calculation
-    # Handle potential NaN values from map() if year not found
+    # Easter position calculation. Handle potential NaN values from map() if year not found.
     planning_df['Easter Position'] = np.where(
         planning_df['Easter Month'] == 3, 'Early (Mar)',
         np.where(planning_df['Easter Day'] > 15, 'Late (Apr)', 'Mid (Apr)')
@@ -4503,14 +4502,14 @@ def calculate_account_tiers(accounts_df, booking_df, as_of_date=None):
         booking_df[col] = booking_df[col].fillna(0)
     booking_df['total_fees'] = booking_df[existing_fee_cols].sum(axis=1) if existing_fee_cols else 0
 
-    # Vectorised aggregation - lifetime metrics
+    # Lifetime metrics
     lifetime_agg = booking_df.groupby('AccountId').agg(
         revenue_lifetime=('total_fees', 'sum'),
         years_loyalty=('tx_year', 'nunique'),
         tickets_lifetime=('TicketQuantity', 'sum') if 'TicketQuantity' in booking_df.columns else ('total_fees', 'count'),
     )
 
-    # Vectorised aggregation - current period metrics
+    # Current period metrics
     current_df = booking_df[booking_df['is_current']]
     if len(current_df) > 0:
         current_agg = current_df.groupby('AccountId').agg(
@@ -4520,7 +4519,7 @@ def calculate_account_tiers(accounts_df, booking_df, as_of_date=None):
     else:
         current_agg = pd.DataFrame(columns=['tickets_current', 'revenue_current'])
 
-    # Vectorised aggregation - previous period metrics
+    # Previous period metrics
     prev_df = booking_df[booking_df['is_prev']]
     if len(prev_df) > 0:
         prev_agg = prev_df.groupby('AccountId').agg(
@@ -6718,7 +6717,7 @@ def generate_outreach_calendar_csv(booking_df: pd.DataFrame, output_file: str) -
     events_exploded = events_exploded[events_exploded['Keywords'].notna()]
     events_exploded['Keywords'] = events_exploded['Keywords'].astype(str)
 
-    # Aggregate by keyword using vectorised operations
+    # Aggregate by keyword
     keyword_agg = events_exploded.groupby('Keywords').agg({
         'EventMonth': list,
         'LeadDays': lambda x: [v for v in x if pd.notna(v)],
@@ -7049,7 +7048,7 @@ def generate_fee_structure_analysis_csv(booking_df: pd.DataFrame, output_file: s
         'AccountId': 'first'
     }).reset_index()
 
-    # Classify as free or paid (vectorised)
+    # Classify as free or paid
     events['Event Type'] = np.where(events['PaymentReceived'] == 0, 'Free', 'Paid')
 
     # Summary by industry (check for object or category dtype)

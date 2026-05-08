@@ -56,7 +56,7 @@ from modules.utils.data_loader import (
 )
 from modules.utils.date_utils import get_latest_data_date
 from modules.utils.industry_utils import filter_valid_industries
-from modules.tier_calculator import determine_tier_from_percentiles
+from modules.tier_calculator_v2 import calculate_composite_tiers
 from modules.uk_regional_segmentation import POSTCODE_TO_REGION
 from mailshake_acquisition import build_acquisition_report, records_to_csv_bytes
 from modules.box_office import (
@@ -132,6 +132,101 @@ LIFECYCLE_STAGES = [
     (4, 12, "First Year (Months 4-12)"),
     (13, float("inf"), "Mature (Year 2+)"),
 ]
+
+
+# === Tier helpers ===
+
+def _apply_v2_tiers_from_dashboard_metrics(metrics: pd.DataFrame,
+                                           revenue_current_col: str,
+                                           revenue_lifetime_col: str,
+                                           years_loyalty_col: str,
+                                           tickets_current_col: str,
+                                           tickets_lifetime_col: str,
+                                           revenue_previous_col: str = None,
+                                           tickets_previous_col: str = None) -> pd.DataFrame:
+    """Run calculate_composite_tiers on a dashboard-shaped metrics frame.
+
+    The dashboard groups bookings into per-account aggregates with column
+    names that vary by site (fees_current vs revenue_current, years_active
+    vs years_loyalty, …). This helper translates those into the
+    {AccountId: {…}} dict that the v2 calculator expects, then joins the
+    tier output back onto the frame.
+
+    Inputs are already ex-VAT (the dashboard's _prepare_bookings strips VAT
+    once at source), so we pass vat_rate=1.0 to avoid double-stripping.
+
+    Previous-period inputs are optional: when omitted, Tier_Movement is set
+    to "No Change" because there's no baseline to compare against. Callers
+    that want real movement labels must supply both revenue_previous_col
+    and tickets_previous_col, plus a `years_loyalty_prev` column on the
+    frame computed as `years_loyalty - (1 if had_txn_in_current else 0)`,
+    capped externally if desired (the calculator caps internally).
+
+    Returns the metrics frame with three new columns: tier, previous_tier,
+    tier_movement.
+    """
+    has_previous = (revenue_previous_col is not None and tickets_previous_col is not None)
+
+    rev_current = pd.to_numeric(metrics[revenue_current_col], errors='coerce').fillna(0).astype(float)
+    rev_lifetime = pd.to_numeric(metrics[revenue_lifetime_col], errors='coerce').fillna(0).astype(float)
+    tix_current = pd.to_numeric(metrics[tickets_current_col], errors='coerce').fillna(0).astype(int)
+    tix_lifetime = pd.to_numeric(metrics[tickets_lifetime_col], errors='coerce').fillna(0).astype(int)
+    yrs_loyalty = pd.to_numeric(metrics[years_loyalty_col], errors='coerce').fillna(0).astype(int)
+    aids = metrics.index.astype(int)
+
+    if has_previous:
+        rev_prev = pd.to_numeric(metrics[revenue_previous_col], errors='coerce').fillna(0).astype(float)
+        tix_prev = pd.to_numeric(metrics[tickets_previous_col], errors='coerce').fillna(0).astype(int)
+        # Best-effort years_loyalty_prev: subtract 1 from current years_loyalty
+        # if there were any current-period transactions, else carry it across.
+        # The aggregator does this exactly via transaction-year deduplication;
+        # the dashboard frame doesn't carry the year set, so we approximate.
+        yrs_loyalty_prev = (yrs_loyalty - tix_current.gt(0).astype(int)).clip(lower=0)
+
+    account_metrics = {}
+    if has_previous:
+        for aid, rc, rl, tc, tl, yl, rp, tp, ylp in zip(
+            aids, rev_current, rev_lifetime, tix_current, tix_lifetime,
+            yrs_loyalty, rev_prev, tix_prev, yrs_loyalty_prev,
+        ):
+            account_metrics[int(aid)] = {
+                'revenue_current': rc, 'revenue_lifetime': rl,
+                'tickets_current': tc, 'tickets_lifetime': tl,
+                'years_loyalty': yl,
+                'revenue_prev': rp, 'tickets_prev': tp,
+                'years_loyalty_prev': ylp,
+            }
+    else:
+        for aid, rc, rl, tc, tl, yl in zip(
+            aids, rev_current, rev_lifetime, tix_current, tix_lifetime, yrs_loyalty,
+        ):
+            account_metrics[int(aid)] = {
+                'revenue_current': rc, 'revenue_lifetime': rl,
+                'tickets_current': tc, 'tickets_lifetime': tl,
+                'years_loyalty': yl,
+            }
+
+    v2_df = calculate_composite_tiers(account_metrics, vat_rate=1.0)
+    if v2_df.empty:
+        metrics = metrics.copy()
+        metrics['tier'] = 'Nil'
+        metrics['previous_tier'] = 'Nil'
+        metrics['tier_movement'] = 'No Change'
+        return metrics
+
+    v2_lookup = v2_df.set_index('AccountId')[
+        ['Current_Tier', 'Previous_Tier', 'Tier_Movement', 'Composite_Score']
+    ]
+    matched = v2_lookup.reindex(metrics.index)
+
+    metrics = metrics.copy()
+    metrics['tier'] = matched['Current_Tier'].fillna('Nil')
+    metrics['previous_tier'] = matched['Previous_Tier'].fillna('Nil')
+    metrics['tier_movement'] = matched['Tier_Movement'].fillna('No Change')
+    # Worst-possible score (100) for accounts the calculator skipped, matching
+    # the inline code's prior fallback behaviour.
+    metrics['composite_score'] = matched['Composite_Score'].fillna(100.0)
+    return metrics
 
 
 # === Graph API Helpers ===
@@ -225,7 +320,7 @@ def normalise_gateway(value):
 
 
 def normalise_gateway_series(series):
-    """Vectorised gateway normalisation for a pandas Series."""
+    """Gateway normalisation for a pandas Series."""
     s = pd.Series(series.astype(str).values, index=series.index).fillna("Unknown")
     mask_default = s.str.contains("Default", case=False, na=False)
     mask_stripe = s.str.contains("Stripe Connect", case=False, na=False)
@@ -243,14 +338,14 @@ def extract_postcode_area(postcode):
 
 
 def extract_postcode_area_series(series):
-    """Vectorised postcode area extraction for a pandas Series."""
+    """Postcode area extraction for a pandas Series."""
     s = pd.Series(series.values, index=series.index, dtype="object").fillna("").astype(str).str.strip().str.upper()
     extracted = s.str.extract(r"^([A-Z]{1,2})\d", expand=False)
     return extracted
 
 
 def classify_sales_channel_series(series):
-    """Vectorised sales channel classification for a pandas Series."""
+    """Sales channel classification for a pandas Series."""
     s = pd.Series(series.values, index=series.index, dtype="object").fillna("").astype(str).str.upper().str.strip()
     is_box_office = s.str.contains("CARD PRESENT", na=False) | (s == "CASH")
     return pd.Series(
@@ -709,8 +804,22 @@ def postcode_area_to_region(area: str) -> str:
     return POSTCODE_TO_REGION.get(area.upper(), "Unknown")
 
 
+_PREPARED_BOOKINGS_CACHE: dict[int, pd.DataFrame] = {}
+
+
 def _prepare_bookings(bookings_df):
-    """Shared preparation for bookings: dates, status filter, numeric cols, fees."""
+    """Shared preparation for bookings: dates, status filter, numeric cols, fees.
+
+    Memoised by `id(bookings_df)` because the orchestrator passes the same
+    `combined_bookings` frame to ~10 builders. The prepared frame is identical
+    across calls, so the per-call .copy() + dtype coercion is wasted work.
+    Cache is process-local; cleared at the end of each main() invocation.
+    """
+    cache_key = id(bookings_df)
+    cached = _PREPARED_BOOKINGS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     df = bookings_df.copy()
     df["TransactionDate"] = pd.to_datetime(df["TransactionDate"], errors="coerce", utc=True)
     if df["TransactionDate"].dt.tz is None:
@@ -732,7 +841,14 @@ def _prepare_bookings(bookings_df):
     if existing:
         df["TotalFees"] = df[existing].sum(axis=1) / 1.20  # Strip VAT — all fees ex-VAT
 
+    _PREPARED_BOOKINGS_CACHE[cache_key] = df
     return df
+
+
+def _clear_prepared_bookings_cache():
+    """Drop the memoised prepared-bookings frame. Called at end of main()
+    to avoid retaining a multi-million-row DataFrame past the run."""
+    _PREPARED_BOOKINGS_CACHE.clear()
 
 
 def build_daily_by_channel(bookings_df, start_date, end_date):
@@ -1166,14 +1282,14 @@ def build_expansion_revenue(bookings_df, accounts_df):
     accts["DateTimeCreated"] = pd.to_datetime(accts["DateTimeCreated"], errors="coerce", utc=True)
     accts["_id"] = _normalise_id(accts[id_col])
 
-    # Build account creation lookup — vectorised
+    # Build account creation lookup
     bk["_acct_id"] = _normalise_id(bk["AccountId"])
     acct_created_series = accts.set_index("_id")["DateTimeCreated"]
 
     # Map creation date to each booking row
     bk["_created"] = bk["_acct_id"].map(acct_created_series)
 
-    # Vectorised month difference
+    # Month difference
     txn_months = pd.to_datetime(bk["TransactionDate"]).dt.to_period("M")
     created_months = pd.to_datetime(bk["_created"]).dt.to_period("M")
     bk["_months_since"] = (
@@ -1181,7 +1297,7 @@ def build_expansion_revenue(bookings_df, accounts_df):
         (txn_months.dt.month - created_months.dt.month)
     ).clip(lower=0)
 
-    # Vectorised lifecycle stage classification
+    # Lifecycle stage classification
     conditions = [
         bk["_created"].isna(),
         bk["_months_since"] == 0,
@@ -1254,7 +1370,7 @@ def build_cohort_curves(bookings_df, accounts_df):
     accts["DateTimeCreated"] = pd.to_datetime(accts["DateTimeCreated"], errors="coerce", utc=True)
     accts["_id"] = _normalise_id(accts[id_col])
 
-    # Assign cohort quarter and creation date — vectorised
+    # Assign cohort quarter and creation date
     accts["cohort_q"] = pd.to_datetime(accts["DateTimeCreated"]).dt.to_period("Q").astype(str)
     cohort_series = accts.set_index("_id")["cohort_q"]
     created_series = accts.set_index("_id")["DateTimeCreated"]
@@ -1265,7 +1381,7 @@ def build_cohort_curves(bookings_df, accounts_df):
     bk["cohort"] = bk["_acct_id"].map(cohort_series)
     bk = bk[bk["cohort"].notna()]
 
-    # Vectorised month-of-life calculation
+    # Month-of-life calculation
     bk["_created"] = bk["_acct_id"].map(created_series)
     txn_periods = pd.to_datetime(bk["TransactionDate"]).dt.to_period("M")
     created_periods = pd.to_datetime(bk["_created"]).dt.to_period("M")
@@ -1329,6 +1445,7 @@ def build_concentration(bookings_df, accounts_df):
 
     today = datetime.now(UK_TZ).date()
     cutoff_365 = today - timedelta(days=365)
+    cutoff_730 = today - timedelta(days=730)
 
     # --- Calculate tier assignments using v2 logic ---
     # Lifetime metrics
@@ -1348,41 +1465,33 @@ def build_concentration(bookings_df, accounts_df):
     else:
         current = pd.DataFrame(columns=["revenue_current", "tickets_current"])
 
-    metrics = lifetime.join(current, how="left").fillna(0)
+    # Previous-period metrics (365–730 days ago) — needed so the v2
+    # calculator can produce Tier_Movement labels for the dashboard.
+    prev_bk = bk[(bk["txn_date"] >= cutoff_730) & (bk["txn_date"] < cutoff_365)]
+    if len(prev_bk) > 0:
+        previous = prev_bk.groupby("AccountId_int").agg(
+            revenue_previous=("TotalFees", "sum"),
+            tickets_previous=("TicketQuantity", "sum"),
+        )
+    else:
+        previous = pd.DataFrame(columns=["revenue_previous", "tickets_previous"])
+
+    metrics = lifetime.join(current, how="left").join(previous, how="left").fillna(0)
     metrics = metrics[metrics["tickets_lifetime"] > 0]
 
-    # Fees are already ex-VAT from _prepare_bookings — no further stripping needed
-
-    # Activation mask
-    activated = (metrics["tickets_current"] >= MIN_TICKETS_FOR_ACTIVE)
-    paid_activated = activated & (metrics["revenue_current"] > 0)
-    free_activated = activated & (metrics["revenue_current"] == 0)
-
-    # Percentile ranks (inverted: lower = better) among paid activated
-    for col in ["revenue_current", "revenue_lifetime", "years_loyalty"]:
-        metrics[f"{col}_pct"] = pd.Series(dtype="float64", index=metrics.index)
-        if paid_activated.sum() > 0:
-            subset = metrics.loc[paid_activated, col]
-            metrics.loc[paid_activated, f"{col}_pct"] = (1 - subset.rank(pct=True, method="average")) * 100
-
-    # Composite score
-    metrics["composite"] = (
-        0.55 * metrics["revenue_current_pct"].fillna(100) +
-        0.35 * metrics["revenue_lifetime_pct"].fillna(100) +
-        0.10 * metrics["years_loyalty_pct"].fillna(100)
-    ).round(2)
-
-    # Assign tiers
-    TIER_BANDS = {"Tier 1": 2, "Tier 2": 10, "Tier 3": 25, "Tier 4": 50, "Tier 5": 100}
-    metrics["tier"] = "Nil"
-
-    if paid_activated.sum() > 0:
-        active_scores = metrics.loc[paid_activated, "composite"]
-        active_rank = active_scores.rank(pct=True, method="average") * 100
-        for tier, threshold in sorted(TIER_BANDS.items(), key=lambda x: x[1], reverse=True):
-            metrics.loc[active_rank.index[active_rank <= threshold], "tier"] = tier
-
-    metrics.loc[free_activated, "tier"] = "Free"
+    # Delegate scoring/banding/movement to the shared v2 calculator.
+    # Inputs are already ex-VAT (TotalFees from _prepare_bookings), so we
+    # pass vat_rate=1.0 inside the helper.
+    metrics = _apply_v2_tiers_from_dashboard_metrics(
+        metrics,
+        revenue_current_col="revenue_current",
+        revenue_lifetime_col="revenue_lifetime",
+        years_loyalty_col="years_loyalty",
+        tickets_current_col="tickets_current",
+        tickets_lifetime_col="tickets_lifetime",
+        revenue_previous_col="revenue_previous",
+        tickets_previous_col="tickets_previous",
+    )
 
     # --- Build concentration outputs ---
     # Map tier back to bookings
@@ -2102,42 +2211,20 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
     numeric_cols = metrics.select_dtypes(include="number").columns
     metrics[numeric_cols] = metrics[numeric_cols].fillna(0)
 
-    # Fees are already ex-VAT from _prepare_bookings — use directly for tier scoring
-    fees_ex_vat_current = metrics["fees_current"]
-    fees_ex_vat_lifetime = metrics["fees_lifetime"]
-
     # --- Composite tier scoring (v2) ---
-    activated = metrics["tickets_current"] >= MIN_TICKETS_FOR_ACTIVE
-    paid_activated = activated & (fees_ex_vat_current > 0)
-    free_activated = activated & (fees_ex_vat_current == 0)
-
-    for col_name, col_data in [
-        ("fees_current_pct", fees_ex_vat_current),
-        ("fees_lifetime_pct", fees_ex_vat_lifetime),
-        ("years_active_pct", metrics["years_active"]),
-    ]:
-        metrics[col_name] = pd.Series(dtype="float64", index=metrics.index)
-        if paid_activated.sum() > 0:
-            subset = col_data[paid_activated]
-            metrics.loc[paid_activated, col_name] = (
-                (1 - subset.rank(pct=True, method="average")) * 100
-            )
-
-    metrics["composite_score"] = (
-        0.55 * metrics["fees_current_pct"].fillna(100) +
-        0.35 * metrics["fees_lifetime_pct"].fillna(100) +
-        0.10 * metrics["years_active_pct"].fillna(100)
-    ).round(2)
-
-    # Assign tiers
-    TIER_BANDS = {"Tier 1": 2, "Tier 2": 10, "Tier 3": 25, "Tier 4": 50, "Tier 5": 100}
-    metrics["tier"] = "Nil"
-    if paid_activated.sum() > 0:
-        active_scores = metrics.loc[paid_activated, "composite_score"]
-        active_rank = active_scores.rank(pct=True, method="average") * 100
-        for tier, threshold in sorted(TIER_BANDS.items(), key=lambda x: x[1], reverse=True):
-            metrics.loc[active_rank.index[active_rank <= threshold], "tier"] = tier
-    metrics.loc[free_activated, "tier"] = "Free"
+    # Inputs are already ex-VAT (fees_current/fees_lifetime from
+    # _prepare_bookings), so vat_rate=1.0 inside the helper. Previous-period
+    # columns flow through so the calculator can emit tier_movement.
+    metrics = _apply_v2_tiers_from_dashboard_metrics(
+        metrics,
+        revenue_current_col="fees_current",
+        revenue_lifetime_col="fees_lifetime",
+        years_loyalty_col="years_active",
+        tickets_current_col="tickets_current",
+        tickets_lifetime_col="tickets_lifetime",
+        revenue_previous_col="fees_previous",
+        tickets_previous_col="tickets_previous",
+    )
 
     # --- Activity rating ---
     days_since_txn = (today - metrics["last_txn"]).dt.total_seconds() / 86400
@@ -2204,6 +2291,8 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
         row["postcode_area"] = area_lookup.get(aid, "")
         row["gateway"] = gw_lookup.get(aid, "")
         row["tier"] = metrics.at[aid, "tier"]
+        row["previous_tier"] = metrics.at[aid, "previous_tier"]
+        row["tier_movement"] = metrics.at[aid, "tier_movement"]
         row["activity_rating"] = metrics.at[aid, "activity_rating"]
         row["price_band"] = band_lookup.get(aid, "")
         row["pct_box_office"] = boxoffice_lookup.get(aid, 0)
@@ -2330,6 +2419,8 @@ def build_account_metrics(accounts_df, bookings_df, ppc_data):
             "postcode_area": area_lookup.get(aid, ""),
             "gateway": "",
             "tier": "Nil",
+            "previous_tier": "Nil",
+            "tier_movement": "No Change",
             "activity_rating": "Never Transacted",
             "price_band": "",
             "pct_box_office": 0,
@@ -2533,6 +2624,10 @@ def generate(dry_run=False, local_dir=None):
     outputs["account_daily.json"] = build_account_daily(combined_bookings)
 
     outputs["account_targets.json"] = load_account_targets()
+
+    # All builders done — drop the cached prepared frame so its memory is
+    # reclaimable before the JSON serialisation step.
+    _clear_prepared_bookings_cache()
 
     generation_duration = time.time() - start_time
 

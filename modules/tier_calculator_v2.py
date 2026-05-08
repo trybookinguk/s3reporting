@@ -30,8 +30,9 @@ WEIGHT_A_REVENUE = 0.55
 WEIGHT_B_LIFETIME = 0.35
 WEIGHT_C_LOYALTY = 0.10
 
-# VAT rate — revenue from the aggregator is VAT-inclusive; we strip it
-# so figures reflect actual value to the business.
+# Default VAT rate — revenue from the aggregator is VAT-inclusive; we strip
+# it so figures reflect actual value to the business. Callers that already
+# hand in ex-VAT figures should pass vat_rate=1.0 to avoid double-stripping.
 VAT_RATE = 1.20
 
 # Tier bands: maximum composite percentile rank (lower score = better)
@@ -56,42 +57,63 @@ TIER_NUMERIC = {
 }
 
 
-def _build_metrics_df(account_metrics: Dict[int, Dict[str, Any]]) -> pd.DataFrame:
+def _build_metrics_df(account_metrics: Dict[int, Dict[str, Any]],
+                      vat_rate: float = VAT_RATE) -> pd.DataFrame:
     """
     Build a DataFrame from the BookingAggregator output dictionary.
 
     Extracts the four scoring metrics for current and previous periods,
     plus lifetime tickets for the activation filter.
     """
-    rows = []
-    for account_id, m in account_metrics.items():
-        revenue_lifetime = float(m.get('revenue_lifetime', 0))
-        revenue_current = float(m.get('revenue_current', 0))
-        # Previous-period lifetime revenue: clamp to avoid float imprecision negatives
-        revenue_lifetime_prev = max(0.0, revenue_lifetime - revenue_current)
+    if not account_metrics:
+        return pd.DataFrame()
 
-        rows.append({
-            'AccountId': account_id,
-            'revenue_current': max(0.0, revenue_current / VAT_RATE),
-            'revenue_lifetime': max(0.0, revenue_lifetime / VAT_RATE),
-            'tickets_current': max(0, int(m.get('tickets_current', 0))),
-            # Cap years_loyalty so tenure beyond YEARS_LOYALTY_CAP doesn't
-            # keep stacking. Accounts at or above the cap tie at the top of
-            # the loyalty distribution; accounts below it rank against each
-            # other normally.
-            'years_loyalty': min(max(0, int(m.get('years_loyalty', 0))), YEARS_LOYALTY_CAP),
-            'revenue_prev': max(0.0, float(m.get('revenue_prev', 0)) / VAT_RATE),
-            'revenue_lifetime_prev': max(0.0, revenue_lifetime_prev / VAT_RATE),
-            'tickets_prev': max(0, int(m.get('tickets_prev', 0))),
-            'years_loyalty_prev': min(max(0, int(m.get('years_loyalty_prev', 0))), YEARS_LOYALTY_CAP),
-            'tickets_lifetime': max(0, int(m.get('tickets_lifetime', 0))),
-        })
+    # Construct via from_dict + orient='index' so we avoid a Python-level
+    # row loop. Missing keys are tolerated by reindexing the columns we
+    # care about and filling NaN with 0 before the numeric coercions.
+    raw = pd.DataFrame.from_dict(account_metrics, orient='index')
+    expected_cols = [
+        'revenue_lifetime', 'revenue_current', 'revenue_prev',
+        'tickets_lifetime', 'tickets_current', 'tickets_prev',
+        'years_loyalty', 'years_loyalty_prev',
+    ]
+    raw = raw.reindex(columns=expected_cols).fillna(0)
 
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return df
+    revenue_lifetime = pd.to_numeric(raw['revenue_lifetime'], errors='coerce').fillna(0).astype(float)
+    revenue_current = pd.to_numeric(raw['revenue_current'], errors='coerce').fillna(0).astype(float)
+    revenue_prev = pd.to_numeric(raw['revenue_prev'], errors='coerce').fillna(0).astype(float)
+    # Previous-period lifetime revenue: clamp to avoid float imprecision negatives
+    revenue_lifetime_prev = (revenue_lifetime - revenue_current).clip(lower=0.0)
 
-    # Filter to accounts that have ever transacted
+    tickets_current = pd.to_numeric(raw['tickets_current'], errors='coerce').fillna(0).astype(int)
+    tickets_prev = pd.to_numeric(raw['tickets_prev'], errors='coerce').fillna(0).astype(int)
+    tickets_lifetime = pd.to_numeric(raw['tickets_lifetime'], errors='coerce').fillna(0).astype(int)
+
+    # Cap years_loyalty so tenure beyond YEARS_LOYALTY_CAP doesn't keep
+    # stacking. Accounts at or above the cap tie at the top of the loyalty
+    # distribution; accounts below it rank against each other normally.
+    years_loyalty = (
+        pd.to_numeric(raw['years_loyalty'], errors='coerce').fillna(0).astype(int)
+        .clip(lower=0, upper=YEARS_LOYALTY_CAP)
+    )
+    years_loyalty_prev = (
+        pd.to_numeric(raw['years_loyalty_prev'], errors='coerce').fillna(0).astype(int)
+        .clip(lower=0, upper=YEARS_LOYALTY_CAP)
+    )
+
+    df = pd.DataFrame({
+        'AccountId': raw.index,
+        'revenue_current': (revenue_current / vat_rate).clip(lower=0.0),
+        'revenue_lifetime': (revenue_lifetime / vat_rate).clip(lower=0.0),
+        'tickets_current': tickets_current.clip(lower=0),
+        'years_loyalty': years_loyalty,
+        'revenue_prev': (revenue_prev / vat_rate).clip(lower=0.0),
+        'revenue_lifetime_prev': (revenue_lifetime_prev / vat_rate).clip(lower=0.0),
+        'tickets_prev': tickets_prev.clip(lower=0),
+        'years_loyalty_prev': years_loyalty_prev,
+        'tickets_lifetime': tickets_lifetime.clip(lower=0),
+    }).reset_index(drop=True)
+
     df = df[df['tickets_lifetime'] > 0].copy()
     logger.debug(f"Metrics DataFrame built: {len(df):,} accounts with lifetime tickets > 0")
     return df
@@ -201,13 +223,18 @@ def _calculate_movement(current_tier: pd.Series, previous_tier: pd.Series) -> pd
     return movement
 
 
-def calculate_composite_tiers(account_metrics: Dict[int, Dict[str, Any]]) -> pd.DataFrame:
+def calculate_composite_tiers(account_metrics: Dict[int, Dict[str, Any]],
+                              vat_rate: float = VAT_RATE) -> pd.DataFrame:
     """
     Main entry point: compute composite tiers for all accounts.
 
     Args:
         account_metrics: Dictionary keyed by AccountId, as returned by
                          BookingAggregator.aggregate_bookings().
+        vat_rate: Divisor applied to revenue figures to strip VAT. Defaults
+                  to 1.20 because the aggregator emits VAT-inclusive revenue.
+                  Callers feeding in already-ex-VAT figures must pass 1.0
+                  to avoid double-stripping.
 
     Returns:
         DataFrame with one row per account containing tier assignments,
@@ -217,7 +244,7 @@ def calculate_composite_tiers(account_metrics: Dict[int, Dict[str, Any]]) -> pd.
         logger.warning("No account metrics provided")
         return pd.DataFrame()
 
-    df = _build_metrics_df(account_metrics)
+    df = _build_metrics_df(account_metrics, vat_rate=vat_rate)
     if df.empty:
         return pd.DataFrame()
 

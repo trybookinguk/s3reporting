@@ -184,7 +184,7 @@ class HistoryBuilder:
         """Add (or overwrite) one day's tier results."""
         day_iso = day.isoformat()
         day_data: Dict[int, Tuple[Optional[int], Optional[float]]] = {}
-        # Vectorised pass over the dataframe — avoids per-row .iterrows() cost.
+        # Single pass over the dataframe via numpy arrays.
         ids = current_df["AccountId"].astype(int).to_numpy()
         tier_codes = current_df["Current_Tier"].map(TIER_TO_INT).to_numpy()
         if "Composite_Score" in current_df.columns:

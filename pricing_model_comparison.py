@@ -40,7 +40,7 @@ from modules.utils.data_loader import load_booking_data, filter_successful_trans
 
 def classify_transactions(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Classify transactions using vectorised operations.
+    Classify transactions.
 
     Adds columns:
     - Sales_Channel: 'Box Office' or 'Online'
@@ -86,7 +86,7 @@ def classify_transactions(df: pd.DataFrame) -> pd.DataFrame:
 
 def calculate_fees_vectorised(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Calculate current and proposed fees using vectorised operations.
+    Calculate current and proposed fees.
 
     Current Structure (inc VAT) - converted to ex VAT:
     - All fee columns summed and divided by 1.2
@@ -203,14 +203,14 @@ def main():
     booking_df = booking_df[booking_df['PaymentReceived'].fillna(0) > 0]
     print(f"  Excluded {free_count:,} free tickets, {len(booking_df):,} paid transactions remaining")
 
-    # Classify transactions (vectorised)
+    # Classify transactions
     print("Classifying transactions...")
     booking_df = classify_transactions(booking_df)
 
     # Add month column (TransactionDate already converted to datetime above)
     booking_df['Month'] = booking_df['TransactionDate'].dt.to_period('M')
 
-    # Calculate fees (vectorised)
+    # Calculate fees
     print("Calculating fees...")
     booking_df = calculate_fees_vectorised(booking_df)
 
@@ -219,7 +219,7 @@ def main():
     print(f"SUMMARY BY CATEGORY ({analysis_year} Full Year)")
     print("=" * 60)
 
-    # Create category column (vectorised)
+    # Create category column
     booking_df['Category'] = np.where(
         booking_df['Sales_Channel'] == 'Box Office',
         'Box Office - ' + booking_df['BO_Type'].fillna('Unknown'),

@@ -1,6 +1,5 @@
 """
-Vectorized retention priority scoring for TryBooking accounts.
-Ultra-fast bulk pandas operations for prioritizing retention efforts.
+Retention priority scoring for TryBooking accounts.
 """
 import pandas as pd
 import numpy as np
@@ -10,7 +9,7 @@ import calendar
 
 def calculate_retention_priorities(df):
     """
-    Vectorized retention priority calculation for entire DataFrame.
+    Retention priority calculation for entire DataFrame.
     
     Args:
         df: DataFrame with columns:
@@ -31,7 +30,7 @@ def calculate_retention_priorities(df):
     # Initialize result series
     priority_scores = pd.Series(0, index=df.index, dtype='int64')
     
-    # Define tier weights (vectorized mapping)
+    # Define tier weights
     tier_weights = {
         "Key Account": 5,
         "High Value": 4, 
@@ -42,7 +41,7 @@ def calculate_retention_priorities(df):
         "NIL": 1
     }
     
-    # Define rating severity (vectorized mapping)
+    # Define rating severity
     # Hybrid AU/UK rating values
     rating_severity = {
         # Excluded from priority scoring
@@ -64,13 +63,13 @@ def calculate_retention_priorities(df):
         "Inactive": 0
     }
     
-    # Vectorized tier weight calculation
+    # Tier weight calculation
     tier_weight_series = df['Current_Tier'].map(tier_weights).fillna(1)
     
-    # Vectorized rating severity calculation  
+    # Rating severity calculation
     rating_severity_series = df['Rating'].map(rating_severity).fillna(0)
     
-    # Vectorized revenue score handling
+    # Revenue score handling
     revenue_scores = pd.Series(0, index=df.index)
     
     # Handle string revenue scores first (takes precedence)
@@ -154,7 +153,7 @@ def calculate_retention_priorities(df):
     # Without that data, we keep the rapid drop alert but can reduce severity based on context
     # The revenue_drop_score (year-over-year) provides additional context
     
-    # Calculate base priority (vectorized)
+    # Calculate base priority
     # Use a more balanced formula to prevent excessive scores
     # Old formula: tier_weight × (rating_severity + revenue_score) could yield 40+
     # New formula: (tier_weight × 2) + rating_severity + revenue_score yields max ~18
@@ -165,7 +164,7 @@ def calculate_retention_priorities(df):
     # Note: Removed minimum score logic as the new additive formula 
     # already produces appropriate base scores for high-value accounts
     
-    # Tier drop boost (vectorized)
+    # Tier drop boost
     tier_hierarchy = ["NIL", "Tier 1", "Tier 2", "Tier 3", "Tier 4", "High Value", "Key Account"]
     tier_to_index = {tier: i for i, tier in enumerate(tier_hierarchy)}
     
@@ -200,7 +199,7 @@ def calculate_retention_priorities(df):
             priority_scores[full_significant_mask] += 4  # Significant tier drop boost
             priority_scores[full_minor_mask] += 2       # Minor tier drop boost
     
-    # Annual reachout boost (fully vectorized)
+    # Annual reachout boost
     annual_mask = (
         (df['Event_Frequency_Current'] == 'Annual') &
         df['months_active_current'].notna() &
@@ -214,7 +213,7 @@ def calculate_retention_priorities(df):
         current_day = current_date.day
         month_name_to_number = {calendar.month_name[i]: i for i in range(1, 13)}
         
-        # Vectorized annual reachout boost with lead time consideration
+        # Annual reachout boost with lead time consideration
         annual_accounts = df[annual_mask].copy()
         
         # Get average lead days, default to 60 if not available
@@ -223,7 +222,7 @@ def calculate_retention_priorities(df):
         else:
             annual_accounts['lead_days'] = 60
         
-        # Vectorized month processing with lead time
+        # Month processing with lead time
         def check_upcoming_months_with_lead(row):
             months_list = row['months_active_current']
             lead_days = row['lead_days'] if pd.notna(row['lead_days']) else 60
@@ -261,16 +260,16 @@ def calculate_retention_priorities(df):
                     return True
             return False
         
-        # Apply vectorized check with lead time
+        # Apply check with lead time
         annual_boost_mask = annual_accounts.apply(check_upcoming_months_with_lead, axis=1)
         
-        # Apply boost using vectorized maximum
+        # Apply boost using element-wise maximum
         # Set to 11 to ensure High priority (10-15 range)
         boost_indices = annual_accounts[annual_boost_mask].index
         if len(boost_indices) > 0:
             priority_scores.loc[boost_indices] = np.maximum(priority_scores.loc[boost_indices], 11)
     
-    # Rapid drop alert boosting (vectorized)
+    # Rapid drop alert boosting
     # Moderate rapid drops (score 2)
     moderate_rapid_mask = rapid_drop_alerts == 2
     priority_scores[moderate_rapid_mask] = np.maximum(priority_scores[moderate_rapid_mask], 13)
@@ -341,7 +340,7 @@ def calculate_retention_priorities(df):
         )
         priority_scores[critical_rapid_mask] = 19
     
-    # School summer holiday adjustments (vectorized)
+    # School summer holiday adjustments
     if 'Industry' in df.columns:
         education_mask = df['Industry'] == 'Education'
         
@@ -400,7 +399,7 @@ def calculate_retention_priorities(df):
 
 def categorize_priorities(priority_scores):
     """
-    Vectorized priority categorization.
+    Priority categorisation.
     
     Args:
         priority_scores: Series of numeric priority scores

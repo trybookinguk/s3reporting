@@ -53,7 +53,7 @@ def calculate_percentiles(metrics_df):
 
 
 def prepare_metrics_dataframe(account_metrics):
-    """Convert aggregated account metrics to DataFrame format using vectorized operations.
+    """Convert aggregated account metrics to DataFrame format.
     
     Args:
         account_metrics: Dictionary of aggregated account metrics
@@ -63,7 +63,7 @@ def prepare_metrics_dataframe(account_metrics):
     """
     logger.info(f"Processing {len(account_metrics):,} accounts into metrics dataframe")
     
-    # Convert to DataFrame first for vectorized operations
+    # Convert to DataFrame
     df = pd.DataFrame.from_dict(account_metrics, orient='index')
     
     # Filter out accounts with no lifetime tickets
@@ -76,8 +76,7 @@ def prepare_metrics_dataframe(account_metrics):
     if len(df) == 0:
         logger.warning("No accounts with transactions to process")
         return pd.DataFrame()
-    
-    # Vectorized calculations
+
     df['Account_Name'] = df.index
     
     # Direct column mappings with defaults
@@ -99,8 +98,8 @@ def prepare_metrics_dataframe(account_metrics):
             df[new_col] = df[old_col].fillna(default)
         else:
             df[new_col] = default
-    
-    # Vectorized derived calculations
+
+
     df['lifetime_revenue_prev'] = df['lifetime_revenue'] - df['revenue_current']
     df['has_activity'] = df['tickets_current'] >= MIN_TICKETS_FOR_ACTIVE
     
@@ -111,9 +110,7 @@ def prepare_metrics_dataframe(account_metrics):
     for col in float_columns:
         df[col] = df[col].astype(float)
     
-    # Handle complex event data - this part can't be fully vectorized due to nested structures
-    # But we can optimize by only accessing each row once
-    event_data_cols = ['event_months_current', 'event_months_previous', 
+    event_data_cols = ['event_months_current', 'event_months_previous',
                       'event_months_freq_current', 'event_months_freq_previous',
                       'event_creation_info', 'last_booking_date']
     
@@ -123,7 +120,7 @@ def prepare_metrics_dataframe(account_metrics):
                     for col in event_data_cols}, axis=1
     )
     
-    # Clear transaction data to free memory (vectorized)
+    # Clear transaction data to free memory
     if 'transactions' in df.columns:
         df.drop('transactions', axis=1, inplace=True)
     
@@ -197,21 +194,14 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     
     logger.info(f"Tier calculation completed in {time.time() - tier_start:.1f}s")
     
-    # Vectorized Account_Name conversion
     logger.debug("Processing account names...")
-    
-    def convert_account_name(name):
-        """Safely convert account name to string format."""
-        try:
-            if pd.notna(name) and str(name).strip():
-                return str(int(float(name)))
-            return None
-        except (ValueError, TypeError):
-            return None
-    
-    # Vectorized account name conversion (faster than .apply())
-    account_names_list = metrics_df['Account_Name'].tolist()
-    metrics_df['Account_Name_Clean'] = [convert_account_name(name) for name in account_names_list]
+
+    # Coerce to nullable Int64 first (drops anything not numeric to NA), then
+    # render as plain object-dtype strings. Avoids per-row try/except over
+    # ~25k rows. Object dtype matches downstream merge keys (lookup_df).
+    cleaned = pd.to_numeric(metrics_df['Account_Name'], errors='coerce').astype('Int64')
+    str_series = cleaned.astype('string').where(cleaned.notna(), None)
+    metrics_df['Account_Name_Clean'] = str_series.astype(object)
     
     # Filter out invalid account names
     valid_mask = metrics_df['Account_Name_Clean'].notna()
@@ -226,12 +216,11 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         logger.warning("No valid accounts to process after name conversion.")
         return pd.DataFrame()
     
-    # Extract event data components into separate columns for vectorization
+    # Extract event data components into separate columns
     logger.debug("Extracting event data...")
     logger.info("Extracting event data components")
     event_start = time.time()
     
-    # Vectorized event data extraction (much faster than .apply())
     event_data_list = metrics_df['_event_data'].tolist()
     
     metrics_df['event_months_current'] = [x.get('event_months_current', set()) for x in event_data_list]
@@ -243,7 +232,6 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     
     logger.info(f"Event data extraction completed in {time.time() - event_start:.1f}s")
     
-    # Vectorized month count calculations (much faster than .apply(len))
     freq_current_list = metrics_df['event_months_freq_current'].tolist()
     freq_previous_list = metrics_df['event_months_freq_previous'].tolist()
     
@@ -314,7 +302,6 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         metrics_df['has_event_creation_current'] = False
         metrics_df['has_event_creation_previous'] = False
     
-    # VECTORIZED event frequency classification - major speedup
     logger.debug("Classifying event frequencies...")
     
     # Ensure no NaN values in month counts
@@ -335,7 +322,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     metrics_df['freq_month_count_current'] = metrics_df['freq_month_count_current'].clip(upper=12)
     metrics_df['freq_month_count_previous'] = metrics_df['freq_month_count_previous'].clip(upper=12)
     
-    # Vectorized current frequency classification with explicit handling
+    # Current frequency classification with explicit handling
     current_freq = pd.cut(
         metrics_df['freq_month_count_current'],
         bins=[-1, 0, 1, 4, 9, 13],  # Extended upper bound to catch 12
@@ -350,7 +337,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     # Event Frequency only has: Continuous, Regular, Seasonal, Annual, Inactive
     # Accounts that created events but haven't sold tickets remain "Inactive" in frequency
     
-    # Vectorized previous frequency classification
+    # Previous frequency classification
     # For accounts with no previous period data, keep as blank/null rather than 'Inactive'
     # Check if they actually had a previous period to analyze
     has_previous_data = pd.Series(False, index=metrics_df.index)
@@ -411,8 +398,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         
         return avg_lead_days, last_event_date
     
-    # FULLY VECTORIZED event metrics calculation using numpy
-    logger.debug("Extracting event metrics (vectorized)...")
+    logger.debug("Extracting event metrics...")
     event_creation_list = metrics_df['event_creation_info'].tolist()
     
     # Pre-allocate numpy arrays for speed
@@ -437,8 +423,8 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     metrics_df['avg_lead_days'] = avg_lead_days
     metrics_df['last_event_date'] = last_event_dates
     
-    # Vectorized days since last activity calculation
-    # Convert to datetime if needed and calculate days difference vectorized
+    # Days since last activity
+    # Convert to datetime if needed and calculate days difference
     last_booking_dates = pd.to_datetime(metrics_df['last_booking_date'], errors='coerce')
     # Ensure timezone compatibility: if last_booking_dates are timezone-aware, make TODAY timezone-aware too
     if len(last_booking_dates) > 0 and last_booking_dates.notna().any():
@@ -453,19 +439,18 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     # Fill NaT values with 999
     metrics_df['days_since_last'] = metrics_df['days_since_last'].fillna(999).astype(int)
     
-    # VECTORIZED months active patterns processing
+    # Months-active patterns processing
     logger.debug("Processing months active patterns...")
     
-    # Truly vectorized months active fingerprint extraction
     def get_months_vectorized(event_months_list):
-        """Fully vectorized version of get_months_active_fingerprint"""
+        """Months-active fingerprint extraction across all rows."""
         return [
             sorted(list({month for year, month in months_set})) if months_set else []
             for months_set in event_months_list
         ]
     
     def format_months_vectorized(months_list):
-        """Fully vectorized version of format_months_active_for_zoho"""
+        """Format months-active fingerprints for the Zoho payload."""
         month_names = ['', 'January', 'February', 'March', 'April', 'May', 'June',
                       'July', 'August', 'September', 'October', 'November', 'December']
         return [
@@ -473,11 +458,11 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             for months in months_list
         ]
     
-    # Apply vectorized functions
+    # Apply months helpers
     metrics_df['months_active_current'] = get_months_vectorized(metrics_df['event_months_freq_current'].tolist())
     metrics_df['Months_Active'] = format_months_vectorized(metrics_df['months_active_current'].tolist())
     
-    # Vectorized historical months combination
+    # Historical months combination
     current_months_list = metrics_df['event_months_freq_current'].tolist()
     previous_months_list = metrics_df['event_months_freq_previous'].tolist()
     
@@ -488,28 +473,22 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     metrics_df['all_freq_months'] = all_freq_months_list
     metrics_df['months_active_historical'] = get_months_vectorized(all_freq_months_list)
     
-    # Check if has historical data (vectorized)
+    # Check if has historical data
     previous_months_lengths = [len(x) if x else 0 for x in metrics_df['event_months_previous'].tolist()]
     metrics_df['has_historical'] = (
         (metrics_df['years_loyalty'] > 0) | 
         (pd.Series(previous_months_lengths, index=metrics_df.index) > 0)
     )
     
-    # VECTORIZED activity rating calculation - massive performance improvement
     logger.debug(f"Determining activity ratings for {len(metrics_df):,} accounts...")
-    logger.info(f"Starting VECTORIZED activity rating calculation for {len(metrics_df):,} accounts")
-    
     activity_start_time = time.time()
-    
-    # Import vectorized function
+
     from .activity_rating import calculate_activity_ratings
-    
-    # Apply vectorized calculation (replaces slow row-by-row processing)
     metrics_df['Rating'] = calculate_activity_ratings(metrics_df)
-    
+
     elapsed = time.time() - activity_start_time
     rate = len(metrics_df) / elapsed if elapsed > 0 else 0
-    logger.info(f"VECTORIZED activity rating completed in {elapsed:.1f}s ({rate:.0f} accounts/sec) - MAJOR speedup!")
+    logger.info(f"Activity rating completed in {elapsed:.1f}s ({rate:.0f} accounts/sec)")
     
     # Initialize revenue drop fields with efficient defaults
     metrics_df['revenue_drop_category'] = 'Stable'  # More meaningful than 'None'
@@ -518,12 +497,12 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     metrics_df['rapid_drop_alert'] = 0
     metrics_df['rapid_drop_details'] = None  # Save memory
     
-    # Process revenue drops with booking data if available - PROPERLY OPTIMIZED
+    # Process revenue drops with booking data if available
     if booking_data_df is not None and not booking_data_df.empty and 'Industry' in metrics_df.columns:
         logger.debug("Calculating revenue factors...")
         
-        # OPTIMIZED: Pre-aggregate booking data instead of full groupby
-        logger.debug("Pre-aggregating booking data for maximum performance...")
+        # Pre-aggregate booking data instead of full groupby
+        logger.debug("Pre-aggregating booking data...")
         index_start = time.time()
         
         # Only keep columns we actually need
@@ -547,10 +526,10 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             
             logger.debug(f"Processing {has_industry.sum()} accounts with industry data...")
             
-            # Determine account patterns vectorized
+            # Determine account patterns
             accounts_with_industry = metrics_df.loc[has_industry].copy()
             
-            # Vectorized pattern classification
+            # Pattern classification
             is_annual = (
                 (accounts_with_industry['Event_Frequency_Current'] == 'Annual') |
                 (accounts_with_industry['Event_Frequency_Previous'] == 'Annual')
@@ -564,14 +543,13 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             accounts_with_industry.loc[is_annual, 'account_pattern'] = 'annual'
             accounts_with_industry.loc[is_seasonal, 'account_pattern'] = 'seasonal'
             
-            # FULLY VECTORIZED revenue factor calculation - eliminate all loops
-            logger.debug("Using fully vectorized revenue calculation...")
+            logger.debug("Computing revenue factors...")
             
             # Pre-calculate all metrics in bulk using numpy for maximum speed
             current_revenues = accounts_with_industry['revenue_current'].values
             prev_revenues = accounts_with_industry['revenue_prev'].values
             
-            # Vectorized revenue ratio calculation
+            # Revenue ratio calculation
             with np.errstate(divide='ignore', invalid='ignore'):
                 revenue_ratios = np.where(
                     prev_revenues > 0,
@@ -579,21 +557,21 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                     np.where(current_revenues > 0, 2.0, 1.0)  # Growth if new revenue, stable if both zero
                 )
             
-            # Vectorized severity classification using numpy for speed
+            # Severity classification using numpy
             severities = np.select(
                 [revenue_ratios < 0.25, revenue_ratios < 0.50, revenue_ratios < 0.75],
                 ['Severe', 'Significant', 'Moderate'],
                 default='Stable'
             )
             
-            # Vectorized scoring
+            # Scoring
             scores = np.select(
                 [severities == 'Severe', severities == 'Significant', severities == 'Moderate'],
                 [3, 2, 1],
                 default=0
             )
             
-            # Apply pattern-based adjustments vectorized
+            # Apply pattern-based adjustments
             is_annual = accounts_with_industry['account_pattern'] == 'annual'
             is_seasonal = accounts_with_industry['account_pattern'] == 'seasonal'
             
@@ -605,13 +583,13 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             metrics_df.loc[has_industry, 'revenue_drop_score'] = scores
             metrics_df.loc[has_industry, 'revenue_drop_details'] = [{}] * len(accounts_with_industry)
             
-            logger.info(f"Vectorized revenue calculation completed for {len(accounts_with_industry):,} accounts")
+            logger.info(f"Revenue calculation completed for {len(accounts_with_industry):,} accounts")
         
         # Apply simple revenue drop calculation for accounts without industry data
         no_industry = ~has_industry
         if no_industry.any():
             logger.debug(f"Processing {no_industry.sum()} accounts without industry data...")
-            # Vectorized revenue drop calculation for accounts without industry
+            # Revenue drop calculation for accounts without industry
             no_industry_subset = metrics_df.loc[no_industry]
             revenue_current_list = no_industry_subset['revenue_current'].tolist()
             revenue_prev_list = no_industry_subset['revenue_prev'].tolist()
@@ -628,7 +606,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     else:
         # No booking data or no Industry column - apply simple calculation to all
         logger.debug("Applying simple revenue drop calculation to all accounts...")
-        # Vectorized revenue drop calculation for all accounts
+        # Revenue drop calculation for all accounts
         revenue_current_list = metrics_df['revenue_current'].tolist()
         revenue_prev_list = metrics_df['revenue_prev'].tolist()
         
@@ -667,8 +645,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                 str(account_id): group for account_id, group in booking_data_df.groupby('AccountId')
             }
         
-        # FULLY VECTORIZED rapid drop detection - eliminate all loops
-        logger.debug("Using fully vectorized rapid drop detection...")
+        logger.debug("Detecting rapid revenue drops...")
         
         eligible_accounts = metrics_df[eligible_for_rapid_drop]
         total_eligible = len(eligible_accounts)
@@ -692,7 +669,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                 chunk_end = min(i + chunk_size, total_eligible)
                 chunk_ids = account_ids[i:chunk_end]
                 
-                # Vectorized revenue extraction from pre-indexed data
+                # Revenue extraction from pre-indexed data
                 for j, account_id in enumerate(chunk_ids):
                     if account_id in booking_grouped:
                         account_data = booking_grouped[account_id]
@@ -704,7 +681,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                         current_revenues[i+j] = account_data.loc[recent_mask, 'PaymentReceived'].sum()
                         comparison_revenues[i+j] = account_data.loc[comparison_mask, 'PaymentReceived'].sum()
             
-            # Vectorized drop detection logic
+            # Drop detection logic
             with np.errstate(divide='ignore', invalid='ignore'):
                 drop_ratios = np.where(
                     comparison_revenues > 0,
@@ -731,7 +708,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
             if edu_summer_mask.any():
                 logger.info(f"Skipping rapid drop detection for {edu_summer_mask.sum()} education accounts during summer")
             
-            # All other accounts (non-education or not summer) - vectorized check based on patterns
+            # All other accounts (non-education or not summer) — check based on patterns
             normal_mask = ~edu_summer_mask
             if normal_mask.any():
                 normal_indices = np.where(normal_mask)[0]
@@ -811,7 +788,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                 # Apply revenue drop checks only to eligible accounts with sufficient revenue
                 check_drops_mask = eligible_for_rapid_check & in_active_period & (comparison_revenues[normal_indices] >= MIN_REVENUE_FOR_RAPID_DROP)
                 
-                # Vectorized severity scoring
+                # Severity scoring
                 drop_ratios_subset = drop_ratios[normal_indices]
                 
                 # Calculate scores using np.select
@@ -872,7 +849,6 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
                       f"Missing Rating: {missing_rating}, "
                       f"Missing revenue_drop_score: {missing_revenue_score}")
     
-    # VECTORIZED retention priority calculation - major performance improvement  
     from .retention_priority import calculate_retention_priorities, categorize_priorities
     
     priority_scores = calculate_retention_priorities(metrics_df)

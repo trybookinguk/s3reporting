@@ -191,8 +191,7 @@ def calculate_industry_quintiles(industry_data: pd.DataFrame,
     # Get period-appropriate revenue data
     period_days = COMPARISON_PERIOD_DAYS.get(period_type, 84)
     
-    # Vectorized revenue calculation by account for the period
-    # Instead of looping, use groupby with apply
+    # Revenue calculation by account for the period
     revenues = industry_data.groupby('AccountId').apply(
         lambda group: calculate_revenue_for_period(group, period_days)
     ).reset_index(drop=True)

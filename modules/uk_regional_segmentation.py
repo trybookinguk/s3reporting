@@ -1,8 +1,8 @@
 """
 UK Regional Segmentation Module
 
-This module provides vectorized operations for processing UK postcodes and assigning regions
-to accounts and events for client segmentation and targeting.
+Process UK postcodes and assign regions to accounts and events for
+client segmentation and targeting.
 """
 
 import pandas as pd
@@ -56,7 +56,7 @@ def is_valid_uk_postcode_area(area: str) -> bool:
 
 def extract_postcode_areas_vectorized(postcodes: pd.Series) -> pd.Series:
     """
-    Extract postcode areas from a series of postcodes using vectorized operations.
+    Extract postcode areas from a series of postcodes.
     
     Args:
         postcodes: Series of postcode strings
@@ -92,7 +92,7 @@ def extract_postcode_areas_vectorized(postcodes: pd.Series) -> pd.Series:
 
 def get_regions_vectorized(postcode_areas: pd.Series) -> pd.Series:
     """
-    Map postcode areas to regions using vectorized operations.
+    Map postcode areas to regions.
     
     Args:
         postcode_areas: Series of postcode areas
@@ -112,7 +112,7 @@ def get_regions_vectorized(postcode_areas: pd.Series) -> pd.Series:
 def assign_account_regions(accounts_df: pd.DataFrame, events_df: pd.DataFrame, 
                          batch_size: int = 50000) -> pd.DataFrame:
     """
-    Assign regions to accounts using vectorized operations with fallback logic.
+    Assign regions to accounts with fallback logic.
     
     Args:
         accounts_df: DataFrame with account data including AccountPostcode
@@ -193,7 +193,7 @@ def assign_account_regions(accounts_df: pd.DataFrame, events_df: pd.DataFrame,
 
 def process_event_regions(events_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add postcode area and region to events using vectorized operations.
+    Add postcode area and region to events.
     
     Args:
         events_df: DataFrame with event data including EventPostcode
@@ -265,7 +265,6 @@ def generate_data_quality_summary(accounts_df: pd.DataFrame, events_df: pd.DataF
     region_dist = accounts_df['Region'].value_counts().to_dict()
     
     # Postcode area distribution (for accounts with postcodes)
-    # Use vectorized operation directly on the Series, not apply
     postcode_series = accounts_df[accounts_df['Has_Postcode']]['Postcode']
     postcode_areas = extract_postcode_areas_vectorized(postcode_series)
     # Filter to only valid UK postcode areas

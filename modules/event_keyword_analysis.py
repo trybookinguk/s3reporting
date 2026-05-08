@@ -5,8 +5,6 @@ Extracts marketing intelligence from event data:
 - Keyword extraction from event names
 - Temporal patterns (when events happen, lead times)
 - Keyword associations (co-occurring terms)
-
-Optimised for large datasets using vectorised operations.
 """
 
 import calendar
@@ -1000,7 +998,7 @@ def build_keyword_frequency_table(booking_df: pd.DataFrame) -> pd.DataFrame:
     if len(events_df) == 0:
         return pd.DataFrame()
 
-    # Extract keywords for each event (vectorised apply is faster than iterrows)
+    # Extract keywords for each event
     events_df["keywords"] = events_df["EventName"].apply(extract_keywords)
 
     # Build keyword stats

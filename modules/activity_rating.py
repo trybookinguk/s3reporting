@@ -210,7 +210,7 @@ def calculate_activity_ratings(df):
             # Convert last_event_date to pandas datetime for calculations
             last_event_ts = pd.to_datetime(subset['last_event_date'])
 
-            # Calculate expected dates (vectorised)
+            # Calculate expected dates
             avg_leads = subset['avg_lead_days'].fillna(60) if 'avg_lead_days' in subset.columns else pd.Series(60, index=subset.index)
             expected_next_with_grace = (last_event_ts + pd.Timedelta(days=365+30)).dt.date
             expected_sale_start_ts = (last_event_ts + pd.Timedelta(days=365) - pd.to_timedelta(avg_leads, unit='D'))

@@ -28,9 +28,9 @@ class BookingAggregator:
             event_freq_cutoff_previous: Cutoff for previous event frequency period
             skip_event_metrics: When True, event-related fields default to empty
                 instead of being computed. The v2 tier calculator doesn't use
-                them, so the historical-rebuild path sets this for a large
-                speedup. Production daily run leaves this False (the v1 path
-                via account_processor.py needs them).
+                them, so the historical-rebuild path sets this. Production
+                daily run leaves this False (the v1 path via account_processor.py
+                needs them).
         """
         self.cutoff_365 = cutoff_365
         self.cutoff_730 = cutoff_730
@@ -40,13 +40,12 @@ class BookingAggregator:
         self.processed_chunks = 0
         self.total_rows = 0
 
-        # OPTIMIZATION: Accumulate all data for bulk processing instead of dict updates
+        # Accumulate chunks for a single bulk pass at finalize time
         self.accumulated_chunks = []
         
     def process_chunk(self, chunk: pd.DataFrame) -> None:
         """
-        OPTIMIZED: Prepare chunk and accumulate for bulk processing.
-        Eliminates expensive row-by-row operations.
+        Prepare a chunk and accumulate it for bulk processing at finalize.
         
         Args:
             chunk: DataFrame chunk containing booking transactions
@@ -54,10 +53,9 @@ class BookingAggregator:
         if chunk.empty:
             return
             
-        # OPTIMIZATION: Vectorized preparation - all calculations at once
         chunk = self._prepare_chunk_vectorized(chunk)
         
-        # OPTIMIZATION: Just accumulate - no expensive dict operations
+        # Accumulate; finalize_metrics does the bulk groupby pass
         self.accumulated_chunks.append(chunk)
         
         self.processed_chunks += 1
@@ -70,19 +68,17 @@ class BookingAggregator:
     
     def _prepare_chunk_vectorized(self, chunk: pd.DataFrame) -> pd.DataFrame:
         """
-        OPTIMIZED: Vectorized chunk preparation with all calculations.
-        Replaces expensive row-by-row operations.
+        Per-chunk preparation: ensure fee columns exist, derive Revenue,
+        and add date helpers used downstream.
         """
-        # Ensure fee columns exist and handle nulls
         fee_columns = ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']
         for col in fee_columns:
             if col not in chunk.columns:
                 chunk[col] = 0.0
             else:
                 chunk[col] = chunk[col].fillna(0.0)
-        
-        # Vectorized calculations
-        chunk['Revenue'] = (chunk['BookingFee'] + chunk['CardFee'] + 
+
+        chunk['Revenue'] = (chunk['BookingFee'] + chunk['CardFee'] +
                            chunk['ProcessingFee'] + chunk['TicketFee'])
         chunk['Year'] = chunk['TransactionDate'].dt.year
         chunk['tx_date'] = chunk['TransactionDate'].dt.date
@@ -105,8 +101,8 @@ class BookingAggregator:
     
     def finalize_metrics(self) -> Dict[int, Dict[str, Any]]:
         """
-        OPTIMIZED: Bulk aggregation using vectorized pandas operations.
-        Replaces expensive dictionary updates with fast groupby operations.
+        Run all groupby aggregations in a single bulk pass and return the
+        per-account metrics dict.
         
         Returns:
             Dictionary of account metrics
@@ -118,9 +114,9 @@ class BookingAggregator:
         start_time = pd.Timestamp.now()
         # Demoted to debug — fires once per replay pass during a 4k+ day
         # historical rebuild and adds nothing for the production daily run.
-        logger.debug("Starting vectorized bulk aggregation...")
+        logger.debug("Starting bulk aggregation...")
         
-        # OPTIMIZATION: Combine all chunks into single DataFrame for bulk processing.
+        # Combine all chunks into a single DataFrame for the bulk pass.
         # Skip the concat when only one usable chunk is fed — common in the
         # historical replay path where the entire date-filtered slice is passed
         # as a single chunk. pd.concat on one frame is pure overhead.
@@ -141,15 +137,12 @@ class BookingAggregator:
         # Clear accumulated chunks to free memory
         self.accumulated_chunks = []
         
-        # OPTIMIZATION: Vectorized aggregations using pandas groupby (much faster)
-        logger.debug("Computing vectorized aggregations...")
+        logger.debug("Computing aggregations...")
         
         # Basic lifetime metrics. Round only the numeric columns —
         # pandas warns (and will eventually error) on .round() against
         # datetime/timedelta dtypes, which TransactionDate min/max are.
-        # 'nunique' is the vectorised C-level equivalent of len(set(x)) and
-        # is meaningfully faster across many groups (matters during the
-        # historical rebuild where this runs once per day in the daterange).
+        # 'nunique' is the C-level equivalent of len(set(x)).
         basic_agg = all_data.groupby('AccountId').agg({
             'TicketQuantity': 'sum',
             'Revenue': 'sum',
@@ -178,7 +171,7 @@ class BookingAggregator:
         }).round(2)
         previous_agg.columns = ['tickets_prev', 'revenue_prev']
         
-        # Previous period years — vectorised nunique instead of a Python lambda.
+        # Previous period years.
         pre_cutoff_data = all_data[all_data['tx_date'] < self.cutoff_365]
         years_prev_agg = pre_cutoff_data.groupby('AccountId')['Year'].nunique(
         ).to_frame('years_loyalty_prev')
@@ -215,7 +208,7 @@ class BookingAggregator:
             if col in combined.columns:
                 combined[col] = combined[col].fillna(default)
 
-        # Derived metrics (vectorised).
+        # Derived metrics.
         years = combined['years_loyalty'].astype(float)
         revenue_lifetime = combined['revenue_lifetime'].astype(float)
         revenue_current = combined['revenue_current'].astype(float)
@@ -266,7 +259,7 @@ class BookingAggregator:
         elapsed = (pd.Timestamp.now() - start_time).total_seconds()
         rate = self.total_rows / elapsed if elapsed > 0 else 0
 
-        logger.debug(f"Vectorized aggregation complete: {len(final_metrics):,} accounts in {elapsed:.1f}s "
+        logger.debug(f"Aggregation complete: {len(final_metrics):,} accounts in {elapsed:.1f}s "
                     f"({rate:.0f} rows/sec)")
 
         return final_metrics
@@ -285,10 +278,7 @@ class BookingAggregator:
             }
 
         Built entirely from groupby aggregations — no per-account Python
-        loops. Previously ran a nested groupby('AccountId').groupby('EventId')
-        which dominated wall-clock time on the daily run (~5s on a 50k-tx /
-        5k-account dataset). Vectorised version is ~50x faster on the same
-        shape.
+        loops.
         """
         if 'EventId' not in all_data.columns or 'EventDate' not in all_data.columns:
             logger.info("EventId or EventDate columns missing - skipping event metrics")
@@ -298,7 +288,7 @@ class BookingAggregator:
         if event_data.empty:
             return {}
 
-        # Pre-compute the (year, month) key once; cheap on a vectorised series.
+        # Pre-compute the (year, month) key once.
         ym = list(zip(event_data['EventDate'].dt.year.to_numpy(),
                       event_data['EventDate'].dt.month.to_numpy()))
         event_data = event_data.assign(event_year_month=ym)
@@ -320,8 +310,8 @@ class BookingAggregator:
         freq_previous_by_acc = _months_by_account('is_freq_previous')
 
         # event_creation_info: per (account, event), find first booking date,
-        # event date, and lead_days. Vectorised groupby on the compound key,
-        # then a single pass to bucket back into per-account dicts.
+        # event date, and lead_days. Groupby on the compound key, then a
+        # single pass to bucket back into per-account dicts.
         event_data_with_id = event_data[pd.notna(event_data['EventId'])]
         event_creation_by_acc: Dict[int, Dict[int, Dict[str, Any]]] = {}
         if not event_data_with_id.empty:

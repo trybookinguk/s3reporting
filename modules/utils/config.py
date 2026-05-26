@@ -113,6 +113,16 @@ TIER_OWNERS = {
 # window (a sustained progression, which we always surface).
 MOVEMENT_COOLDOWN_DAYS = 30
 
+# Persistent bouncers earn a longer mute. When, over the trailing
+# BOUNCER_WINDOW_DAYS, an account has completed at least BOUNCER_MIN_ROUNDTRIPS
+# full round-trips of the SAME owned-tier pair (e.g. T1<->T2), moves *within
+# that pair* are suppressed. The check is stateless and re-evaluated each run,
+# so the mute self-clears once the round-trips age past the window. A downward
+# breakout *out* of the pair (e.g. T2->T3) is always sent — it's a real
+# demotion, not a bounce.
+BOUNCER_WINDOW_DAYS = 90
+BOUNCER_MIN_ROUNDTRIPS = 2
+
 # === REPORT SETTINGS ===
 ANNUAL_EVENT_MIN_REVENUE = 100  # Minimum revenue for annual event filtering
 ANNUAL_EVENT_OUTREACH_DAYS = 30  # Days before typical creation to reach out

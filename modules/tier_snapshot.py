@@ -15,7 +15,12 @@ from typing import Dict, Optional
 import pandas as pd
 
 from .tier_codes import TIER_ORDER_BEST_TO_WORST
-from .utils.config import MOVEMENT_COOLDOWN_DAYS, TIER_OWNERS
+from .utils.config import (
+    BOUNCER_MIN_ROUNDTRIPS,
+    BOUNCER_WINDOW_DAYS,
+    MOVEMENT_COOLDOWN_DAYS,
+    TIER_OWNERS,
+)
 from .utils.sharepoint import download_file, upload
 
 log = logging.getLogger(__name__)
@@ -164,30 +169,81 @@ def filter_email_relevant_moves(changes_df: pd.DataFrame) -> pd.DataFrame:
     return changes_df[mask].copy()
 
 
+def _collapse_transitions(window):
+    """Reduce a [(day, tier), ...] series (oldest-first) to the sequence of
+    distinct tiers, collapsing consecutive same-tier days.
+
+    e.g. [T2, T2, T1, T1, T2] -> ['Tier 2', 'Tier 1', 'Tier 2']. This is the
+    transition sequence used for round-trip detection — duration on a tier
+    doesn't matter, only the order of moves between tiers.
+    """
+    seq = []
+    for _d, t in window:
+        if not seq or seq[-1] != t:
+            seq.append(t)
+    return seq
+
+
+def detect_bouncer_pair(window, min_roundtrips=BOUNCER_MIN_ROUNDTRIPS):
+    """Return the owned-tier pair {A, B} the account is bouncing on, or None.
+
+    A "round-trip" on pair {A,B} is the sub-sequence A->B->A (a return to the
+    start). `min_roundtrips` such returns within the window's transition
+    sequence — all on the *same* pair, with no third tier interleaved between
+    the legs — flags the account as a bouncer on that pair.
+
+    Only pairs where at least one tier is owned (T1/T2) are considered; churn
+    purely among unowned tiers never produced emails, so it can't be noise.
+    Returns a frozenset({A, B}) or None.
+    """
+    owned = set(TIER_OWNERS.keys())
+    seq = _collapse_transitions(window)
+    if len(seq) < 3:
+        return None
+
+    # Count, per adjacent-pair, how many times the sequence returns to a tier
+    # it just left via exactly one other tier: a A->B->A round-trip. We track
+    # returns keyed on the unordered pair so T1->T2->T1 and T2->T1->T2 both
+    # accrue to the same {T1,T2} bucket.
+    returns: Dict[frozenset, int] = {}
+    for i in range(len(seq) - 2):
+        a, b, c = seq[i], seq[i + 1], seq[i + 2]
+        if a == c and a != b:  # left a, went to b, came back to a
+            pair = frozenset({a, b})
+            if pair & owned:  # at least one side is an owned tier
+                returns[pair] = returns.get(pair, 0) + 1
+
+    for pair, count in returns.items():
+        if count >= min_roundtrips:
+            return pair
+    return None
+
+
 def suppress_repetitive_moves(
     relevant_df: pd.DataFrame,
     history: Dict,
     today: date,
     window_days: int = MOVEMENT_COOLDOWN_DAYS,
 ) -> pd.DataFrame:
-    """Drop boundary flip-flops while always letting sustained climbs through.
+    """Drop boundary flip-flops while always letting genuine moves through.
 
-    A move survives if EITHER:
-      * it is a climb ('up') into a tier the account has NOT held anywhere in
-        the trailing `window_days` (genuine new ground — a sustained
-        progression), OR
-      * the account had no owned-tier change within the trailing
-        `window_days` (this is its first move in the window — normal signal).
+    Two layers, both inferred statelessly from each account's daily tier
+    series in `history` (tier_history.json) — no sent-email log needed:
 
-    A move is suppressed when the account already changed owned tier inside
-    the window and the move is not new-ground climb — i.e. it is a reversion
-    or repeat oscillation around a boundary, which produces the repetitive
-    emails we want to mute.
+    1. Persistent-bouncer mute (longer window). If, over the trailing
+       BOUNCER_WINDOW_DAYS, the account has completed >= BOUNCER_MIN_ROUNDTRIPS
+       round-trips of the same owned-tier pair, then a move *staying within
+       that pair* is suppressed. A *downward breakout* out of the pair
+       (current tier worse than both pair members) is always sent — it's a
+       real demotion, not a bounce.
 
-    Stateless: "recent activity" is inferred from each account's own daily
-    tier series in `history` (tier_history.json), so no sent-email log is
-    needed. Accounts absent from the history (or with no in-window samples)
-    are treated as having no recent activity and pass through.
+    2. Standard cooldown (default `window_days`). A move survives if EITHER it
+       is a climb into a tier the account has NOT held in the trailing window
+       (genuine new ground), OR there was no owned-tier change in the window
+       (first move in the window). Otherwise it's a reversion/oscillation and
+       is muted.
+
+    Accounts absent from history (or with no in-window samples) pass through.
     """
     if relevant_df.empty:
         return relevant_df
@@ -197,7 +253,9 @@ def suppress_repetitive_moves(
     from . import tier_history
 
     owned = set(TIER_OWNERS.keys())
-    cutoff = today - timedelta(days=window_days)
+    rank = {t: i for i, t in enumerate(TIER_ORDER_BEST_TO_WORST)}
+    cooldown_cutoff = today - timedelta(days=window_days)
+    bouncer_cutoff = today - timedelta(days=BOUNCER_WINDOW_DAYS)
 
     keep_idx = []
     suppressed = 0
@@ -206,32 +264,55 @@ def suppress_repetitive_moves(
         current_tier = row["current_tier"]
         direction = row["direction"]
 
-        # Trailing window of this account's tier series, oldest-first.
-        # extract_account_history returns (day_iso, tier_name, score); we only
-        # need days strictly within the window, and only days the account
-        # actually existed (tier_name is not None).
-        timeline = tier_history.extract_account_history(history, aid)
-        window = [
-            (d, t) for (d, t, _s) in timeline
-            if t is not None and date.fromisoformat(d) >= cutoff
+        # Full in-window slice once; both layers read from it.
+        # extract_account_history returns (day_iso, tier_name, score) oldest
+        # -first; keep only days the account existed (tier not None).
+        timeline = [
+            (d, t) for (d, t, _s) in tier_history.extract_account_history(history, aid)
+            if t is not None
         ]
-        tiers_held = {t for _d, t in window}
 
-        # Did an owned-tier change happen within the window? Count transitions
-        # between consecutive observed samples where either side is owned.
+        # --- Layer 1: persistent bouncer on a tier pair ---
+        bouncer_window = [(d, t) for d, t in timeline
+                          if date.fromisoformat(d) >= bouncer_cutoff]
+        pair = detect_bouncer_pair(bouncer_window)
+        if pair is not None:
+            within_pair = current_tier in pair
+            # Downward breakout: current tier is worse (higher rank index) than
+            # every member of the pair -> a real demotion, always send.
+            downward_breakout = (
+                current_tier not in pair
+                and rank.get(current_tier, -1) > max(rank.get(p, -1) for p in pair)
+            )
+            if within_pair and not downward_breakout:
+                suppressed += 1
+                log.info(
+                    "Suppressing bounce for account %s (%s -> %s, %s): repeated "
+                    "round-trip on %s within trailing %d days.",
+                    aid, row["previous_tier"], current_tier, direction,
+                    "/".join(sorted(pair)), BOUNCER_WINDOW_DAYS,
+                )
+                continue
+            # Downward breakout (or any move out of the pair) falls through to
+            # the standard cooldown, which will pass a genuine demotion.
+
+        # --- Layer 2: standard cooldown ---
+        cooldown_window = [(d, t) for d, t in timeline
+                           if date.fromisoformat(d) >= cooldown_cutoff]
+        tiers_held = {t for _d, t in cooldown_window}
+
         recent_owned_change = False
         prev_t = None
-        for _d, t in window:
+        for _d, t in cooldown_window:
             if prev_t is not None and t != prev_t and (t in owned or prev_t in owned):
                 recent_owned_change = True
                 break
             prev_t = t
 
-        # Sustained-climb carve-out: a promotion into a tier not held during
-        # the window is genuine new ground — always surface it. Note the
-        # account's *current* tier is today's value (today's column may not
-        # yet be in the loaded history slice), so `tiers_held` reflects the
-        # window *before* this move, which is exactly what we want to test.
+        # A promotion into a tier not held during the window is genuine new
+        # ground. `tiers_held` reflects the window *before* today's move
+        # (today's column isn't in the loaded history yet), which is what we
+        # want to test against.
         new_ground_climb = direction == "up" and current_tier not in tiers_held
 
         if new_ground_climb or not recent_owned_change:
@@ -245,6 +326,7 @@ def suppress_repetitive_moves(
             )
 
     if suppressed:
-        log.info("Cooldown suppression: %d of %d email-relevant moves muted "
-                 "(window=%d days).", suppressed, len(relevant_df), window_days)
+        log.info("Movement suppression: %d of %d email-relevant moves muted "
+                 "(cooldown=%d days, bouncer window=%d days).",
+                 suppressed, len(relevant_df), window_days, BOUNCER_WINDOW_DAYS)
     return relevant_df.loc[keep_idx].copy()

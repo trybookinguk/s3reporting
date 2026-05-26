@@ -56,7 +56,7 @@ from modules.utils.data_loader import (
 )
 from modules.utils.date_utils import get_latest_data_date
 from modules.utils.industry_utils import filter_valid_industries
-from modules.tier_calculator_v2 import calculate_composite_tiers
+from modules.tier_calculator_v2 import calculate_composite_tiers, TIER_BANDS
 from modules.uk_regional_segmentation import POSTCODE_TO_REGION
 from mailshake_acquisition import build_acquisition_report, records_to_csv_bytes
 from modules.box_office import (

@@ -233,6 +233,18 @@ def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df
     logger.info("Tier movements: %d total, %d email-relevant (T1/T2-touching).",
                 len(changes), len(relevant))
 
+    # Load history early — needed both for cooldown suppression (below) and
+    # for email chart rendering / TEST_MODE replay (further down).
+    history = tier_history.load_history(graph_token, SHAREPOINT_DRIVE_ID)
+    today = datetime.now(UK_TZ).date()
+
+    # Cooldown suppression: mute boundary flip-flops that already moved owned
+    # tier within the cooldown window, while always letting sustained climbs
+    # into new-ground tiers through. Inferred statelessly from tier history.
+    # Skipped on first run (no baseline; handled by the guard below anyway).
+    if not is_first_run and not relevant.empty:
+        relevant = tier_snapshot.suppress_repetitive_moves(relevant, history, today)
+
     # First-run guard: with no baseline snapshot, every account looks "new",
     # so every T1/T2 account would generate a new-direction email. That's
     # noise, not signal — suppress sends and let tomorrow's diff be the
@@ -245,8 +257,6 @@ def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df
                     "detection starts from the next run.", len(relevant))
         relevant = relevant.iloc[0:0]
 
-    history = tier_history.load_history(graph_token, SHAREPOINT_DRIVE_ID)
-    today = datetime.now(UK_TZ).date()
     tier_history.append_day(history, today, v2_df)
 
     # TEST_MODE preview fallback: if there are no real T1/T2-touching moves

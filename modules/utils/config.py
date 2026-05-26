@@ -106,6 +106,13 @@ TIER_OWNERS = {
     "Tier 2": {"to": ["joan@trybooking.co.uk", "kathryn@trybooking.co.uk"], "cc": ["alex@trybooking.co.uk"]},
 }
 
+# Accounts sitting on a tier boundary can flip-flop between T1/T2 on tiny
+# daily ranking wiggles, firing a repetitive email each time. We suppress a
+# movement if the account already changed owned tier within this many days —
+# UNLESS the move is a genuine climb into a tier it has NOT held during the
+# window (a sustained progression, which we always surface).
+MOVEMENT_COOLDOWN_DAYS = 30
+
 # === REPORT SETTINGS ===
 ANNUAL_EVENT_MIN_REVENUE = 100  # Minimum revenue for annual event filtering
 ANNUAL_EVENT_OUTREACH_DAYS = 30  # Days before typical creation to reach out

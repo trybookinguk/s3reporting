@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v6
       with:
         python-version: '3.11'
     
@@ -27,7 +27,7 @@ jobs:
         pip install boto3 pandas requests pytz msal
     
     - name: Cache S3 files
-      uses: actions/cache@v3
+      uses: actions/cache@v5
       with:
         path: .cache
         key: s3-cache-${{ runner.os }}-regional-${{ github.run_id }}
@@ -48,7 +48,7 @@ jobs:
     
     - name: Upload Reports as Artifacts
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: regional-reports-${{ github.run_id }}
         path: |

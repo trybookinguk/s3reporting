@@ -337,23 +337,26 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
     return zip_buffer
 
 
-def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, report_date):
+def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, report_date,
+                                        reports_dir="."):
     """
     Generate industry revenue reports as individual CSV files.
-    
+
     This creates a simplified output with just the main industry reports (no sub-industries)
-    to avoid creating too many artifacts in GitHub Actions.
-    
+    to keep the number of output files manageable.
+
     Args:
         booking_df: DataFrame with booking data including fees
         account_df: DataFrame with account information including Industry, SubIndustry, DateTimeCreated
         tier_updates: DataFrame with tier calculations including Current_Tier
         report_date: The report date (pd.Timestamp) to determine current period
-        
+        reports_dir: Directory to write the CSV files into (created if missing).
+
     Returns:
-        List of generated CSV filenames
+        List of generated CSV file paths
     """
     logger.info("Starting industry revenue CSV generation")
+    os.makedirs(reports_dir, exist_ok=True)
     
     # Determine current period (last 365 days for tier calculations)
     today = pd.Timestamp.now('UTC').tz_localize(None)
@@ -471,8 +474,8 @@ def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, re
             new_accounts_report = empty_df.copy()
         
         # Save industry-level reports as CSV files
-        current_filename = f"{industry_folder}_current_{report_date.strftime('%Y%m')}.csv"
-        new_filename = f"{industry_folder}_current_new_{report_date.strftime('%Y%m')}.csv"
+        current_filename = os.path.join(reports_dir, f"{industry_folder}_current_{report_date.strftime('%Y%m')}.csv")
+        new_filename = os.path.join(reports_dir, f"{industry_folder}_current_new_{report_date.strftime('%Y%m')}.csv")
         
         current_report.to_csv(current_filename, index=False)
         new_accounts_report.to_csv(new_filename, index=False)
@@ -494,7 +497,7 @@ def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, re
     
     # Create and save summary report
     summary_df = pd.DataFrame(summary_data).sort_values('TotalFees', ascending=False)
-    summary_filename = f"industry_summary_{report_date.strftime('%Y%m')}.csv"
+    summary_filename = os.path.join(reports_dir, f"industry_summary_{report_date.strftime('%Y%m')}.csv")
     summary_df.to_csv(summary_filename, index=False)
     generated_files.insert(0, summary_filename)  # Add at beginning
     

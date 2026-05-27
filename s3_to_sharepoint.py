@@ -68,8 +68,10 @@ RETRY_BACKOFF = 2  # seconds, doubled each retry
 # Concurrency - Graph API allows up to 20 concurrent requests per app
 MAX_WORKERS = int(os.environ.get("SYNC_MAX_WORKERS", "10"))
 
-# Manifest
-MANIFEST_DIR = Path(".sync_manifest")
+# Manifest — persistent local path. On the Pi this lives at
+# /root/reporting/.sync_manifest; override with SYNC_MANIFEST_DIR if the script
+# is run from somewhere other than the repo root.
+MANIFEST_DIR = Path(os.environ.get("SYNC_MANIFEST_DIR", ".sync_manifest"))
 MANIFEST_FILE = MANIFEST_DIR / "s3_etags.json"
 
 

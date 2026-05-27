@@ -42,6 +42,12 @@ S3_BUCKET = "produk-rdsextracts-438255373632"
 # === OPERATIONAL SETTINGS ===
 TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
 
+# Directory for locally-saved report CSVs (tier updates, annual events,
+# industry revenue). Defaults to ./reports relative to the working directory;
+# on the Pi this is set to /root/reporting/reports via .env. Replaces the
+# GitHub Actions artifact uploads that previously captured these files.
+REPORTS_DIR = os.environ.get("REPORTS_DIR", "reports")
+
 # === DATE AND TIMEZONE SETTINGS ===
 UK_TZ = pytz.timezone("Europe/London")
 TODAY = datetime.now(UK_TZ).date()

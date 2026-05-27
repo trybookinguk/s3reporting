@@ -19,7 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import from our modules
-from modules.utils.config import UK_TZ, TEST_MODE, TIER_OWNERS
+from modules.utils.config import UK_TZ, TEST_MODE, TIER_OWNERS, REPORTS_DIR
 from modules.utils.data_loader import get_s3_client, load_multiple_booking_files, download_s3_file_cached
 from modules.booking_aggregator import BookingAggregator
 from modules.utils.config import CUTOFF_365, CUTOFF_730, EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS
@@ -421,33 +421,16 @@ def main(dry_run: bool = False):
         logger.info("Starting booking data loading")
         booking_data_df = None
         try:
-            # Load both BookingDataAll and current month BookingData
-            from modules.utils.data_loader import load_booking_data
+            # Combined BookingDataAll + current-month BookingData, de-duped.
+            # prepare_data.py builds this pickle first thing each morning, so
+            # this normally just loads it rather than re-combining from S3.
+            from modules.utils.data_loader import load_combined_booking_data
 
-            print("Loading BookingDataAll...")
-            logger.info("Loading BookingDataAll")
-            booking_all_df = load_booking_data(s3_client, report_date, data_type='BookingDataAll')
-
-            print("Loading current month BookingData...")
-            booking_month_df = load_booking_data(s3_client, report_date, data_type='BookingData')
-
-            # Combine the two frames. Avoid the concat + drop_duplicates pass
-            # by keeping every BookingDataAll row and only the rows from the
-            # current-month frame whose BookingTransactionId isn't already in
-            # the all-time set. concat-then-dedupe copies the full frame twice
-            # on a multi-million-row dataset; this filters once and concats once.
-            print("Combining booking data and removing duplicates...")
-            logger.info("Combining booking data files")
-            existing_ids = set(booking_all_df['BookingTransactionId'])
-            new_rows_mask = ~booking_month_df['BookingTransactionId'].isin(existing_ids)
-            new_rows = booking_month_df[new_rows_mask]
-            duplicates_removed = len(booking_month_df) - len(new_rows)
-            booking_data_df = pd.concat([booking_all_df, new_rows], ignore_index=True)
-            logger.info(f"Removed {duplicates_removed:,} duplicate transactions, {len(booking_data_df):,} remaining")
-            print(f"Removed {duplicates_removed:,} duplicate transactions")
-
-            # Free memory from separate DataFrames
-            del booking_all_df, booking_month_df
+            print("Loading combined booking data...")
+            logger.info("Loading combined booking data (prebuilt pickle if available)")
+            booking_data_df = load_combined_booking_data(report_date)
+            logger.info(f"Combined booking data: {len(booking_data_df):,} transactions")
+            print(f"Combined booking data: {len(booking_data_df):,} transactions")
 
             # Process data using optimized chunked approach for aggregation
             logger.info("Starting account metrics aggregation")
@@ -571,8 +554,14 @@ def main(dry_run: bool = False):
     else:
         logger.info("TIER_SYSTEM=v1 (default) — sending legacy tier taxonomy to Zoho")
 
-    # Save results to CSV for audit
-    csv_filename = f"tier_updates_{datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')}.csv"
+    # Save results to CSV for audit. Reports land in REPORTS_DIR (./reports by
+    # default, /root/reporting/reports on the Pi) — this replaces the GitHub
+    # Actions artifact upload that previously captured them.
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+    csv_filename = os.path.join(
+        REPORTS_DIR,
+        f"tier_updates_{datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')}.csv",
+    )
     # Exclude internal/debugging columns from CSV
     columns_to_exclude = ['rapid_drop_details', 'revenue_details', 'revenue_drop_details']
     csv_columns = [col for col in updates.columns if col not in columns_to_exclude]
@@ -627,7 +616,10 @@ def main(dry_run: bool = False):
     
     annual_report = generate_upcoming_annual_events_report(updates)
     if not annual_report.empty:
-        report_filename = f"upcoming_annual_events_{datetime.now(UK_TZ).strftime('%Y%m%d')}.csv"
+        report_filename = os.path.join(
+            REPORTS_DIR,
+            f"upcoming_annual_events_{datetime.now(UK_TZ).strftime('%Y%m%d')}.csv",
+        )
         annual_report.to_csv(report_filename, index=False)
         print(f"Upcoming annual events needing outreach: {len(annual_report)}")
         
@@ -669,10 +661,11 @@ def main(dry_run: bool = False):
             # Generate the reports and save as CSVs
             from modules.industry_revenue_report import generate_industry_revenue_csv_files
             csv_files = generate_industry_revenue_csv_files(
-                booking_data_df, 
-                account_df, 
+                booking_data_df,
+                account_df,
                 updates,
-                report_date
+                report_date,
+                reports_dir=REPORTS_DIR
             )
             
             logger.info(f"Generated {len(csv_files)} industry revenue CSV files")

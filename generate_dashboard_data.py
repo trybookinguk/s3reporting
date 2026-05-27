@@ -50,7 +50,7 @@ import requests
 from modules.utils.config import UK_TZ, MIN_TICKETS_FOR_ACTIVE, TIER_PERCENTILES
 from modules.utils.data_loader import (
     load_accounts,
-    load_booking_data,
+    load_combined_booking_data,
     load_users,
     filter_successful_transactions,
 )
@@ -2527,19 +2527,11 @@ def generate(dry_run=False, local_dir=None):
     users_df = load_users(target_date)
     log.info("  Users: %d records", len(users_df))
 
-    booking_all_df = load_booking_data(target_date=target_date, data_type="BookingDataAll")
-    log.info("  BookingDataAll: %d records", len(booking_all_df))
-
-    booking_df = load_booking_data(target_date=target_date, data_type="BookingData")
-    log.info("  BookingData: %d records", len(booking_df))
-
-    # Combine bookings and deduplicate
-    combined_bookings = pd.concat([booking_all_df, booking_df], ignore_index=True)
-    if "BookingTransactionId" in combined_bookings.columns:
-        before = len(combined_bookings)
-        combined_bookings = combined_bookings.drop_duplicates(subset=["BookingTransactionId"], keep="last")
-        log.info("  Combined bookings: %d records (%d duplicates removed)",
-                 len(combined_bookings), before - len(combined_bookings))
+    # Combined BookingDataAll + current-month BookingData, de-duped. Normally
+    # loaded from the pickle prepare_data.py builds each morning rather than
+    # re-combined from S3 here.
+    combined_bookings = load_combined_booking_data(target_date=target_date)
+    log.info("  Combined bookings: %d records", len(combined_bookings))
 
     # Derive date range from actual data (no artificial lookback limit)
     acct_dates = pd.to_datetime(accounts_df["DateTimeCreated"], errors="coerce", utc=True)

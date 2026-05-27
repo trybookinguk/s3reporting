@@ -17,15 +17,15 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       
       - name: Cache pip dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
@@ -38,7 +38,7 @@ jobs:
           pip install boto3 pandas numpy requests pytz
       
       - name: Cache S3 data files
-        uses: actions/cache@v3
+        uses: actions/cache@v5
         with:
           path: modules/utils/.cache
           key: s3-cache-${{ github.run_id }}-${{ github.run_number }}
@@ -60,7 +60,7 @@ jobs:
       
       - name: Upload output files
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: event-reminders-output
           path: |

@@ -353,8 +353,16 @@ class UnifiedDataLoader:
     def __init__(self):
         """Initialize the unified data loader."""
         self.s3_client = self._get_s3_client()
-        self.cache_dir = ".cache"
+        # Cache dir is configurable so the Pi can use a persistent location
+        # (e.g. /root/reporting/.cache) shared across the staggered cron jobs.
+        self.cache_dir = os.environ.get("S3_CACHE_DIR", ".cache")
         os.makedirs(self.cache_dir, exist_ok=True)
+        # Directory for the prebuilt combined-booking pickle. Defaults under the
+        # cache dir; the prepare_data.py job writes it once each morning so the
+        # tier and dashboard jobs don't each re-combine BookingDataAll + the
+        # current month from scratch.
+        self.data_dir = os.environ.get("DATA_DIR", os.path.join(self.cache_dir, "prepared"))
+        os.makedirs(self.data_dir, exist_ok=True)
     
     def _get_s3_client(self):
         """Get S3 client with credentials."""
@@ -393,13 +401,23 @@ class UnifiedDataLoader:
         try:
             with open(metadata_path, 'r') as f:
                 metadata = json.load(f)
-            
+
             # Check cache age (7 days max)
             cache_time = datetime.fromisoformat(metadata['cache_time'])
             if datetime.now() - cache_time > timedelta(days=7):
                 logger.info(f"Cache expired for {key} (>7 days old)")
                 return False
-            
+
+            # Trust-cache shortcut: when CACHE_TRUST_TODAY=1 and this entry was
+            # cached today, treat it as fresh without a head_object round-trip.
+            # The prepare_data.py job refreshes the cache first thing each
+            # morning, so downstream jobs can trust it for the rest of the day.
+            # Falls through to the ETag check below for entries not cached today.
+            if os.getenv('CACHE_TRUST_TODAY', '0') == '1':
+                if cache_time.date() == datetime.now().date():
+                    logger.info(f"CACHE_TRUST_TODAY: trusting today's cache for {key} (no head_object)")
+                    return True
+
             # Verify S3 file hasn't changed
             s3_response = self.s3_client.head_object(Bucket=S3_BUCKET, Key=key)
             s3_etag = s3_response['ETag'].strip('"')
@@ -751,9 +769,88 @@ class UnifiedDataLoader:
             df['EventDate'] = pd.to_datetime(df['EventDate'], errors='coerce', utc=True)
         
         df = optimize_dtypes(df)
-        
+
         return df
-    
+
+    def _combined_booking_path(self) -> str:
+        """Local path for the prebuilt combined-booking pickle."""
+        return os.path.join(self.data_dir, "combined_booking.pkl")
+
+    def _combined_booking_meta_path(self) -> str:
+        return self._combined_booking_path() + ".meta"
+
+    def _combined_is_fresh(self) -> bool:
+        """True if the combined pickle exists and was built today."""
+        if os.getenv('NO_CACHE', '0') == '1':
+            return False
+        path = self._combined_booking_path()
+        meta = self._combined_booking_meta_path()
+        if not (os.path.exists(path) and os.path.exists(meta)):
+            return False
+        try:
+            with open(meta, 'r') as f:
+                built = datetime.fromisoformat(json.load(f)['built_time'])
+            return built.date() == datetime.now().date()
+        except Exception as e:
+            logger.debug(f"Combined-booking meta unreadable: {e}")
+            return False
+
+    def load_combined_booking_data(self, target_date: Optional[datetime] = None,
+                                   force_rebuild: bool = False) -> pd.DataFrame:
+        """Return the de-duped union of BookingDataAll + current-month BookingData.
+
+        Centralises the concat/de-dupe that zoho_tiers.py and
+        generate_dashboard_data.py each used to do independently. When a
+        combined pickle built earlier today exists (written by prepare_data.py),
+        it's returned directly; otherwise the union is built here and — unless
+        NO_CACHE=1 — pickled for the rest of the day's jobs to reuse.
+
+        De-dupe keeps the last row per BookingTransactionId, so a current-month
+        row supersedes its BookingDataAll counterpart (the current-month export
+        is the fresher one, updated daily).
+        """
+        path = self._combined_booking_path()
+
+        if not force_rebuild and self._combined_is_fresh():
+            logger.info("Loading prebuilt combined booking data from %s", path)
+            try:
+                with open(path, 'rb') as f:
+                    df = pickle.load(f)
+                logger.info("  Loaded %d combined rows from prepared pickle", len(df))
+                return df
+            except Exception as e:
+                logger.warning("Failed to load combined pickle, rebuilding: %s", e)
+
+        logger.info("Building combined booking data (BookingDataAll + current month)...")
+        booking_all_df = self.load_booking_data(target_date, data_type='BookingDataAll')
+        booking_month_df = self.load_booking_data(target_date, data_type='BookingData')
+
+        combined = pd.concat([booking_all_df, booking_month_df], ignore_index=True)
+        del booking_all_df, booking_month_df
+        if 'BookingTransactionId' in combined.columns:
+            before = len(combined)
+            combined = combined.drop_duplicates(subset=['BookingTransactionId'], keep='last')
+            logger.info("  Combined %d rows (removed %d duplicates)",
+                        len(combined), before - len(combined))
+        else:
+            logger.warning("BookingTransactionId missing — combined frame not de-duplicated")
+
+        if os.getenv('NO_CACHE', '0') == '1':
+            logger.info("NO_CACHE=1 — not persisting combined pickle")
+            return combined
+
+        try:
+            with open(path, 'wb') as f:
+                pickle.dump(combined, f)
+            with open(self._combined_booking_meta_path(), 'w') as f:
+                json.dump({'built_time': datetime.now().isoformat(),
+                           'rows': len(combined)}, f)
+            logger.info("  Saved combined booking pickle: %s (%d rows)", path, len(combined))
+        except Exception as e:
+            logger.warning("Failed to save combined pickle: %s", e)
+
+        return combined
+
     def load_booking_chunks(self, target_date: Optional[datetime] = None,
                           data_type: str = 'BookingData',
                           chunk_size: int = 100000) -> Iterator[pd.DataFrame]:
@@ -1032,6 +1129,14 @@ def load_accounts_data(s3_client=None, target_date=None):
 def load_booking_data(s3_client=None, target_date=None, data_type='BookingData'):
     """Load booking data (supports legacy s3_client parameter)."""
     return get_loader().load_booking_data(target_date, data_type)
+
+def load_combined_booking_data(target_date=None, force_rebuild=False):
+    """De-duped union of BookingDataAll + current-month BookingData.
+
+    Returns a prebuilt pickle when one was created earlier today, otherwise
+    builds and caches it. See UnifiedDataLoader.load_combined_booking_data.
+    """
+    return get_loader().load_combined_booking_data(target_date, force_rebuild=force_rebuild)
 
 def load_balance(target_date=None):
     """Load balance data."""

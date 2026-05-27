@@ -1,0 +1,190 @@
+account_id,account_name,industry,sub_industry,matched_name,matched_industry,fees_inc_vat,revenue,tickets,transactions,last_txn
+2803.0,Squire Performing Arts Centre,Theatres,Venue,True,True,13830.35,231571.31,15785,6445,2026-05-25
+4349.0,Richmond Shakespeare Society,Theatres,AMDRAM,False,True,6474.08,110816.5,6280,3340,2026-05-25
+3344.0,Golden Goose Theatre LTD,Theatres,,True,True,4454.31,73852.1,5106,3287,2026-05-25
+594.0,"Lane Theatre, Newquay",Theatres,Venue,True,True,4423.12,72038.84,5491,2401,2026-05-25
+12116.0,MEGA MUSICAL EVENTS,Theatres,,True,True,2883.65,55262.38,754,475,2026-05-17
+10620.0,Luton Creative Community,Theatres,,False,True,2856.2,48266.1,3452,1397,2026-05-25
+17522.0,Dramacube,Theatres,,True,True,2046.2,34603.0,2191,736,2026-03-14
+15339.0,Razzamataz Theatre Schools Brentwood,Theatres,Club/Group,True,True,1883.62,30445.4,2378,790,2025-12-07
+4941.0,Formby Little Theatre,Theatres,Venue,True,True,1840.95,28023.0,2851,1193,2026-05-25
+403.0,Channing School Drama Dept,Education,Independent School - Senior,True,False,1799.05,28137.0,5769,2770,2026-05-24
+15982.0,Penrith Playhouse,Business,Venue,True,False,1426.45,23739.41,1912,918,2026-05-23
+5158.0,Leicester College of Performing Arts,Education,College,True,False,1393.25,22996.0,1614,617,2026-05-22
+2945.0,Aunty Jen Productions,Theatres,,True,True,1337.54,21761.5,1862,633,2026-05-19
+6855.0,Cumbria Opera Group,Music,,True,False,1311.4,23024.0,1122,588,2026-05-21
+6933.0,MAD Group Malborough,Theatres,,False,True,1269.15,19560.0,1927,608,2026-01-13
+14263.0,Barns Green Players,Theatres,,True,True,1263.55,20921.0,1384,448,2026-05-16
+5783.0,Razzle Dazzle Theatre School,Theatres,,True,True,1144.07,19616.5,1104,383,2026-05-25
+779.0,BATS Burneside,Theatres,AMDRAM,False,True,1088.65,16982.0,1593,564,2026-05-25
+3936.0,Manor CE Academy Performing Arts,Education,State School - Secondary,True,False,1031.45,14644.0,2607,828,2026-05-22
+3556.0,Trinity Drama Department,Education,Independent School - Senior,True,False,925.06,13531.5,1861,784,2026-05-25
+36.0,Michael Frayn Theatre,Theatres,Venue,True,True,920.04,13346.25,2069,1247,2026-05-22
+196.0,ASH Stage Productions,Theatres,AMDRAM,True,True,892.68,13625.04,1408,461,2026-05-17
+8547.0,Prior Park College Performing Arts,Education,Independent School - Senior,True,False,781.7,12185.5,1774,860,2026-05-18
+538.0,Parish Players,Theatres,,True,True,747.45,12102.0,986,427,2026-05-16
+13559.0,Future Faces Performing Arts School,Theatres,,True,True,732.45,11826.0,963,308,2026-05-25
+11692.0,KS Musicals,Dance,,True,False,712.78,10562.0,1228,418,2026-05-24
+16096.0,Abbey Musical Society,Theatres,AMDRAM,True,True,663.33,10578.5,1235,407,2026-02-26
+16166.0,All Stars Theatre Academy,Theatres,,True,True,639.0,13172.0,870,311,2025-12-14
+8813.0,KAOS Musical Theatre,Theatres,,True,True,616.06,10323.2,686,301,2025-11-29
+17686.0,The Trull Players,Theatres,AMDRAM,True,True,612.95,9643.0,875,334,2026-05-25
+12907.0,Comrie Amateur Dramatic Society,Theatres,AMDRAM,True,True,598.6,9374.0,1140,377,2026-04-18
+1936.0,The Holroyd Community Theatre,Theatres,AMDRAM,True,True,557.6,9660.0,467,321,2026-05-20
+16190.0,Marie-Claire Lindsay,Theatres,,False,True,557.1,9354.0,604,256,2025-09-13
+17859.0,Bridgwater Pantomime Society,Theatres,AMDRAM,True,True,554.8,8942.0,718,212,2026-01-31
+18927.0,CCYD Performing Arts,Education,,True,False,549.55,8642.0,775,320,2026-02-12
+4625.0,InstantOpera,Music,,True,False,545.53,9773.41,377,204,2025-10-12
+14794.0,BaccyJ &amp; Folio Productions,Business,,True,False,541.96,8283.5,847,561,2026-05-16
+4781.0,Brightlight Theatre,Theatres,Venue,True,True,524.07,7765.3,925,419,2026-05-06
+15579.0,SWPS Drama Department,Education,State School - Grammar,True,False,509.67,7741.0,1022,453,2026-05-25
+17720.0,Call to Stage Theatre Company,Theatres,,True,True,493.95,8622.0,412,259,2026-02-07
+1071.0,Temple Ewell Players,Theatres,AMDRAM,True,True,488.65,7343.0,826,308,2026-05-24
+5256.0,Flies on the wall,Theatres,,False,True,471.12,7175.4,760,388,2026-05-25
+870.0,Rose Theatre Trust,Theatres,Venue,True,True,454.58,6622.9,816,773,2026-05-11
+1971.0,Reed's School Drama,Education,Independent School - Senior,True,False,451.0,7337.0,1053,508,2026-05-12
+6353.0,DADADA,Theatres,,False,True,434.95,7100.0,513,273,2026-05-11
+4548.0,Wolverton Gilbert and Sullivan Society,Theatres,AMDRAM,False,True,423.85,6954.0,541,295,2026-05-19
+230.0,Thingwall Players,Theatres,AMDRAM,True,True,421.15,6320.0,695,283,2026-03-21
+9108.0,Actonians Drama Group,Theatres,,True,True,413.0,6421.0,661,286,2026-05-16
+10537.0,Teddington Theatre Club,Theatres,,True,True,385.5,9306.0,506,524,2025-12-23
+7738.0,Bratton Jubilee Players,Theatres,,True,True,375.05,6004.0,505,207,2026-05-09
+18206.0,Theatre on Foot,Theatres,,True,True,369.65,5929.0,499,211,2026-05-18
+8687.0,VSMT Fundraising Project,Theatres,,False,True,369.05,6340.0,364,137,2025-10-17
+5521.0,Q2 Players,Theatres,,True,True,365.35,5918.0,509,298,2026-04-26
+17069.0,First Frame Productions LTD,Theatres,,True,True,358.21,6972.2,64,58,2026-05-14
+7244.0,MarchesMusical,Education,State School - Secondary,True,False,355.0,4934.0,724,284,2026-02-12
+7284.0,Bartholomew Players,Theatres,,True,True,353.25,5796.0,414,201,2026-05-16
+10691.0,Productions,Education,Independent School - Senior,True,False,348.45,4962.0,669,283,2026-03-27
+5717.0,Cherrystars,Theatres,,False,True,345.25,5996.0,298,153,2026-05-25
+8755.0,Vics School of Musical Theatre (VSI 2023),Theatres,,True,True,337.4,5184.5,532,174,2026-05-25
+1646.0,PrestonOperaTicketing,Music,,True,False,332.9,5626.0,361,188,2026-05-25
+14479.0,Cast Theatre Company,Theatres,,True,True,329.71,5100.0,539,191,2026-05-23
+4345.0,Compton Players,Theatres,AMDRAM,True,True,327.8,5170.0,526,222,2026-04-24
+17315.0,Send Amateur Dramatic Society,Theatres,AMDRAM,True,True,309.05,4738.0,481,181,2026-05-14
+11810.0,CATS,Theatres,,False,True,300.12,4762.0,505,210,2026-05-09
+1446.0,Dramarama,Education,,True,False,299.9,4312.0,570,218,2026-05-10
+413.0,Fylde Coast Youth Theatre,Theatres,,True,True,296.5,4877.0,351,149,2026-05-23
+9933.0,Nouveau Theatre School,Theatres,,True,True,287.15,4522.0,399,152,2025-11-27
+4104.0,Kendal Community Theatre,Theatres,,True,True,277.95,4347.0,419,209,2026-05-25
+249.0,Goring Gap Players,Theatres,,True,True,264.36,4345.0,311,152,2026-04-17
+11378.0,Star Stage and Screen Hub,Theatres,,True,True,260.16,4239.0,314,139,2026-05-22
+9671.0,BYSD & Performing Arts,Theatres,,True,True,257.2,3626.0,506,176,2026-05-25
+18747.0,BEES,Theatres,,False,True,255.35,4304.0,285,101,2026-03-14
+16172.0,Masque Players of West Wycombe,Theatres,AMDRAM,True,True,246.45,3834.0,435,179,2026-03-28
+7059.0,Grasmere Players,Theatres,,True,True,236.55,3720.0,337,145,2026-05-25
+53.0,Grange Drama,Community,Museum,True,False,236.4,3717.0,334,160,2026-04-25
+6514.0,Eccleshall Community Amateur Dramatics,Theatres,AMDRAM,True,True,233.4,3690.0,313,92,2026-01-04
+16347.0,Dunsfold Amateur Dramatic Society,Theatres,AMDRAM,True,True,233.35,4435.0,264,131,2025-11-22
+5109.0,Storth Entertainers,Theatres,AMDRAM,False,True,229.05,3499.5,357,117,2026-03-12
+12062.0,Soberton Players,Theatres,,True,True,218.49,3484.8,291,111,2026-03-24
+7712.0,CAOS Musical Society,Theatres,,True,True,215.15,3544.0,251,101,2026-05-24
+13294.0,Matinee Theatre School,Theatres,,True,True,214.5,1530.0,295,73,2025-11-25
+16384.0,Tregony Clockhouse Players,Theatres,Venue,True,True,211.0,3110.5,425,153,2026-02-21
+862.0,Ten64 Productions,Music,,True,False,210.25,3401.0,264,113,2026-05-13
+12791.0,Rangamanch uk,Theatres,Cultural,False,True,206.72,3495.0,204,113,2026-05-25
+5999.0,Westwell Players,Theatres,AMDRAM,True,True,205.65,3174.0,345,133,2026-04-25
+4522.0,Jigsaw Stage Productions,Theatres,,True,True,205.05,3276.0,271,127,2026-05-25
+9851.0,Burntwood Brigades,Theatres,,False,True,204.88,2820.0,638,154,2026-02-06
+6646.0,Drama CVMS,Education,Independent School - Senior,True,False,203.95,3068.0,346,189,2026-05-14
+19121.0,Richmond upon Thames Performing Arts Festival,Festival,Music,True,False,203.1,2757.0,430,252,2026-05-13
+13167.0,Cardboard Box Theatre,Theatres,,True,True,184.19,2610.0,347,132,2026-05-21
+4589.0,Harrogate Theatre Choir,Music,Choir,True,False,183.58,2930.5,264,119,2026-05-24
+4970.0,Rhinoceros Theatre Company,Theatres,,True,True,179.4,3120.0,156,83,2025-11-08
+8400.0,Wonderland Stagestars,Theatres,,True,True,178.5,2856.0,238,89,2025-11-22
+13615.0,Wilberfoss Amateur Theatre Society,Theatres,AMDRAM,True,True,176.6,2308.0,401,197,2026-05-25
+15968.0,Barrow Operatic Dramatic Society,Music,Choir,True,False,176.4,2700.0,270,123,2025-09-04
+7739.0,RSM STAGE ACADEMY,Theatres,,True,True,175.3,2855.0,246,113,2026-05-24
+18169.0,Ottery Community Theatre,Theatres,,True,True,173.65,2591.0,342,147,2026-05-17
+15598.0,Street Katz Theatre and Film CIC,Community,CIC,True,False,163.6,2240.0,361,135,2026-05-24
+9450.0,The Complete Commedia Company,Theatres,,False,True,160.05,2610.0,199,81,2025-12-17
+4632.0,The Buildwas Players,Theatres,,True,True,155.25,2325.0,274,98,2026-02-03
+18787.0,Westward Ho! Follies,Theatres,AMDRAM,False,True,145.65,2980.0,407,168,2026-02-22
+9605.0,CADS,Theatres,,False,True,137.25,2142.0,192,73,2026-02-07
+18194.0,Play on productions,Business,,True,False,130.2,2004.0,289,173,2026-03-09
+10982.0,Zanobini Academy of Performing Arts,Dance,,True,False,122.45,1861.0,193,65,2026-05-14
+13076.0,Staveley Amateur Operatic Society,Music,Choir,True,False,120.15,1992.0,182,69,2026-04-26
+17792.0,Reflect Productions,Theatres,,True,True,111.44,1640.5,193,112,2025-12-15
+13536.0,All Saints Pantomime Society,Theatres,AMDRAM,True,True,111.27,1581.0,340,132,2026-01-31
+4778.0,Premier Drama Academy,Dance,,True,False,100.95,1389.0,210,78,2025-12-07
+17492.0,ROM Theatre Arts,Theatres,,True,True,95.61,1428.15,161,44,2025-12-01
+13341.0,Exeter Stagecoach Theatre School,Theatres,,True,True,89.3,1105.0,302,99,2025-12-07
+17616.0,Cardinal Heenan Catholic High School Performing Arts,Education,Independent School - Senior,True,False,87.7,1130.0,222,126,2026-04-30
+16410.0,WAOS Musical Theatre,Theatres,,True,True,87.1,1340.0,134,61,2025-09-06
+11090.0,UN ŒUF PRODUCTIONS,Music,,True,False,86.46,1270.0,128,112,2026-05-09
+8753.0,Theatre in the Garden,Theatres,Venue,True,True,86.03,1535.0,59,58,2025-08-08
+19129.0,Oakley Players,Theatres,,True,True,84.9,1410.0,94,45,2026-03-19
+8302.0,Gemini School of Performing Arts,Dance,,True,False,84.9,1410.0,101,40,2025-07-05
+13169.0,Kursat Karaman,Theatres,,False,True,82.65,1350.0,101,61,2026-05-15
+5141.0,BillBoard Juniors,Theatres,,False,True,77.75,1228.0,109,54,2025-07-04
+1783.0,The Play Group,Theatres,,False,True,74.85,1110.0,111,82,2025-11-16
+4049.0,Crediton Youth Theatre,Theatres,,True,True,74.7,996.0,166,70,2025-08-30
+10374.0,Mavi Productions Ltd.,Business,,True,False,66.91,1146.0,72,48,2025-05-31
+9778.0,MAODS,Theatres,,False,True,66.55,896.0,112,81,2026-03-06
+5644.0,Dunscore Amateur Dramatic Society,Theatres,AMDRAM,True,True,62.7,1053.0,67,27,2026-01-16
+17224.0,HAODS,Theatres,AMDRAM,False,True,62.0,1120.0,39,20,2025-12-22
+15895.0,North East Stage and Screen Orchestra and Choir,Music,Choir,True,False,55.1,1102.0,173,86,2026-01-31
+18750.0,Haltwhistle Boardwalkers,Theatres,,False,True,53.9,784.0,98,40,2026-01-23
+18636.0,Great Ayton Drama,Community,,True,False,50.65,743.0,90,36,2026-01-30
+17717.0,BAmDram,Theatres,AMDRAM,True,True,50.4,649.0,118,48,2026-02-10
+7109.0,Mill Hill School Drama Department ,Education,Independent School - Senior,True,False,45.2,565.0,2250,1071,2026-05-25
+5558.0,Buckley Theatre School,Education,,True,False,45.1,656.0,82,28,2025-07-13
+15132.0,Drama Workshop,Theatres,AMDRAM,True,True,44.8,671.0,75,49,2026-05-19
+12103.0,Wonderland Stage School,Theatres,,True,True,44.65,602.0,107,37,2025-12-12
+9285.0,Morecambe Warblers,Theatres,,False,True,39.65,610.0,61,44,2025-10-11
+2045.0,Dramagic - Colin irvine,Theatres,,True,True,38.6,595.0,59,26,2026-02-20
+20113.0,Worrall Workshops,Theatres,,False,True,37.6,740.0,4,4,2026-05-22
+19049.0,Barnes Community Players,Community,AMDRAM,True,False,35.65,536.0,65,35,2026-03-09
+17453.0,Abbey musical youth,Theatres,,True,True,34.4,430.0,86,40,2025-12-18
+17087.0,Brandywine Theatre Company,Theatres,,True,True,32.14,512.5,41,24,2026-03-15
+9082.0,Matrix Arts Centre,Business,Venue,True,False,31.65,435.0,66,17,2025-11-30
+18678.0,a dumb production company,Theatres,,False,True,30.5,400.0,70,60,2026-04-29
+13867.0,New Choice Improv,Theatres,,False,True,30.3,378.0,76,46,2026-04-09
+17601.0,Brandywine Theatre Company,Theatres,,True,True,29.03,462.5,37,23,2025-11-22
+8793.0,Wath Pantomime,Event Organiser,,True,False,28.15,563.0,216,117,2026-02-07
+18581.0,K Caun Classic account,Theatres,Music,False,True,27.75,444.0,37,22,2026-02-17
+12975.0,YULA Drama,Business,,True,False,27.3,420.0,42,24,2025-11-16
+20523.0,The Prince,Theatres,,False,True,26.08,335.5,177,128,2026-05-24
+8789.0,St Nicholas Players,Theatres,AMDRAM,True,True,23.25,0.0,0,122,2026-04-14
+18107.0,Storytellers Performing Arts School,Theatres,,True,True,21.2,265.0,64,19,2025-12-05
+12001.0,The Courthouse Kids Theatre,Theatres,,True,True,20.7,360.0,167,84,2026-05-22
+266.0,Bishop Auckland Theatre Society,Theatres,AMDRAM,True,True,19.85,292.0,51,29,2025-10-17
+996.0,C4OCH,Theatres,,False,True,17.5,305.0,110,94,2026-05-11
+19584.0,Footsteps To Theatre,Theatres,,True,True,17.4,225.0,41,15,2026-05-22
+8065.0,Magpie Performers,Theatres,,False,True,14.45,160.0,43,11,2025-12-18
+19599.0,Stephen Leslie Productions,Theatres,,True,True,14.25,228.0,19,5,2026-05-08
+20376.0,Luck Penny Theatre,Ticket Purchaser,,True,False,11.5,164.0,22,18,2026-05-25
+1884.0,Cumbria Curtain Call,Theatres,AMDRAM,False,True,11.45,142.0,29,7,2025-12-12
+15843.0,Light-Bearer Theatre Perfomance,Theatres,,True,True,11.02,100.0,40,14,2025-07-24
+20160.0,CazHProductions,Charity,Fundraiser,True,False,10.8,180.0,12,6,2026-05-20
+15052.0,JDF Performing Arts College,Education,College,True,False,9.6,156.0,12,8,2025-05-31
+10316.0,The History Bureau,Theatres,,False,True,4.85,70.0,9,4,2025-10-25
+17371.0,Appleton Players,Theatres,AMDRAM,True,True,1.6,20.0,4,2,2025-12-09
+3782.0,International Arts Centre Ltd,Business,,True,False,1.5,0.0,0,8,2025-12-29
+17590.0,Edwinstree Theatre Productions,Education,State School - Secondary,True,False,1.35,15.0,4,1,2026-03-07
+20268.0,Rainford Parish Church Amateur Dramatics Society,Theatres,AMDRAM,True,True,1.2,24.0,2,11,2026-05-19
+16701.0,The Lakes Players,Theatres,AMDRAM,True,True,0.9,0.0,0,6,2025-09-17
+3461.0,Not Cool DIY,Theatres,AMDRAM,False,True,0.5,7.0,1,1,2025-09-28
+16093.0,Enville Street Dramatic Society,Theatres,AMDRAM,True,True,0.45,0.0,0,8,2025-07-02
+17938.0,Norfolk Box Office,Theatres,,False,True,0.15,7.0,1,1,2025-11-02
+9037.0,"Ryan Theatre, Harrow School",Education,Independent School - Senior,True,False,0.0,0.0,2667,1404,2026-05-21
+20062.0,Yeovil Amateur Operatic Society,Music,,True,False,0.0,0.0,0,2,2026-05-05
+20301.0,Theatres Recruitemnt events,Education,Health & Wellbeing,True,False,0.0,0.0,26,25,2026-05-03
+19587.0,Gareth Hanson - Director of Musical Performance,Event Organiser,,True,False,0.0,0.0,85,44,2026-03-20
+434.0,"Trent Repertory Company, Trent College",Theatres,,True,True,0.0,0.0,1039,475,2026-03-26
+2231.0,New Music Players,Music,Choir,True,False,0.0,0.0,1,1,2026-02-18
+19478.0,The Snow Queen,Theatres,,False,True,0.0,0.0,60,33,2026-02-26
+19328.0,Progress Theatre,Theatres,Business,True,True,0.0,0.0,4,2,2026-02-08
+1900.0,Three Left Feet,Theatres,AMDRAM,False,True,0.0,0.0,486,138,2025-12-20
+9913.0,Filmbox Community Cinema,Theatres,,False,True,0.0,0.0,1,1,2026-01-02
+124.0,Ampleforth College Theatre,Education,Independent School - Senior,True,False,0.0,0.0,763,309,2026-05-23
+15294.0,DollarDramaDep,Education,Independent School - Senior,True,False,0.0,0.0,157,85,2025-11-27
+18702.0,"Delta: Poetry, Prose and Performance",Theatres,,False,True,0.0,0.0,10,4,2026-03-01
+200.0,Nottingham High School Drama Department,Education,Independent School - Senior,True,False,0.0,0.0,1059,506,2026-05-25
+15928.0,Epsom Light Opera Company,Music,Venue,True,False,0.0,0.0,6,3,2026-04-08
+16091.0,Attic theatre,Theatres,AMDRAM,True,True,0.0,0.0,0,2,2025-08-22
+16099.0,NODA East Region,Theatres,AMDRAM,False,True,0.0,0.0,8,3,2025-07-03
+18019.0,Wetherby Pembridge Performing Arts,Theatres,,True,True,0.0,0.0,416,182,2026-05-22
+17047.0,Tintinhull Drama Group,Community,AMDRAM,True,False,0.0,0.0,96,31,2025-10-21
+12343.0,Musical Village,Associations,Choir,True,False,0.0,0.0,66,37,2025-06-27
+9750.0,Stageskool Theatre Arts,Theatres,,True,True,-2.28,-45.5,-5,2,2025-05-30

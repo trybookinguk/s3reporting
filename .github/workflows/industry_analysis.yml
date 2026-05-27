@@ -9,10 +9,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -26,7 +26,7 @@ jobs:
         run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Cache S3 files
-        uses: actions/cache@v3
+        uses: actions/cache@v5
         with:
           path: .cache
           # Cache key includes date to ensure fresh data each day
@@ -46,7 +46,7 @@ jobs:
         run: python industry_analysis.py
 
       - name: Upload CSV reports as artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: industry-analysis-reports

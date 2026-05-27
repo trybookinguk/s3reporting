@@ -14,10 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v6
       with:
         python-version: '3.11'
     
@@ -34,7 +34,7 @@ jobs:
         pip install google-analytics-data google-auth google-auth-oauthlib google-auth-httplib2
     
     - name: Cache S3 files
-      uses: actions/cache@v3
+      uses: actions/cache@v5
       with:
         path: .cache
         key: s3-cache-${{ steps.date.outputs.date }}
@@ -54,7 +54,7 @@ jobs:
           ${{ github.event.inputs.test_mode == 'true' && '--test-mode' || '' }}
     
     - name: Upload report artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ppc-report-2024-06-01-to-${{ steps.date.outputs.date }}
         path: ppc_report_*.csv

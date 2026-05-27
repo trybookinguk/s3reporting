@@ -9,10 +9,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -26,7 +26,7 @@ jobs:
         run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Cache S3 files
-        uses: actions/cache@v3
+        uses: actions/cache@v5
         with:
           path: .cache
           key: s3-cache-${{ runner.os }}-${{ steps.date.outputs.date }}-regional
@@ -48,7 +48,7 @@ jobs:
           ls -la wales_ni*.csv 2>/dev/null || echo "No Wales/NI files found"
 
       - name: Upload Regional Analysis Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: regional-analysis-${{ steps.date.outputs.date }}

@@ -4,7 +4,7 @@ The full daily pipeline runs from cron on the Pi instead of GitHub Actions.
 
 | # | Script | Schedule (UTC, Mon–Fri) | Notes |
 | --- | --- | --- | --- |
-| 1 | `prepare_data.py` | 02:00 | Refreshes the S3 cache and builds the combined booking pickle for the day. |
+| 1 | `prepare_data.py` | 02:00 | Refreshes the S3 cache, builds the combined booking pickle, and updates the SQLite warehouse. |
 | 2 | `s3_to_sharepoint.py` | 02:15 | S3 → SharePoint sync. Manifest persists locally. |
 | 3 | `zoho_industry.py` | 02:30 | Zoho industry sync. Runs from env vars. |
 | 4 | `zoho_tiers.py` | 02:45 | Zoho tiers + tier-movement pipeline. Reports saved locally. |
@@ -16,6 +16,32 @@ S3. The later jobs trust that day's cache via `CACHE_TRUST_TODAY=1`.
 
 The old GitHub Actions workflows (`daily_sync.yml`, `tier_movements.yml`) have
 been removed — the Pi now owns all of this.
+
+## SQLite warehouse
+
+`prepare_data.py` also maintains a local SQLite warehouse (`warehouse.db`,
+under `DATA_DIR` by default; override with `WAREHOUSE_DB`). Tables:
+
+- `bookings` — transaction log keyed by `BookingTransactionId`. Seeded once
+  from the full `BookingDataAll`, then kept current by upserting the daily
+  `BookingData` (current-month-to-date) file. Rows are `INSERT OR REPLACE`d so
+  a transaction whose status/fees are revised later is corrected in place;
+  prior-month rows are never deleted. Indexed on `AccountId`, `TransactionDate`.
+- `accounts`, `users` — current-state snapshots, full-replaced each run.
+
+The first run does the one-time `BookingDataAll` seed (heavy); subsequent runs
+just upsert the small daily delta. The combined pickle is still written too —
+the tier and dashboard jobs read that for now; migrating them to query the
+warehouse is separate follow-up work.
+
+Inspect it any time:
+
+```bash
+sqlite3 /root/s3reporting/.cache/prepared/warehouse.db \
+  "SELECT key,value FROM meta; SELECT COUNT(*) FROM bookings;"
+```
+
+To skip the warehouse on a manual run: `python3 prepare_data.py --no-warehouse`.
 
 ## One-time setup
 

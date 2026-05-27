@@ -31,8 +31,10 @@ from modules.utils.data_loader import (
     get_loader,
     load_accounts,
     load_users,
+    load_booking_data,
     load_combined_booking_data,
 )
+from modules import warehouse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,7 +44,7 @@ logging.basicConfig(
 log = logging.getLogger("prepare-data")
 
 
-def main(build_combined: bool = True) -> int:
+def main(build_combined: bool = True, build_warehouse: bool = True) -> int:
     started = pd.Timestamp.now(UK_TZ)
     log.info("Data preparation started at %s", started.strftime("%Y-%m-%d %H:%M:%S %Z"))
 
@@ -65,6 +67,7 @@ def main(build_combined: bool = True) -> int:
         log.error("Failed to refresh Accounts: %s", e)
         return 1
 
+    users_df = None
     try:
         log.info("Refreshing Users cache...")
         users_df = load_users(report_date)
@@ -82,9 +85,58 @@ def main(build_combined: bool = True) -> int:
             log.error("Failed to build combined booking data: %s", e)
             return 1
 
+    if build_warehouse:
+        try:
+            _update_warehouse(report_date, accounts_df, users_df)
+        except Exception as e:
+            log.error("Failed to update warehouse: %s", e)
+            return 1
+
     elapsed = (pd.Timestamp.now(UK_TZ) - started).total_seconds()
     log.info("Data preparation complete in %.1fs", elapsed)
     return 0
+
+
+def _update_warehouse(report_date, accounts_df, users_df) -> None:
+    """Maintain the SQLite warehouse: seed bookings once, then daily upsert.
+
+    - bookings: if the table is empty, seed it from the full BookingDataAll;
+      then upsert the current-month BookingData by BookingTransactionId so
+      revised rows (Status/fee changes) are corrected in place. Prior-month
+      rows are never deleted — the daily file just doesn't contain them.
+    - accounts / users: full-replace snapshots (current state, not a log).
+    """
+    db_path = warehouse.default_db_path()
+    log.info("Updating warehouse at %s", db_path)
+    conn = warehouse.connect(db_path)
+    try:
+        before = warehouse.summary(conn)
+        log.info("  Warehouse before: %s", before)
+
+        # Seed bookings from BookingDataAll on first run only.
+        if before["bookings_rows"] == 0:
+            log.info("  bookings table empty — seeding from BookingDataAll...")
+            seed = load_booking_data(target_date=report_date, data_type="BookingDataAll")
+            log.info("    BookingDataAll: %d rows", len(seed))
+            warehouse.upsert_bookings(conn, seed)
+            del seed
+
+        # Daily delta: upsert the current-month BookingData (cumulative-to-date).
+        log.info("  Upserting current-month BookingData...")
+        month = load_booking_data(target_date=report_date, data_type="BookingData")
+        log.info("    BookingData: %d rows", len(month))
+        warehouse.upsert_bookings(conn, month)
+        del month
+
+        # Snapshots.
+        if accounts_df is not None:
+            warehouse.replace_snapshot(conn, "accounts", accounts_df, key="Id")
+        if users_df is not None:
+            warehouse.replace_snapshot(conn, "users", users_df)
+
+        log.info("  Warehouse after: %s", warehouse.summary(conn))
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
@@ -92,7 +144,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--no-combined",
         action="store_true",
-        help="Refresh per-file caches only; skip building the combined booking pickle.",
+        help="Skip building the combined booking pickle.",
+    )
+    parser.add_argument(
+        "--no-warehouse",
+        action="store_true",
+        help="Skip updating the SQLite warehouse (warehouse.db).",
     )
     args = parser.parse_args()
-    sys.exit(main(build_combined=not args.no_combined))
+    sys.exit(main(build_combined=not args.no_combined,
+                  build_warehouse=not args.no_warehouse))

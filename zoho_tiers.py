@@ -124,15 +124,31 @@ def _build_revenue_ranks(v2_df):
 
 
 def _build_account_meta_lookup(booking_data_df, account_lookup, account_ids,
-                               v2_df=None, revenue_ranks=None):
+                               v2_df=None, revenue_ranks=None,
+                               last_sale_override=None, tickets_365_override=None):
     """Build per-account metadata for the tier-movement emails.
 
     Returns a dict keyed by AccountId with: account_name, industry, sub_industry,
     last_ticket_sale, last_event_created, tickets_365d, account_created,
     years_loyalty, plus revenue rank fields if `revenue_ranks` is provided.
+
+    `last_sale_override` / `tickets_365_override`: pre-computed per-account maps
+    (warehouse path) — when given, used instead of scanning booking_data_df,
+    which on the warehouse path is only a 90-day frame and lacks the all-time
+    last-sale. last_sale values are tz-stripped to match the legacy behaviour.
     """
     bk = booking_data_df
-    if bk is not None and not bk.empty:
+    if last_sale_override is not None or tickets_365_override is not None:
+        # Warehouse path: maps already computed via grouped SQL. Strip tz on
+        # last_sale to match the legacy frame-derived path (which did the same).
+        last_sale = {}
+        for aid, ts in (last_sale_override or {}).items():
+            ts = pd.Timestamp(ts)
+            if ts.tzinfo is not None:
+                ts = ts.tz_convert(None)
+            last_sale[aid] = ts
+        tickets_365 = dict(tickets_365_override or {})
+    elif bk is not None and not bk.empty:
         # Successful txns only — failed txns shouldn't drive "last ticket sale"
         if 'Status' in bk.columns:
             bk_ok = bk[bk['Status'] == 'Successful']
@@ -193,7 +209,8 @@ def _build_account_meta_lookup(booking_data_df, account_lookup, account_ids,
 
 
 def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df,
-                                zoho_token, dry_run: bool = False):
+                                zoho_token, dry_run: bool = False,
+                                meta_cutoff_365_iso: str = None):
     """Run the v2 calculator, detect changes, send emails, update SharePoint state.
 
     Self-contained — failure here does not bubble up into the main run.
@@ -201,6 +218,11 @@ def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df
 
     `dry_run`: if True, skip all SharePoint writes (history/snapshot remain
     untouched). Useful for local validation without affecting production state.
+
+    `meta_cutoff_365_iso`: when set (warehouse path), per-account last-sale and
+    365-day ticket maps are queried from the warehouse for the email-relevant
+    accounts instead of scanning booking_data_df (which is then only a 90-day
+    frame). The value is the UTC ISO cutoff for the 365-day ticket sum.
     """
     if not SHAREPOINT_DRIVE_ID:
         logger.warning("SHAREPOINT_DRIVE_ID not set — skipping tier-movement pipeline.")
@@ -296,9 +318,25 @@ def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df
 
     if not relevant.empty:
         revenue_ranks = _build_revenue_ranks(v2_df)
+        relevant_ids = relevant["AccountId"].tolist()
+        last_sale_override = tickets_365_override = None
+        if meta_cutoff_365_iso is not None:
+            # Warehouse path: query last-sale + 365d tickets for just these
+            # movers rather than scanning a frame.
+            from modules import warehouse
+            conn = warehouse.connect()
+            try:
+                last_sale_override, tickets_365_override = (
+                    warehouse.account_last_sale_and_tickets(
+                        conn, meta_cutoff_365_iso, account_ids=relevant_ids)
+                )
+            finally:
+                conn.close()
         account_meta = _build_account_meta_lookup(
-            booking_data_df, account_lookup, relevant["AccountId"].tolist(),
+            booking_data_df, account_lookup, relevant_ids,
             v2_df=v2_df, revenue_ranks=revenue_ranks,
+            last_sale_override=last_sale_override,
+            tickets_365_override=tickets_365_override,
         )
         zoho_urls = lookup_account_urls(
             zoho_token, ZOHO_ORG_ID, relevant["AccountId"].tolist()
@@ -320,8 +358,16 @@ def _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df
         logger.info("Tier history and snapshot saved.")
 
 
-def main(dry_run: bool = False):
-    """Main execution function."""
+def main(dry_run: bool = False, use_combined: bool = False):
+    """Main execution function.
+
+    `use_combined`: when True, load the full combined booking pickle via
+    load_combined_booking_data (the legacy path, kept as the validation
+    reference — needs enough RAM to hold the whole frame, so it OOMs the 4 GB
+    Pi). Default False reads the SQLite warehouse in a memory-bounded way:
+    the aggregator streams from it, and the row-hungry consumers
+    (industry-revenue, account-meta, rapid-drop) get filtered/grouped queries.
+    """
     start_time = time.time()
     
     # Validate environment variables
@@ -416,25 +462,14 @@ def main(dry_run: bool = False):
             logger.warning(f"Account report missing columns: {missing_cols}")
             print(f"WARNING: Account report missing columns: {missing_cols}")
         
-        # Load booking data once for both aggregation and revenue analysis
+        # Load booking data for aggregation + the revenue consumers.
         print("\nLoading booking data...")
         logger.info("Starting booking data loading")
-        booking_data_df = None
+        booking_data_df = None      # full/2-year frame (combined path only)
+        rapid_drop_df = None        # small ~90-day frame for rapid-drop (both paths)
+        industry_metrics_365 = None # per-account 365d aggregate (warehouse path)
+        wh_meta = None              # (last_sale, tickets_365) maps (warehouse path)
         try:
-            # Combined BookingDataAll + current-month BookingData, de-duped.
-            # prepare_data.py builds this pickle first thing each morning, so
-            # this normally just loads it rather than re-combining from S3.
-            from modules.utils.data_loader import load_combined_booking_data
-
-            print("Loading combined booking data...")
-            logger.info("Loading combined booking data (prebuilt pickle if available)")
-            booking_data_df = load_combined_booking_data(report_date)
-            logger.info(f"Combined booking data: {len(booking_data_df):,} transactions")
-            print(f"Combined booking data: {len(booking_data_df):,} transactions")
-
-            # Process data using optimized chunked approach for aggregation
-            logger.info("Starting account metrics aggregation")
-            print("\nProcessing booking data for account metrics...")
             aggregator = BookingAggregator(
                 cutoff_365=CUTOFF_365,
                 cutoff_730=CUTOFF_730,
@@ -442,94 +477,100 @@ def main(dry_run: bool = False):
                 event_freq_cutoff_previous=EVENT_FREQ_CUTOFF_PREVIOUS
             )
 
-            # Convert DataFrame to chunks for aggregator (reuse loaded data)
-            def df_to_chunks(df, chunk_size=100000):
-                """Convert DataFrame to chunks iterator"""
-                for i in range(0, len(df), chunk_size):
-                    yield df.iloc[i:i + chunk_size].copy()
+            if use_combined:
+                # Reference path: full combined pickle, fed to the aggregator in
+                # slices. Holds the whole frame in memory (OOMs a 4 GB Pi) —
+                # kept only for validating the warehouse path on a dev box.
+                from modules.utils.data_loader import load_combined_booking_data
+                print("Loading combined booking data (--combined reference path)...")
+                logger.info("Loading combined booking data (--combined)")
+                booking_data_df = load_combined_booking_data(report_date)
+                logger.info(f"Combined booking data: {len(booking_data_df):,} transactions")
 
-            chunks = df_to_chunks(booking_data_df, chunk_size=100000)
-            account_metrics = aggregator.aggregate_bookings(chunks)
+                def df_to_chunks(df, chunk_size=100000):
+                    for i in range(0, len(df), chunk_size):
+                        yield df.iloc[i:i + chunk_size].copy()
+                account_metrics = aggregator.aggregate_bookings(
+                    df_to_chunks(booking_data_df, chunk_size=100000)
+                )
+
+                # Build the 2-year revenue frame exactly as before (reference).
+                revenue_cols = ['AccountId', 'TransactionDate', 'PaymentReceived', 'BookingFee',
+                              'CardFee', 'ProcessingFee', 'TicketFee', 'EventId', 'TicketQuantity']
+                available_cols = [c for c in revenue_cols if c in booking_data_df.columns]
+                booking_data_df = booking_data_df[available_cols].copy()
+                if all(c in booking_data_df.columns for c in ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']):
+                    booking_data_df['Revenue'] = (booking_data_df['BookingFee'] + booking_data_df['CardFee'] +
+                                                  booking_data_df['ProcessingFee'] + booking_data_df['TicketFee'])
+                elif 'PaymentReceived' in booking_data_df.columns:
+                    booking_data_df['Revenue'] = booking_data_df['PaymentReceived']
+                if 'Industry' in account_df.columns and 'SubIndustry' in account_df.columns:
+                    aidf = account_df[['Id', 'Industry', 'SubIndustry']].rename(columns={'Id': 'AccountId'}).copy()
+                    booking_data_df['AccountId'] = pd.to_numeric(booking_data_df['AccountId'], errors='coerce').astype('Int64')
+                    aidf['AccountId'] = pd.to_numeric(aidf['AccountId'], errors='coerce').astype('Int64')
+                    booking_data_df = booking_data_df.merge(aidf, on='AccountId', how='left')
+                if 'TransactionDate' in booking_data_df.columns:
+                    booking_data_df['Year'] = booking_data_df['TransactionDate'].dt.year
+                    booking_data_df['Month'] = booking_data_df['TransactionDate'].dt.month
+                    two_years_ago = pd.Timestamp.now('UTC') - pd.DateOffset(years=2)
+                    booking_data_df = booking_data_df[booking_data_df['TransactionDate'] >= two_years_ago]
+                rapid_drop_df = booking_data_df  # rapid-drop reads from the same frame
+                logger.info(f"Prepared {len(booking_data_df):,} transactions for revenue analysis")
+            else:
+                # Warehouse path: stream the aggregator from SQLite, and serve
+                # each row-hungry consumer a purpose-built filtered/grouped query
+                # — never materialise the full (or 2-year) frame.
+                from modules import warehouse
+                print("Streaming booking data from warehouse for aggregation...")
+                logger.info("Aggregating from warehouse (streamed)")
+                conn = warehouse.connect()
+                try:
+                    agg_cols = ['AccountId', 'TicketQuantity', 'BookingFee', 'CardFee',
+                                'ProcessingFee', 'TicketFee', 'TransactionDate',
+                                'EventId', 'EventDate', 'Status']
+                    account_metrics = aggregator.aggregate_bookings(
+                        warehouse.iter_bookings(conn, columns=agg_cols, chunk_size=100000)
+                    )
+
+                    # 365-day per-account aggregate for the industry report.
+                    cut365 = (pd.Timestamp.now('UTC') - pd.Timedelta(days=365)).strftime('%Y-%m-%d %H:%M:%S')
+                    industry_metrics_365 = warehouse.account_metrics_365(conn, cut365)
+
+                    # Small ~90-day frame for rapid-drop (AccountId/TransactionDate/
+                    # PaymentReceived only; rapid-drop looks back at most 84 days).
+                    cut90 = (pd.Timestamp.now('UTC') - pd.Timedelta(days=90)).strftime('%Y-%m-%d %H:%M:%S')
+                    rd_parts = list(warehouse.iter_bookings(
+                        conn, columns=['AccountId', 'TransactionDate', 'PaymentReceived'],
+                        where="TransactionDate >= ? AND Status = 'Successful'",
+                        params=(cut90,), chunk_size=200000,
+                    ))
+                    rapid_drop_df = (pd.concat(rd_parts, ignore_index=True)
+                                     if rd_parts else pd.DataFrame(
+                                         columns=['AccountId', 'TransactionDate', 'PaymentReceived']))
+                    # Merge industry so process_accounts' `Industry in metrics_df`
+                    # path behaves the same (it reads tiers, not booking industry,
+                    # but keep the column present for parity).
+                    if 'Industry' in account_df.columns:
+                        aidf = account_df[['Id', 'Industry']].rename(columns={'Id': 'AccountId'}).copy()
+                        rapid_drop_df['AccountId'] = pd.to_numeric(rapid_drop_df['AccountId'], errors='coerce').astype('Int64')
+                        aidf['AccountId'] = pd.to_numeric(aidf['AccountId'], errors='coerce').astype('Int64')
+                        rapid_drop_df = rapid_drop_df.merge(aidf, on='AccountId', how='left')
+
+                    # Stash a connection-free callable for account-meta later.
+                    wh_meta = cut365
+                finally:
+                    conn.close()
+                booking_data_df = rapid_drop_df  # what process_accounts/industry see
 
             logger.info(f"Total unique accounts found: {len(account_metrics):,}")
             print(f"\nTotal unique accounts found: {len(account_metrics):,}")
 
-            # Prepare booking data for revenue analysis
-            print("\nPreparing booking data for revenue analysis...")
-            logger.info("Preparing booking data for revenue analysis")
-
-            # Create a copy for revenue analysis (to preserve original data)
-            # Only keep necessary columns for revenue analysis to save memory
-            revenue_cols = ['AccountId', 'TransactionDate', 'PaymentReceived', 'BookingFee',
-                          'CardFee', 'ProcessingFee', 'TicketFee', 'EventId', 'TicketQuantity']
-            # Keep only columns that exist in the dataframe
-            available_cols = [col for col in revenue_cols if col in booking_data_df.columns]
-            booking_data_df = booking_data_df[available_cols].copy()
-            
-            # Calculate total revenue if component columns exist
-            if all(col in booking_data_df.columns for col in ['BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee']):
-                booking_data_df['Revenue'] = (booking_data_df['BookingFee'] + 
-                                             booking_data_df['CardFee'] + 
-                                             booking_data_df['ProcessingFee'] + 
-                                             booking_data_df['TicketFee'])
-            elif 'PaymentReceived' in booking_data_df.columns:
-                # Fallback to PaymentReceived if fee columns not available
-                booking_data_df['Revenue'] = booking_data_df['PaymentReceived']
-            
-            # TransactionDate is already in UTC datetime format from load_booking_data
-            # No need to convert again
-            
-            # Merge industry information from Accounts data
-            print("Merging industry information...")
-            if 'Industry' in account_df.columns and 'SubIndustry' in account_df.columns:
-                # Prepare account data for merge
-                account_industry_df = account_df[['Id', 'Industry', 'SubIndustry']].copy()
-                account_industry_df.rename(columns={'Id': 'AccountId'}, inplace=True)
-                
-                # Cast both sides to nullable Int64 for the merge. The booking
-                # frame loads AccountId as float32 (to tolerate NA); the Accounts
-                # frame's Id is integer. Casting to a shared integer dtype avoids
-                # materialising a Python-object string column on a multi-million-
-                # row frame, which a `.astype(str)` round-trip would do.
-                booking_data_df['AccountId'] = (
-                    pd.to_numeric(booking_data_df['AccountId'], errors='coerce').astype('Int64')
-                )
-                account_industry_df['AccountId'] = (
-                    pd.to_numeric(account_industry_df['AccountId'], errors='coerce').astype('Int64')
-                )
-
-                # Merge industry data
-                booking_data_df = booking_data_df.merge(
-                    account_industry_df,
-                    on='AccountId',
-                    how='left'
-                )
-                
-                # Log missing industry data
-                missing_industry = booking_data_df['Industry'].isna().sum()
-                if missing_industry > 0:
-                    print(f"WARNING: {missing_industry:,} transactions missing industry data")
-            
-            # Add year and month columns from TransactionDate for performance
-            if 'TransactionDate' in booking_data_df.columns:
-                booking_data_df['Year'] = booking_data_df['TransactionDate'].dt.year
-                booking_data_df['Month'] = booking_data_df['TransactionDate'].dt.month
-                
-                # Filter to last 2 years of data for performance
-                two_years_ago = pd.Timestamp.now('UTC') - pd.DateOffset(years=2)
-                original_count = len(booking_data_df)
-                booking_data_df = booking_data_df[booking_data_df['TransactionDate'] >= two_years_ago]
-                removed_count = original_count - len(booking_data_df)
-                logger.info(f"Filtered to last 2 years: {len(booking_data_df):,} transactions (removed {removed_count:,})")
-                print(f"Filtered to last 2 years: {len(booking_data_df):,} transactions (removed {removed_count:,})")
-            
-            logger.info(f"Prepared {len(booking_data_df):,} transactions for revenue analysis")
-            print(f"Prepared booking data: {len(booking_data_df):,} transactions for revenue analysis")
-            
         except Exception as e:
-            logger.warning(f"Failed to load full booking data for revenue analysis: {str(e)}")
-            print(f"WARNING: Failed to load full booking data for revenue analysis: {str(e)}")
+            logger.warning(f"Failed to load booking data for revenue analysis: {str(e)}")
+            print(f"WARNING: Failed to load booking data for revenue analysis: {str(e)}")
             print("Will proceed with basic revenue calculations only")
+            import traceback
+            traceback.print_exc()
             booking_data_df = None
         
     except Exception as e:
@@ -651,13 +692,17 @@ def main(dry_run: bool = False):
         logger.warning(f"Failed to email tier updates report: {str(e)}")
         print(f"WARNING: Failed to email tier updates report: {str(e)}")
     
-    # Generate industry revenue reports
+    # Generate industry revenue reports. Warehouse path passes the pre-computed
+    # 365-day per-account aggregate (industry_metrics_365); combined path passes
+    # the booking frame and lets the function aggregate it.
     print("\n=== Industry Revenue Reports ===")
     try:
-        if booking_data_df is not None and not booking_data_df.empty:
+        have_industry_source = industry_metrics_365 is not None or (
+            booking_data_df is not None and not booking_data_df.empty)
+        if have_industry_source:
             logger.info("Generating industry revenue reports")
             print("Generating industry revenue reports...")
-            
+
             # Generate the reports and save as CSVs
             from modules.industry_revenue_report import generate_industry_revenue_csv_files
             csv_files = generate_industry_revenue_csv_files(
@@ -665,7 +710,8 @@ def main(dry_run: bool = False):
                 account_df,
                 updates,
                 report_date,
-                reports_dir=REPORTS_DIR
+                reports_dir=REPORTS_DIR,
+                account_metrics_365=industry_metrics_365,
             )
             
             logger.info(f"Generated {len(csv_files)} industry revenue CSV files")
@@ -737,7 +783,8 @@ def main(dry_run: bool = False):
         if zoho_token is None:
             zoho_token = get_access_token()
         _run_tier_movement_pipeline(account_metrics, account_lookup, booking_data_df,
-                                    zoho_token, dry_run=dry_run)
+                                    zoho_token, dry_run=dry_run,
+                                    meta_cutoff_365_iso=wh_meta)
     except Exception as e:
         logger.error(f"Tier-movement pipeline failed: {e}")
         print(f"ERROR: Tier-movement pipeline failed: {e}")
@@ -970,6 +1017,13 @@ if __name__ == "__main__":
              "SharePoint and start fresh. Default behaviour resumes from the "
              "last day already in the file.",
     )
+    parser.add_argument(
+        "--combined",
+        action="store_true",
+        help="Use the legacy combined-pickle booking load instead of the SQLite "
+             "warehouse. Holds the full frame in memory (OOMs a 4 GB Pi) — for "
+             "validating the warehouse path against the old output on a dev box.",
+    )
     args = parser.parse_args()
 
     if args.rebuild_history:
@@ -978,4 +1032,4 @@ if __name__ == "__main__":
         _replay_history(start, end, dry_run=args.dry_run,
                         resume=not args.rebuild_from_scratch)
     else:
-        main(dry_run=args.dry_run)
+        main(dry_run=args.dry_run, use_combined=args.combined)

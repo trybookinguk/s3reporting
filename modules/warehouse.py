@@ -278,6 +278,74 @@ def iter_bookings(conn: sqlite3.Connection, where: str = None, params: tuple = (
         yield _retype_bookings(chunk)
 
 
+def account_metrics_365(conn: sqlite3.Connection, cutoff_iso: str) -> dict:
+    """Per-account aggregate over the last 365 days, for the industry report.
+
+    Returns {account_id: {EventsWithTickets, PaidTicketsIssued, TotalFees}},
+    matching calculate_account_metrics' output. Only Successful txns count.
+    `cutoff_iso` is a UTC ISO timestamp string (compute as now-365d in UTC).
+    """
+    sql = (
+        "SELECT AccountId, "
+        "COUNT(DISTINCT EventId) AS EventsWithTickets, "
+        "COALESCE(SUM(TicketQuantity), 0) AS PaidTicketsIssued, "
+        "ROUND(COALESCE(SUM(BookingFee),0)+COALESCE(SUM(CardFee),0)"
+        "+COALESCE(SUM(ProcessingFee),0)+COALESCE(SUM(TicketFee),0), 2) AS TotalFees "
+        "FROM bookings WHERE TransactionDate >= ? AND Status = 'Successful' "
+        "GROUP BY AccountId"
+    )
+    df = pd.read_sql_query(sql, conn, params=(cutoff_iso,))
+    out = {}
+    for row in df.itertuples(index=False):
+        aid = int(row.AccountId) if pd.notna(row.AccountId) else None
+        if aid is None:
+            continue
+        out[aid] = {
+            "EventsWithTickets": int(row.EventsWithTickets or 0),
+            "PaidTicketsIssued": int(row.PaidTicketsIssued or 0),
+            "TotalFees": round(float(row.TotalFees or 0.0), 2),
+        }
+    return out
+
+
+def account_last_sale_and_tickets(conn: sqlite3.Connection, cutoff_iso: str,
+                                  account_ids=None):
+    """For the tier-movement emails: per-account all-time max(TransactionDate)
+    and last-365d sum(TicketQuantity), Successful txns only.
+
+    Returns (last_sale: {aid: tz-aware UTC Timestamp}, tickets_365: {aid: int}).
+    `account_ids`, if given, scopes both queries to those accounts.
+    """
+    where = "Status = 'Successful'"
+    scope_params = ()
+    if account_ids:
+        ids = [int(a) for a in account_ids]
+        placeholders = ",".join("?" * len(ids))
+        where += f" AND AccountId IN ({placeholders})"
+        scope_params = tuple(ids)
+
+    last_df = pd.read_sql_query(
+        f"SELECT AccountId, MAX(TransactionDate) AS last_sale FROM bookings "
+        f"WHERE {where} GROUP BY AccountId",
+        conn, params=scope_params,
+    )
+    last_sale = {}
+    for row in last_df.itertuples(index=False):
+        if pd.notna(row.AccountId) and row.last_sale is not None:
+            last_sale[int(row.AccountId)] = pd.to_datetime(row.last_sale, utc=True)
+
+    tkt_df = pd.read_sql_query(
+        f"SELECT AccountId, COALESCE(SUM(TicketQuantity),0) AS tickets FROM bookings "
+        f"WHERE {where} AND TransactionDate >= ? GROUP BY AccountId",
+        conn, params=scope_params + (cutoff_iso,),
+    )
+    tickets_365 = {
+        int(row.AccountId): int(row.tickets or 0)
+        for row in tkt_df.itertuples(index=False) if pd.notna(row.AccountId)
+    }
+    return last_sale, tickets_365
+
+
 def read_bookings_grouped(conn: sqlite3.Connection, select_sql: str,
                           where: str = None, params: tuple = (),
                           group_by: str = None) -> pd.DataFrame:

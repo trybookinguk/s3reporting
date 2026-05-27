@@ -338,7 +338,7 @@ def generate_industry_revenue_reports(booking_df, account_df, tier_updates, repo
 
 
 def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, report_date,
-                                        reports_dir="."):
+                                        reports_dir=".", account_metrics_365=None):
     """
     Generate industry revenue reports as individual CSV files.
 
@@ -351,6 +351,12 @@ def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, re
         tier_updates: DataFrame with tier calculations including Current_Tier
         report_date: The report date (pd.Timestamp) to determine current period
         reports_dir: Directory to write the CSV files into (created if missing).
+        account_metrics_365: Optional pre-computed per-account 365-day aggregate
+            {account_id: {EventsWithTickets, PaidTicketsIssued, TotalFees}}. When
+            given (warehouse path), the per-account metrics come from this dict
+            instead of filtering+grouping booking_df — so booking_df can be None
+            and no full frame is held. When None (combined path), metrics are
+            computed from booking_df as before.
 
     Returns:
         List of generated CSV file paths
@@ -403,14 +409,19 @@ def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, re
         (account_df['DateTimeCreated'] <= period_end)
     )
     
-    # Filter booking data to current period (last 365 days)
-    booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], errors='coerce', utc=True).dt.tz_localize(None)
-    current_bookings = booking_df[
-        (booking_df['TransactionDate'] >= period_start) & 
-        (booking_df['TransactionDate'] <= period_end)
-    ].copy()
-    
-    logger.info(f"Found {len(current_bookings):,} bookings in current period (last 365 days)")
+    # Filter booking data to current period (last 365 days). Skipped on the
+    # warehouse path, where per-account 365-day metrics arrive pre-aggregated
+    # in account_metrics_365 (no full booking frame held).
+    if account_metrics_365 is None:
+        booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], errors='coerce', utc=True).dt.tz_localize(None)
+        current_bookings = booking_df[
+            (booking_df['TransactionDate'] >= period_start) &
+            (booking_df['TransactionDate'] <= period_end)
+        ].copy()
+        logger.info(f"Found {len(current_bookings):,} bookings in current period (last 365 days)")
+    else:
+        current_bookings = None
+        logger.info(f"Using pre-aggregated 365-day metrics for {len(account_metrics_365):,} accounts")
     logger.info(f"Found {account_df['IsNewAccount'].sum():,} new accounts (created in last 365 days)")
     logger.info(f"Processing {account_df['Industry'].nunique()} industries")
     
@@ -431,15 +442,25 @@ def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, re
         industry_accounts = account_df[account_df['Industry'] == industry]
         industry_account_ids = industry_accounts['AccountId'].unique()
         
-        # Get bookings for these accounts
-        industry_bookings = current_bookings[current_bookings['AccountId'].isin(industry_account_ids)]
-        
+        # Get bookings for these accounts (combined path only)
+        if account_metrics_365 is None:
+            industry_bookings = current_bookings[current_bookings['AccountId'].isin(industry_account_ids)]
+
         # Calculate metrics for each account in this industry
         industry_data = []
         for account_id in industry_account_ids:
-            account_bookings = industry_bookings[industry_bookings['AccountId'] == account_id]
-            metrics = calculate_account_metrics(account_bookings, account_id)
-            
+            if account_metrics_365 is None:
+                account_bookings = industry_bookings[industry_bookings['AccountId'] == account_id]
+                metrics = calculate_account_metrics(account_bookings, account_id)
+            else:
+                # Pre-aggregated from SQL; fall back to zeros for accounts with
+                # no activity in the period (matches calculate_account_metrics).
+                agg = account_metrics_365.get(account_id)
+                metrics = dict(agg) if agg else {
+                    'EventsWithTickets': 0, 'PaidTicketsIssued': 0, 'TotalFees': 0.0
+                }
+                metrics['AccountId'] = account_id
+
             # Add tier and gateway group
             metrics['Tier'] = tier_lookup.get(account_id, 'NIL')
             

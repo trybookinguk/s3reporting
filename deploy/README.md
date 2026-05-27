@@ -20,11 +20,11 @@ been removed — the Pi now owns all of this.
 ## One-time setup
 
 ```bash
-mkdir -p /root/logs /root/reporting/reports
-chmod 600 /root/reporting/.env
+mkdir -p /root/logs /root/s3reporting/reports
+chmod 600 /root/s3reporting/.env
 pip install --break-system-packages boto3 msal requests pandas pytz numpy scipy \
     python-dateutil google-analytics-data
-crontab /root/reporting/deploy/pi-crontab
+crontab /root/s3reporting/deploy/pi-crontab
 ```
 
 `python-dateutil` is required by the dashboard; `google-analytics-data` is
@@ -38,17 +38,17 @@ On top of the existing secrets, add:
 # --- Local paths (replace Actions cache/artifacts) ---
 
 # Persistent S3 cache shared across the staggered jobs.
-S3_CACHE_DIR=/root/reporting/.cache
+S3_CACHE_DIR=/root/s3reporting/.cache
 
 # Combined booking pickle location (defaults under S3_CACHE_DIR/prepared).
-DATA_DIR=/root/reporting/.cache/prepared
+DATA_DIR=/root/s3reporting/.cache/prepared
 
 # Tier report CSVs (tier_updates_*, upcoming_annual_events_*, industry_summary_*,
 # *_current_*) — written here instead of uploaded as Actions artifacts.
-REPORTS_DIR=/root/reporting/reports
+REPORTS_DIR=/root/s3reporting/reports
 
 # ETag manifest for the SharePoint sync.
-SYNC_MANIFEST_DIR=/root/reporting/.sync_manifest
+SYNC_MANIFEST_DIR=/root/s3reporting/.sync_manifest
 
 # After prepare_data.py runs first each morning, downstream jobs trust that
 # day's cache and skip per-file head_object checks. Set on the shared .env so
@@ -95,6 +95,6 @@ For any manual run, source the env first. To force fresh S3 reads bypassing the
 trusted cache, prefix with `NO_CACHE=1`:
 
 ```bash
-set -a && source /root/reporting/.env && set +a
+set -a && source /root/s3reporting/.env && set +a
 NO_CACHE=1 python3 prepare_data.py    # ignore cache, re-download everything
 ```

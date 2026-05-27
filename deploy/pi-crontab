@@ -1,29 +1,29 @@
 # Reporting jobs — Raspberry Pi (root crontab)
 # Install with:  crontab deploy/pi-crontab
 #
-# Each job sources /root/reporting/.env (chmod 600) so secrets land in the
+# Each job sources /root/s3reporting/.env (chmod 600) so secrets land in the
 # environment, then runs from the repo root. Logs append to /root/logs.
-# Weekdays only (Mon–Fri), staggered from 02:00 UTC.
+# Weekdays only (Mon–Fri), staggered from 02:00.
 #
 # prepare_data.py runs FIRST and refreshes the S3 cache + builds the combined
 # booking pickle for the day. Because of that, the later jobs set
-# CACHE_TRUST_TODAY=1 (in /root/reporting/.env) so they trust today's cache and
-# skip redundant S3 head_object checks.
+# CACHE_TRUST_TODAY=1 (in /root/s3reporting/.env) so they trust today's cache
+# and skip redundant S3 head_object checks.
 
 # 1. Prep — refresh S3 cache + build combined booking dataset (heaviest read)
-0 2 * * 1-5 set -a && source /root/reporting/.env && set +a && cd /root/reporting && python3 prepare_data.py >> /root/logs/prepare-data.log 2>&1
+0 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py >> /root/logs/prepare-data.log 2>&1
 
-# 2. S3 -> SharePoint sync (manifest persists at /root/reporting/.sync_manifest)
-15 2 * * 1-5 set -a && source /root/reporting/.env && set +a && cd /root/reporting && python3 s3_to_sharepoint.py >> /root/logs/s3-sharepoint.log 2>&1
+# 2. S3 -> SharePoint sync (manifest persists at /root/s3reporting/.sync_manifest)
+15 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 s3_to_sharepoint.py >> /root/logs/s3-sharepoint.log 2>&1
 
 # 3. Zoho industry sync
-30 2 * * 1-5 set -a && source /root/reporting/.env && set +a && cd /root/reporting && python3 zoho_industry.py >> /root/logs/zoho-industry.log 2>&1
+30 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 zoho_industry.py >> /root/logs/zoho-industry.log 2>&1
 
-# 4. Zoho tiers update (reports saved to /root/reporting/reports via REPORTS_DIR)
-45 2 * * 1-5 set -a && source /root/reporting/.env && set +a && cd /root/reporting && python3 zoho_tiers.py >> /root/logs/zoho-tiers.log 2>&1
+# 4. Zoho tiers update (reports saved to /root/s3reporting/reports via REPORTS_DIR)
+45 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 zoho_tiers.py >> /root/logs/zoho-tiers.log 2>&1
 
 # 5. Dashboard data — build aggregate JSON and upload to SharePoint (heaviest compute)
-15 3 * * 1-5 set -a && source /root/reporting/.env && set +a && cd /root/reporting && python3 generate_dashboard_data.py >> /root/logs/dashboard.log 2>&1
+15 3 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 generate_dashboard_data.py >> /root/logs/dashboard.log 2>&1
 
 # Log rotation: delete logs older than 30 days, weekly on Sunday at midnight
 0 0 * * 0 find /root/logs -name "*.log" -mtime +30 -delete

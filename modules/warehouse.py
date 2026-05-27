@@ -163,6 +163,68 @@ def upsert_bookings(conn: sqlite3.Connection, df: pd.DataFrame) -> dict:
     return stats
 
 
+def upsert_bookings_chunks(conn: sqlite3.Connection, chunk_iter,
+                           seed: bool = False) -> dict:
+    """Stream booking chunks into the table without ever holding the full frame.
+
+    This is the memory-safe ingest path for the Pi: BookingDataAll is ~4.6M
+    rows / ~2 GB as a single frame, which OOMs a 4 GB Pi. Each chunk
+    (~100k rows) is written with INSERT OR REPLACE and then released, so peak
+    memory stays at one chunk.
+
+    `seed=True` is a hint that this is the first bulk load (an empty table);
+    the first chunk creates the table + PK + indexes, subsequent chunks upsert.
+    """
+    staged = inserted = replaced = 0
+    created = _table_exists(conn, "bookings") and _table_rowcount(conn, "bookings") > 0
+
+    with conn:  # single transaction for the whole stream
+        for chunk in chunk_iter:
+            if chunk is None or chunk.empty:
+                continue
+            if BOOKINGS_KEY not in chunk.columns:
+                raise ValueError(f"bookings chunk missing {BOOKINGS_KEY!r}")
+            chunk = chunk.dropna(subset=[BOOKINGS_KEY])
+            chunk = _stringify_datetimes(chunk)
+            staged += len(chunk)
+
+            if not created:
+                chunk.to_sql("bookings", conn, if_exists="replace", index=False)
+                _add_primary_key(conn, "bookings", BOOKINGS_KEY)
+                conn.execute("CREATE INDEX IF NOT EXISTS ix_bookings_account ON bookings(AccountId)")
+                conn.execute("CREATE INDEX IF NOT EXISTS ix_bookings_txndate ON bookings(TransactionDate)")
+                created = True
+                inserted += len(chunk)
+                continue
+
+            _ensure_columns(conn, "bookings", chunk.columns)
+            chunk.to_sql("_stage_bookings", conn, if_exists="replace", index=False)
+            cols = list(chunk.columns)
+            collist = ",".join(f'"{c}"' for c in cols)
+            rep = conn.execute(
+                "SELECT COUNT(*) FROM _stage_bookings s "
+                "WHERE EXISTS (SELECT 1 FROM bookings b WHERE b.{k}=s.{k})".format(k=BOOKINGS_KEY)
+            ).fetchone()[0]
+            conn.execute(
+                f"INSERT OR REPLACE INTO bookings ({collist}) "
+                f"SELECT {collist} FROM _stage_bookings"
+            )
+            conn.execute("DROP TABLE _stage_bookings")
+            replaced += rep
+            inserted += len(chunk) - rep
+
+        _set_meta(conn, "schema_version", SCHEMA_VERSION)
+        _set_meta(conn, "bookings_last_ingest", datetime.utcnow().isoformat())
+        after = _table_rowcount(conn, "bookings")
+        _set_meta(conn, "bookings_rowcount", after)
+
+    stats = {"staged": staged, "inserted": inserted, "replaced": replaced,
+             "rows_after": after}
+    logger.info("bookings chunk upsert: staged=%d inserted=%d replaced=%d total=%d",
+                staged, inserted, replaced, after)
+    return stats
+
+
 def replace_snapshot(conn: sqlite3.Connection, table: str, df: pd.DataFrame,
                      key: str = None) -> int:
     """Full-replace a snapshot table (accounts, users). Returns row count."""

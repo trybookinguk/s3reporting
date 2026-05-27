@@ -31,7 +31,6 @@ from modules.utils.data_loader import (
     get_loader,
     load_accounts,
     load_users,
-    load_booking_data,
     load_combined_booking_data,
 )
 from modules import warehouse
@@ -44,7 +43,7 @@ logging.basicConfig(
 log = logging.getLogger("prepare-data")
 
 
-def main(build_combined: bool = True, build_warehouse: bool = True) -> int:
+def main(build_combined: bool = False, build_warehouse: bool = True) -> int:
     started = pd.Timestamp.now(UK_TZ)
     log.info("Data preparation started at %s", started.strftime("%Y-%m-%d %H:%M:%S %Z"))
 
@@ -108,27 +107,37 @@ def _update_warehouse(report_date, accounts_df, users_df) -> None:
     """
     db_path = warehouse.default_db_path()
     log.info("Updating warehouse at %s", db_path)
+    loader = get_loader()
     conn = warehouse.connect(db_path)
     try:
         before = warehouse.summary(conn)
         log.info("  Warehouse before: %s", before)
 
-        # Seed bookings from BookingDataAll on first run only.
+        # Bookings are streamed in chunks — never the whole frame in memory.
+        # On a 4 GB Pi the full BookingDataAll (~4.6M rows / ~2 GB) cannot be
+        # held as one DataFrame, so we ingest directly from the chunk
+        # generator. use_cache is irrelevant here (load_booking_chunks streams
+        # from S3); we deliberately avoid load_booking_data, which would
+        # materialise the whole file.
+
+        # Seed from BookingDataAll on first run only.
         if before["bookings_rows"] == 0:
-            log.info("  bookings table empty — seeding from BookingDataAll...")
-            seed = load_booking_data(target_date=report_date, data_type="BookingDataAll")
-            log.info("    BookingDataAll: %d rows", len(seed))
-            warehouse.upsert_bookings(conn, seed)
-            del seed
+            log.info("  bookings table empty — seeding from BookingDataAll (streamed)...")
+            chunks = loader.load_booking_chunks(
+                target_date=report_date, data_type="BookingDataAll", chunk_size=100000
+            )
+            stats = warehouse.upsert_bookings_chunks(conn, chunks, seed=True)
+            log.info("    Seed: %s", stats)
 
         # Daily delta: upsert the current-month BookingData (cumulative-to-date).
-        log.info("  Upserting current-month BookingData...")
-        month = load_booking_data(target_date=report_date, data_type="BookingData")
-        log.info("    BookingData: %d rows", len(month))
-        warehouse.upsert_bookings(conn, month)
-        del month
+        log.info("  Upserting current-month BookingData (streamed)...")
+        month_chunks = loader.load_booking_chunks(
+            target_date=report_date, data_type="BookingData", chunk_size=100000
+        )
+        stats = warehouse.upsert_bookings_chunks(conn, month_chunks)
+        log.info("    Daily: %s", stats)
 
-        # Snapshots.
+        # Snapshots (these frames are small — accounts/users are tens of MB).
         if accounts_df is not None:
             warehouse.replace_snapshot(conn, "accounts", accounts_df, key="Id")
         if users_df is not None:
@@ -140,11 +149,15 @@ def _update_warehouse(report_date, accounts_df, users_df) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Daily S3 cache refresh + combined booking build.")
+    parser = argparse.ArgumentParser(
+        description="Daily S3 cache refresh + SQLite warehouse update."
+    )
     parser.add_argument(
-        "--no-combined",
+        "--combined",
         action="store_true",
-        help="Skip building the combined booking pickle.",
+        help="Also build the combined booking pickle. OFF by default — it holds "
+             "the full ~4.6M-row frame in memory and OOMs a 4 GB Pi. The "
+             "warehouse is the memory-safe replacement.",
     )
     parser.add_argument(
         "--no-warehouse",
@@ -152,5 +165,5 @@ if __name__ == "__main__":
         help="Skip updating the SQLite warehouse (warehouse.db).",
     )
     args = parser.parse_args()
-    sys.exit(main(build_combined=not args.no_combined,
+    sys.exit(main(build_combined=args.combined,
                   build_warehouse=not args.no_warehouse))

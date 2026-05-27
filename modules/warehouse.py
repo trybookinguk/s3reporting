@@ -257,6 +257,45 @@ def read_table(conn: sqlite3.Connection, table: str) -> pd.DataFrame:
     return pd.read_sql_query(f"SELECT * FROM {table}", conn)
 
 
+def iter_bookings(conn: sqlite3.Connection, where: str = None, params: tuple = (),
+                  columns=None, chunk_size: int = 100000):
+    """Yield booking rows in chunks — the memory-safe scan primitive.
+
+    Never holds the whole table in memory; each chunk is routed through
+    _retype_bookings so dtypes match read_bookings exactly. `columns` selects
+    only the columns a caller needs (the aggregator needs ~9 of ~30).
+
+    Filter note: TransactionDate is stored as ISO-8601 UTC strings, so a
+    `where` of "TransactionDate >= ?" with a UTC ISO param compares correctly
+    (lexicographic order matches chronological order for fixed-format UTC).
+    Compute cutoffs as UTC instants, not London date strings.
+    """
+    collist = "*" if not columns else ",".join(f'"{c}"' for c in columns)
+    sql = f"SELECT {collist} FROM bookings"
+    if where:
+        sql += f" WHERE {where}"
+    for chunk in pd.read_sql_query(sql, conn, params=params, chunksize=chunk_size):
+        yield _retype_bookings(chunk)
+
+
+def read_bookings_grouped(conn: sqlite3.Connection, select_sql: str,
+                          where: str = None, params: tuple = (),
+                          group_by: str = None) -> pd.DataFrame:
+    """Run an aggregate SELECT against bookings and return a small frame.
+
+    `select_sql` is the full SELECT list (e.g.
+    "AccountId, SUM(TicketQuantity) AS tickets, COUNT(DISTINCT EventId) AS events").
+    Most dashboard builders reduce to one call here. The result is small (one
+    row per group), so no chunking is needed.
+    """
+    sql = f"SELECT {select_sql} FROM bookings"
+    if where:
+        sql += f" WHERE {where}"
+    if group_by:
+        sql += f" GROUP BY {group_by}"
+    return pd.read_sql_query(sql, conn, params=params)
+
+
 def _retype_bookings(df: pd.DataFrame) -> pd.DataFrame:
     """Restore the dtypes downstream maths expects after a SQL read."""
     for col in ("TransactionDate", "EventDate"):

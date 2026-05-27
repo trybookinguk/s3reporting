@@ -40,31 +40,159 @@ class BookingAggregator:
         self.processed_chunks = 0
         self.total_rows = 0
 
-        # Accumulate chunks for a single bulk pass at finalize time
-        self.accumulated_chunks = []
-        
+        # Per-account accumulators. These hold at most one row per account
+        # (~20k), never per-transaction (~4.6M) — so memory stays bounded no
+        # matter how many millions of rows stream through. Sums stay UNROUNDED
+        # here; rounding happens once in finalize (round-after-total-sum, to
+        # match the original single-bulk-groupby behaviour exactly).
+        #
+        # Numeric sums: dict[AccountId] -> float
+        self._tickets_lifetime: Dict[Any, float] = {}
+        self._revenue_lifetime: Dict[Any, float] = {}
+        self._tickets_current: Dict[Any, float] = {}
+        self._revenue_current: Dict[Any, float] = {}
+        self._tickets_prev: Dict[Any, float] = {}
+        self._revenue_prev: Dict[Any, float] = {}
+        # Date min/max: dict[AccountId] -> Timestamp
+        self._first_booking: Dict[Any, Any] = {}
+        self._last_booking: Dict[Any, Any] = {}
+        # Distinct-year sets (nunique == len of union across chunks)
+        self._years: Dict[Any, set] = {}
+        self._years_prev: Dict[Any, set] = {}
+        # Event accumulators (only populated when not skip_event_metrics)
+        self._event_months_current: Dict[Any, set] = {}
+        self._event_months_previous: Dict[Any, set] = {}
+        self._event_months_freq_current: Dict[Any, set] = {}
+        self._event_months_freq_previous: Dict[Any, set] = {}
+        # event_creation_info: dict[AccountId] -> dict[EventId] -> {first_booking, event_date}
+        self._event_creation: Dict[Any, Dict[int, Dict[str, Any]]] = {}
+
     def process_chunk(self, chunk: pd.DataFrame) -> None:
         """
-        Prepare a chunk and accumulate it for bulk processing at finalize.
-        
+        Prepare a chunk and fold its per-account aggregates into the running
+        accumulators. Never retains the raw rows — peak memory is one chunk.
+
         Args:
             chunk: DataFrame chunk containing booking transactions
         """
         if chunk.empty:
             return
-            
+
         chunk = self._prepare_chunk_vectorized(chunk)
-        
-        # Accumulate; finalize_metrics does the bulk groupby pass
-        self.accumulated_chunks.append(chunk)
-        
+        if chunk.empty:
+            return
+
+        self._accumulate_basic(chunk)
+        if not self.skip_event_metrics:
+            self._accumulate_events(chunk)
+
         self.processed_chunks += 1
         self.total_rows += len(chunk)
-        
-        # Log progress every 10 chunks
+
         if self.processed_chunks % 10 == 0:
             logger.info(f"Processed {self.processed_chunks} chunks "
                        f"({self.total_rows:,} rows)")
+
+    @staticmethod
+    def _add_sums(target: Dict[Any, float], grouped) -> None:
+        """Fold a per-account Series of sums into a running dict (unrounded)."""
+        for aid, val in grouped.items():
+            target[aid] = target.get(aid, 0.0) + float(val)
+
+    @staticmethod
+    def _merge_sets(target: Dict[Any, set], grouped) -> None:
+        """Union a per-account Series of sets into a running dict."""
+        for aid, s in grouped.items():
+            if aid in target:
+                target[aid].update(s)
+            else:
+                target[aid] = set(s)
+
+    def _accumulate_basic(self, chunk: pd.DataFrame) -> None:
+        """Fold lifetime + period sums, date min/max, and year-sets per account.
+
+        Each groupby here is over the chunk only (≤ accounts-in-chunk rows out),
+        so this is the same arithmetic the old single bulk groupby did, just
+        split additively across chunks. Sums of sums == sum of all; min of mins
+        == global min; union of year-sets == global distinct years.
+        """
+        g = chunk.groupby('AccountId')
+        self._add_sums(self._tickets_lifetime, g['TicketQuantity'].sum())
+        self._add_sums(self._revenue_lifetime, g['Revenue'].sum())
+
+        # Date min/max folded element-wise.
+        for aid, val in g['TransactionDate'].min().items():
+            cur = self._first_booking.get(aid)
+            if cur is None or val < cur:
+                self._first_booking[aid] = val
+        for aid, val in g['TransactionDate'].max().items():
+            cur = self._last_booking.get(aid)
+            if cur is None or val > cur:
+                self._last_booking[aid] = val
+
+        # Distinct years (lifetime) and distinct years pre-cutoff_365.
+        self._merge_sets(self._years, g['Year'].agg(set))
+        pre = chunk[chunk['tx_date'] < self.cutoff_365]
+        if not pre.empty:
+            self._merge_sets(self._years_prev, pre.groupby('AccountId')['Year'].agg(set))
+
+        cur_rows = chunk[chunk['is_current']]
+        if not cur_rows.empty:
+            cg = cur_rows.groupby('AccountId')
+            self._add_sums(self._tickets_current, cg['TicketQuantity'].sum())
+            self._add_sums(self._revenue_current, cg['Revenue'].sum())
+
+        prev_rows = chunk[chunk['is_previous']]
+        if not prev_rows.empty:
+            pg = prev_rows.groupby('AccountId')
+            self._add_sums(self._tickets_prev, pg['TicketQuantity'].sum())
+            self._add_sums(self._revenue_prev, pg['Revenue'].sum())
+
+    def _accumulate_events(self, chunk: pd.DataFrame) -> None:
+        """Fold the four event-month sets and event_creation_info per account.
+
+        Mirrors _calculate_event_metrics_vectorized but applied per chunk and
+        merged: set-union for the month buckets, min(first_booking) /
+        first-seen(event_date) for event_creation_info. lead_days is derived
+        once at finalize from the accumulated first_booking.
+        """
+        if 'EventId' not in chunk.columns or 'EventDate' not in chunk.columns:
+            return
+        event_data = chunk[pd.notna(chunk['EventDate'])]
+        if event_data.empty:
+            return
+
+        ym = list(zip(event_data['EventDate'].dt.year.to_numpy(),
+                      event_data['EventDate'].dt.month.to_numpy()))
+        event_data = event_data.assign(event_year_month=ym)
+
+        def _fold_months(target, mask_col):
+            sub = event_data.loc[event_data[mask_col], ['AccountId', 'event_year_month']]
+            if sub.empty:
+                return
+            self._merge_sets(target, sub.groupby('AccountId')['event_year_month'].agg(set))
+
+        _fold_months(self._event_months_current, 'is_current')
+        _fold_months(self._event_months_previous, 'is_previous')
+        _fold_months(self._event_months_freq_current, 'is_freq_current')
+        _fold_months(self._event_months_freq_previous, 'is_freq_previous')
+
+        ev = event_data[pd.notna(event_data['EventId'])]
+        if ev.empty:
+            return
+        grp = ev.groupby(['AccountId', 'EventId']).agg(
+            first_booking=('TransactionDate', 'min'),
+            event_date=('EventDate', 'first'),
+        ).reset_index()
+        for row in grp.itertuples(index=False):
+            acc = self._event_creation.setdefault(row.AccountId, {})
+            eid = int(row.EventId)
+            existing = acc.get(eid)
+            if existing is None:
+                acc[eid] = {'first_booking': row.first_booking,
+                            'event_date': row.event_date}
+            elif row.first_booking < existing['first_booking']:
+                existing['first_booking'] = row.first_booking
     
     def _prepare_chunk_vectorized(self, chunk: pd.DataFrame) -> pd.DataFrame:
         """
@@ -90,7 +218,13 @@ class BookingAggregator:
         chunk['is_freq_previous'] = ((chunk['tx_date'] >= self.event_freq_cutoff_previous) & 
                                     (~chunk['is_freq_current']))
         
-        # Drop duplicates
+        # Drop duplicates *within the chunk*. This matches the original
+        # behaviour. It is only fully correct when BookingTransactionId is
+        # globally unique across the whole input — which both supported feeds
+        # guarantee: the warehouse has a PRIMARY KEY on BookingTransactionId,
+        # and the --combined reference path feeds an already-deduped frame.
+        # A naive multi-file CSV concat with cross-chunk dupes would not be
+        # safe here (a duplicate split across chunks would survive).
         chunk = chunk.drop_duplicates(subset='BookingTransactionId')
         
         # Filter to only successful transactions, excluding Failed and Unknown
@@ -101,94 +235,56 @@ class BookingAggregator:
     
     def finalize_metrics(self) -> Dict[int, Dict[str, Any]]:
         """
-        Run all groupby aggregations in a single bulk pass and return the
-        per-account metrics dict.
-        
+        Build the per-account metrics dict from the running accumulators.
+
+        Identical output contract to the previous single-bulk-groupby
+        implementation, but assembled from the per-account accumulators folded
+        in process_chunk — so this never materialises the full row set.
+
         Returns:
             Dictionary of account metrics
         """
-        if not self.accumulated_chunks:
+        if not self._tickets_lifetime:
             logger.info("No data to process")
             return {}
-        
+
         start_time = pd.Timestamp.now()
-        # Demoted to debug — fires once per replay pass during a 4k+ day
-        # historical rebuild and adds nothing for the production daily run.
-        logger.debug("Starting bulk aggregation...")
-        
-        # Combine all chunks into a single DataFrame for the bulk pass.
-        # Skip the concat when only one usable chunk is fed — common in the
-        # historical replay path where the entire date-filtered slice is passed
-        # as a single chunk. pd.concat on one frame is pure overhead.
-        non_empty_chunks = [
-            chunk for chunk in self.accumulated_chunks
-            if not chunk.empty and not chunk.isna().all().all()
-        ]
-        if not non_empty_chunks:
-            logger.warning("All chunks are empty")
-            return {}
-        if len(non_empty_chunks) == 1:
-            all_data = non_empty_chunks[0]
-        else:
-            logger.info("Combining accumulated chunks...")
-            all_data = pd.concat(non_empty_chunks, ignore_index=True)
-            logger.info(f"Combined {len(all_data):,} rows from {len(self.accumulated_chunks)} chunks")
-        
-        # Clear accumulated chunks to free memory
-        self.accumulated_chunks = []
-        
-        logger.debug("Computing aggregations...")
-        
-        # Basic lifetime metrics. Round only the numeric columns —
-        # pandas warns (and will eventually error) on .round() against
-        # datetime/timedelta dtypes, which TransactionDate min/max are.
-        # 'nunique' is the C-level equivalent of len(set(x)).
-        basic_agg = all_data.groupby('AccountId').agg({
-            'TicketQuantity': 'sum',
-            'Revenue': 'sum',
-            'Year': 'nunique',
-            'TransactionDate': ['min', 'max']
-        })
-        basic_agg.columns = ['tickets_lifetime', 'revenue_lifetime', 'years_loyalty',
-                            'first_booking_date', 'last_booking_date']
-        basic_agg[['tickets_lifetime', 'revenue_lifetime']] = (
-            basic_agg[['tickets_lifetime', 'revenue_lifetime']].round(2)
+        logger.debug("Assembling aggregated results from accumulators...")
+
+        # Lifetime frame, indexed by AccountId. Round the numeric sums HERE
+        # (round-after-total-sum), matching the old behaviour where rounding
+        # was applied once after the bulk groupby.
+        index = pd.Index(list(self._tickets_lifetime.keys()), name='AccountId')
+        basic_agg = pd.DataFrame(index=index)
+        basic_agg['tickets_lifetime'] = pd.Series(self._tickets_lifetime).round(2)
+        basic_agg['revenue_lifetime'] = pd.Series(self._revenue_lifetime).round(2)
+        basic_agg['years_loyalty'] = pd.Series(
+            {aid: len(s) for aid, s in self._years.items()}
         )
-        
-        # Current period metrics
-        current_data = all_data[all_data['is_current']]
-        current_agg = current_data.groupby('AccountId').agg({
-            'TicketQuantity': 'sum',
-            'Revenue': 'sum'
-        }).round(2)
-        current_agg.columns = ['tickets_current', 'revenue_current']
-        
-        # Previous period metrics  
-        previous_data = all_data[all_data['is_previous']]
-        previous_agg = previous_data.groupby('AccountId').agg({
-            'TicketQuantity': 'sum',
-            'Revenue': 'sum'
-        }).round(2)
-        previous_agg.columns = ['tickets_prev', 'revenue_prev']
-        
-        # Previous period years.
-        pre_cutoff_data = all_data[all_data['tx_date'] < self.cutoff_365]
-        years_prev_agg = pre_cutoff_data.groupby('AccountId')['Year'].nunique(
-        ).to_frame('years_loyalty_prev')
-        
+        basic_agg['first_booking_date'] = pd.Series(self._first_booking)
+        basic_agg['last_booking_date'] = pd.Series(self._last_booking)
+
+        current_agg = pd.DataFrame({
+            'tickets_current': pd.Series(self._tickets_current).round(2),
+            'revenue_current': pd.Series(self._revenue_current).round(2),
+        })
+        previous_agg = pd.DataFrame({
+            'tickets_prev': pd.Series(self._tickets_prev).round(2),
+            'revenue_prev': pd.Series(self._revenue_prev).round(2),
+        })
+        years_prev_agg = pd.DataFrame({
+            'years_loyalty_prev': pd.Series(
+                {aid: len(s) for aid, s in self._years_prev.items()}
+            )
+        })
+
         # Event metrics — skipped on rebuild paths since the v2 calculator
         # doesn't consume them.
         if self.skip_event_metrics:
             event_metrics: Dict[int, Dict[str, Any]] = {}
         else:
-            event_metrics = self._calculate_event_metrics_vectorized(all_data)
+            event_metrics = self._finalize_event_metrics()
 
-        # Combine the four aggregate frames into a single per-account DataFrame
-        # via outer joins, then materialise the dict-of-dicts shape with one
-        # to_dict('index') call. This replaces the previous per-account Python
-        # loop, which paid an O(N) .loc lookup for every account every call —
-        # fine for one daily pass but the dominant cost across thousands of
-        # historical-replay passes.
         logger.debug("Combining aggregated results...")
         combined = (
             basic_agg
@@ -264,11 +360,10 @@ class BookingAggregator:
 
         return final_metrics
     
-    def _calculate_event_metrics_vectorized(self, all_data: pd.DataFrame) -> Dict[int, Dict[str, Any]]:
-        """
-        Calculate per-account event metrics.
+    def _finalize_event_metrics(self) -> Dict[int, Dict[str, Any]]:
+        """Assemble per-account event metrics from the running accumulators.
 
-        Output shape per account:
+        Output shape per account (unchanged contract):
             {
               event_months_current: set[(year, month)],
               event_months_previous: set[(year, month)],
@@ -277,87 +372,44 @@ class BookingAggregator:
               event_creation_info: {event_id: {first_booking, event_date, lead_days}},
             }
 
-        Built entirely from groupby aggregations — no per-account Python
-        loops.
+        lead_days is derived here from the accumulated first_booking and
+        event_date: (event_date.date() - first_booking.date()).days, clamped
+        >= 0, matching the original normalize()-based whole-day difference.
         """
-        if 'EventId' not in all_data.columns or 'EventDate' not in all_data.columns:
-            logger.info("EventId or EventDate columns missing - skipping event metrics")
-            return {}
-
-        event_data = all_data[pd.notna(all_data['EventDate'])]
-        if event_data.empty:
-            return {}
-
-        # Pre-compute the (year, month) key once.
-        ym = list(zip(event_data['EventDate'].dt.year.to_numpy(),
-                      event_data['EventDate'].dt.month.to_numpy()))
-        event_data = event_data.assign(event_year_month=ym)
-
-        # Build the four month-sets per account in a single pass each. agg(set)
-        # returns a Series of Python sets keyed by AccountId. Filter the source
-        # frame first via boolean masks (cheap) so we only iterate the rows
-        # that count for that mask.
-        def _months_by_account(mask_col: str) -> Dict[int, set]:
-            sub = event_data.loc[event_data[mask_col], ['AccountId', 'event_year_month']]
-            if sub.empty:
-                return {}
-            grouped = sub.groupby('AccountId')['event_year_month'].agg(set)
-            return grouped.to_dict()
-
-        current_by_acc = _months_by_account('is_current')
-        previous_by_acc = _months_by_account('is_previous')
-        freq_current_by_acc = _months_by_account('is_freq_current')
-        freq_previous_by_acc = _months_by_account('is_freq_previous')
-
-        # event_creation_info: per (account, event), find first booking date,
-        # event date, and lead_days. Groupby on the compound key, then a
-        # single pass to bucket back into per-account dicts.
-        event_data_with_id = event_data[pd.notna(event_data['EventId'])]
+        # Build event_creation_info with lead_days computed from accumulated
+        # first_booking / event_date.
         event_creation_by_acc: Dict[int, Dict[int, Dict[str, Any]]] = {}
-        if not event_data_with_id.empty:
-            event_groups = event_data_with_id.groupby(['AccountId', 'EventId']).agg(
-                first_booking=('TransactionDate', 'min'),
-                event_date=('EventDate', 'first'),
-            ).reset_index()
-
-            # lead_days = (event_date.date() - first_booking.date()).days, clamped >= 0.
-            # .dt.normalize() zeroes the time-of-day so the subtraction yields
-            # whole-day differences regardless of timezone.
-            lead_days = (
-                (event_groups['event_date'].dt.normalize()
-                 - event_groups['first_booking'].dt.normalize()).dt.days
-            ).clip(lower=0)
-            event_groups['lead_days'] = lead_days.astype(int)
-
-            # Bucket: one dict-of-dicts assembly is unavoidable, but it's a
-            # straight iteration over already-aggregated rows (one per
-            # (account, event) pair, not per-transaction).
-            for row in event_groups.itertuples(index=False):
-                acc_dict = event_creation_by_acc.setdefault(row.AccountId, {})
-                acc_dict[int(row.EventId)] = {
-                    'first_booking': row.first_booking,
-                    'event_date': row.event_date,
-                    'lead_days': int(row.lead_days),
+        for aid, events in self._event_creation.items():
+            out_events = {}
+            for eid, info in events.items():
+                fb = info['first_booking']
+                ed = info['event_date']
+                lead = (ed.normalize() - fb.normalize()).days
+                if lead < 0:
+                    lead = 0
+                out_events[eid] = {
+                    'first_booking': fb,
+                    'event_date': ed,
+                    'lead_days': int(lead),
                 }
+            event_creation_by_acc[aid] = out_events
 
-        # Stitch the per-account pieces together. account_ids = the union of
-        # whichever month buckets contributed.
         all_accounts = (
-            set(current_by_acc) | set(previous_by_acc)
-            | set(freq_current_by_acc) | set(freq_previous_by_acc)
+            set(self._event_months_current) | set(self._event_months_previous)
+            | set(self._event_months_freq_current) | set(self._event_months_freq_previous)
             | set(event_creation_by_acc)
         )
         event_metrics: Dict[int, Dict[str, Any]] = {}
         for aid in all_accounts:
             event_metrics[aid] = {
-                'event_months_current': current_by_acc.get(aid, set()),
-                'event_months_previous': previous_by_acc.get(aid, set()),
-                'event_months_freq_current': freq_current_by_acc.get(aid, set()),
-                'event_months_freq_previous': freq_previous_by_acc.get(aid, set()),
+                'event_months_current': self._event_months_current.get(aid, set()),
+                'event_months_previous': self._event_months_previous.get(aid, set()),
+                'event_months_freq_current': self._event_months_freq_current.get(aid, set()),
+                'event_months_freq_previous': self._event_months_freq_previous.get(aid, set()),
                 'event_creation_info': event_creation_by_acc.get(aid, {}),
             }
         return event_metrics
-    
+
     def aggregate_bookings(self, chunks_iterator: Iterator[pd.DataFrame]) -> Dict[int, Dict[str, Any]]:
         """
         Main entry point to aggregate booking data from chunks.

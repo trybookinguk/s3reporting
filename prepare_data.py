@@ -164,6 +164,36 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip updating the SQLite warehouse (warehouse.db).",
     )
+    parser.add_argument(
+        "--seed-from-pickle",
+        action="store_true",
+        help="Bulk-seed the warehouse bookings table from an existing "
+             "combined_booking.pkl (much faster than the streaming seed; ~minutes "
+             "vs hour+). Use this once on a dev box, then scp warehouse.db to "
+             "the Pi so the Pi only ever does daily upserts.",
+    )
     args = parser.parse_args()
+
+    if args.seed_from_pickle:
+        import pickle
+        from modules import warehouse
+        from modules.utils.data_loader import get_loader
+        loader = get_loader()
+        pkl_path = loader._combined_booking_path()
+        if not __import__('os').path.exists(pkl_path):
+            log.error("No combined pickle at %s — run `prepare_data.py --combined` first.", pkl_path)
+            sys.exit(1)
+        log.info("Loading combined pickle from %s ...", pkl_path)
+        with open(pkl_path, 'rb') as f:
+            df = pickle.load(f)
+        log.info("  Loaded %d rows", len(df))
+        conn = warehouse.connect()
+        try:
+            warehouse.seed_bookings_from_frame(conn, df)
+            log.info("Warehouse summary: %s", warehouse.summary(conn))
+        finally:
+            conn.close()
+        sys.exit(0)
+
     sys.exit(main(build_combined=args.combined,
                   build_warehouse=not args.no_warehouse))

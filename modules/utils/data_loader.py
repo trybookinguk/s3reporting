@@ -891,19 +891,35 @@ class UnifiedDataLoader:
             all_files = sorted(new_location_files + old_location_files)
 
             if all_files:
-                # Use the newest file
+                # Use the newest file (will fall back below if it's empty)
                 s3_key = all_files[-1]
                 logger.info(f"Found {data_type} file for chunks: {s3_key}")
             else:
-                # If no file found, return empty iterator
+                s3_key = None
                 logger.warning(f"No {data_type} file found in {prev_year:04d}/{prev_month:02d}/ or {current_year:04d}/{current_month:02d}/")
-                return
+
+            # Use the same walk-back fallback as the non-chunked path so an
+            # empty/missing BookingDataAll doesn't blow up the chunked feed
+            # (the latest file is sometimes 0 bytes; the combine path walks
+            # back month-by-month — match it here).
+            def _load_chunks(client, key, cs):
+                return self.load_chunks(key, chunk_size=cs)
+
+            for chunk in yield_chunks_with_fallback(
+                s3_client=self.s3_client, bucket=S3_BUCKET,
+                primary_key=s3_key or "", load_chunks_func=_load_chunks,
+                current_year=current_year, current_month=current_month,
+                chunk_size=chunk_size,
+            ):
+                self._process_booking_chunk(chunk)
+                yield chunk
+            return
         else:
             # Regular BookingData - standard filename
             filename = f"{date_info['file_prefix']}-{data_type}-TBUK.csv"
             s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
             logger.info(f"Loading chunks for {data_type} from S3: {s3_key}")
-        
+
         # Yield chunks from the file
         for chunk in self.load_chunks(s3_key, chunk_size=chunk_size):
             self._process_booking_chunk(chunk)

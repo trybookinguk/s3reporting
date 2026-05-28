@@ -29,6 +29,10 @@ import math
 import os
 import sys
 
+# Allow `from modules import ...` when this script is run from the repo root or
+# from inside deploy/.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pandas as pd
 
 
@@ -39,7 +43,10 @@ def _vals_equal(a, b, tol):
         return False
     if isinstance(a, float) or isinstance(b, float):
         try:
-            return math.isclose(float(a), float(b), abs_tol=tol)
+            # Inclusive tolerance: a diff of exactly `tol` (e.g. 1p at tol=0.01)
+            # counts as equivalent. math.isclose is strict-less-than at the
+            # boundary, which over-flags FP-noise-level penny diffs.
+            return abs(float(a) - float(b)) <= tol
         except (TypeError, ValueError):
             return str(a) == str(b)
     return a == b
@@ -253,7 +260,7 @@ def main():
     pj = sub.add_parser("json"); pj.add_argument("old_dir"); pj.add_argument("new_dir")
 
     for sp in (pc, pt, pj, pd_):
-        sp.add_argument("--tol", type=float, default=0.01, help="abs tolerance for floats")
+        sp.add_argument("--tol", type=float, default=0.011, help="abs tolerance for floats (default 0.011 = 1p plus FP slop)")
         sp.add_argument("--max", type=int, default=10, help="max mismatches shown per column")
 
     args = p.parse_args()

@@ -185,6 +185,12 @@ def upsert_bookings_chunks(conn: sqlite3.Connection, chunk_iter,
             if BOOKINGS_KEY not in chunk.columns:
                 raise ValueError(f"bookings chunk missing {BOOKINGS_KEY!r}")
             chunk = chunk.dropna(subset=[BOOKINGS_KEY])
+            # Streamed CSV chunks can contain duplicate BookingTransactionIds
+            # within a single chunk (e.g. when the fallback path stitches
+            # multi-file source data). Dedupe per-chunk so the table-create's
+            # PRIMARY KEY rebuild doesn't blow up, and so the cross-chunk
+            # INSERT OR REPLACE has a clean staging table to source from.
+            chunk = chunk.drop_duplicates(subset=[BOOKINGS_KEY], keep='last')
             chunk = _stringify_datetimes(chunk)
             staged += len(chunk)
 
@@ -223,6 +229,57 @@ def upsert_bookings_chunks(conn: sqlite3.Connection, chunk_iter,
     logger.info("bookings chunk upsert: staged=%d inserted=%d replaced=%d total=%d",
                 staged, inserted, replaced, after)
     return stats
+
+
+def seed_bookings_from_frame(conn: sqlite3.Connection, df: pd.DataFrame,
+                             chunk_size: int = 200000) -> dict:
+    """Bulk-seed bookings from a globally-deduped in-memory frame.
+
+    Fast path for the first warehouse build: write the frame to a plain table
+    (no PK constraint to fight) in chunks, then add the PK + indexes at the
+    end. ~10x faster than the streaming INSERT-OR-REPLACE seed because there
+    are no per-row index lookups during the bulk write.
+
+    Caller must guarantee BookingTransactionId is globally unique in `df`
+    (the combined_booking.pkl produced by `prepare_data.py --combined` is).
+    """
+    if BOOKINGS_KEY not in df.columns:
+        raise ValueError(f"frame missing {BOOKINGS_KEY!r}")
+    df = df.dropna(subset=[BOOKINGS_KEY])
+    # Safety: dedupe just in case — cheap on a frame this size.
+    before_dedupe = len(df)
+    df = df.drop_duplicates(subset=[BOOKINGS_KEY], keep='last')
+    if len(df) < before_dedupe:
+        logger.warning("Dropped %d duplicate %s in seed frame",
+                       before_dedupe - len(df), BOOKINGS_KEY)
+    df = _stringify_datetimes(df)
+
+    # Drop any prior bookings table so the seed is unambiguous.
+    with conn:
+        conn.execute("DROP TABLE IF EXISTS bookings")
+
+    # Bulk-write chunks of the frame. No PK yet — pure INSERTs into a plain
+    # table are the fastest path SQLite offers.
+    total = len(df)
+    written = 0
+    for i in range(0, total, chunk_size):
+        sub = df.iloc[i:i + chunk_size]
+        sub.to_sql("bookings", conn, if_exists="append", index=False)
+        written += len(sub)
+        if (i // chunk_size) % 5 == 0:
+            logger.info("  seed-from-frame: %d / %d rows", written, total)
+
+    # Promote the key to PRIMARY KEY (rebuilds the table once) + indexes.
+    with conn:
+        _add_primary_key(conn, "bookings", BOOKINGS_KEY)
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_bookings_account ON bookings(AccountId)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_bookings_txndate ON bookings(TransactionDate)")
+        _set_meta(conn, "schema_version", SCHEMA_VERSION)
+        _set_meta(conn, "bookings_last_ingest", datetime.utcnow().isoformat())
+        _set_meta(conn, "bookings_rowcount", written)
+
+    logger.info("seed_bookings_from_frame complete: %d rows", written)
+    return {"staged": total, "inserted": written, "replaced": 0, "rows_after": written}
 
 
 def replace_snapshot(conn: sqlite3.Connection, table: str, df: pd.DataFrame,
@@ -282,8 +339,10 @@ def account_metrics_365(conn: sqlite3.Connection, cutoff_iso: str) -> dict:
     """Per-account aggregate over the last 365 days, for the industry report.
 
     Returns {account_id: {EventsWithTickets, PaidTicketsIssued, TotalFees}},
-    matching calculate_account_metrics' output. Only Successful txns count.
-    `cutoff_iso` is a UTC ISO timestamp string (compute as now-365d in UTC).
+    matching the frame-based calculate_account_metrics output. NOTE: does NOT
+    filter on Status — the legacy industry-report path sums fees across all
+    statuses (Successful + Failed + Unknown), so we must match that to stay
+    equivalent. `cutoff_iso` is a UTC ISO timestamp string.
     """
     sql = (
         "SELECT AccountId, "
@@ -291,7 +350,7 @@ def account_metrics_365(conn: sqlite3.Connection, cutoff_iso: str) -> dict:
         "COALESCE(SUM(TicketQuantity), 0) AS PaidTicketsIssued, "
         "ROUND(COALESCE(SUM(BookingFee),0)+COALESCE(SUM(CardFee),0)"
         "+COALESCE(SUM(ProcessingFee),0)+COALESCE(SUM(TicketFee),0), 2) AS TotalFees "
-        "FROM bookings WHERE TransactionDate >= ? AND Status = 'Successful' "
+        "FROM bookings WHERE TransactionDate >= ? "
         "GROUP BY AccountId"
     )
     df = pd.read_sql_query(sql, conn, params=(cutoff_iso,))

@@ -525,9 +525,9 @@ def main(dry_run: bool = False, use_combined: bool = False):
                 logger.info("Aggregating from warehouse (streamed)")
                 conn = warehouse.connect()
                 try:
-                    agg_cols = ['AccountId', 'TicketQuantity', 'BookingFee', 'CardFee',
-                                'ProcessingFee', 'TicketFee', 'TransactionDate',
-                                'EventId', 'EventDate', 'Status']
+                    agg_cols = ['BookingTransactionId', 'AccountId', 'TicketQuantity',
+                                'BookingFee', 'CardFee', 'ProcessingFee', 'TicketFee',
+                                'TransactionDate', 'EventId', 'EventDate', 'Status']
                     account_metrics = aggregator.aggregate_bookings(
                         warehouse.iter_bookings(conn, columns=agg_cols, chunk_size=100000)
                     )

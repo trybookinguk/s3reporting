@@ -455,7 +455,14 @@ def generate_industry_revenue_csv_files(booking_df, account_df, tier_updates, re
             else:
                 # Pre-aggregated from SQL; fall back to zeros for accounts with
                 # no activity in the period (matches calculate_account_metrics).
-                agg = account_metrics_365.get(account_id)
+                # industry_account_ids come from account_df where AccountId was
+                # cast to str (line 382 above); the SQL aggregate is keyed by
+                # int — coerce so the lookup hits.
+                try:
+                    key = int(account_id)
+                except (TypeError, ValueError):
+                    key = account_id
+                agg = account_metrics_365.get(key)
                 metrics = dict(agg) if agg else {
                     'EventsWithTickets': 0, 'PaidTicketsIssued': 0, 'TotalFees': 0.0
                 }

@@ -49,12 +49,13 @@ To skip the warehouse on a manual run: `python3 prepare_data.py --no-warehouse`.
 mkdir -p /root/logs /root/s3reporting/reports
 chmod 600 /root/s3reporting/.env
 pip install --break-system-packages boto3 msal requests pandas pytz numpy scipy \
-    python-dateutil google-analytics-data
+    python-dateutil google-analytics-data matplotlib
 crontab /root/s3reporting/deploy/pi-crontab
 ```
 
 `python-dateutil` is required by the dashboard; `google-analytics-data` is
-required for the PPC/GA4 section of the dashboard.
+required for the PPC/GA4 section of the dashboard; `matplotlib` is required by
+the tier-movement email charts.
 
 ## .env additions
 

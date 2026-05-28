@@ -90,21 +90,40 @@ def _table_rowcount(conn: sqlite3.Connection, table: str) -> int:
         return 0
 
 
-def _stringify_datetimes(df: pd.DataFrame) -> pd.DataFrame:
-    """Convert datetime-like columns to ISO-8601 strings for storage.
+# Columns that are logically integer IDs. Coerced to nullable Int64 before
+# write so SQLite stores them as INTEGER, not TEXT like '4349.0' — the latter
+# forces every JOIN/lookup query to CAST and bypass the index. Read-side queries
+# can then use `AccountId = ?` with an int param and hit the index directly.
+_INT_ID_COLUMNS = (
+    "BookingTransactionId", "AccountId", "EventId", "CustomerId",
+    "DonationCampaignId", "BookingId", "BookingUrlId", "GiftCertificateId",
+    # Snapshot tables (accounts.Id, users.Id) also benefit — joins to bookings
+    # become INTEGER = INTEGER and the PRIMARY KEY's autoindex applies.
+    "Id",
+)
 
-    SQLite stores no native datetime; pandas would otherwise write opaque
-    integers. Storing ISO strings keeps the DB human-readable and round-trips
-    cleanly through the read_* helpers.
+
+def _prepare_for_sqlite(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce dtypes for SQLite storage:
+       - datetime → ISO-8601 string (SQLite has no native datetime)
+       - category → plain string (categories don't survive to_sql cleanly)
+       - ID columns → nullable Int64 (so SQLite stores INTEGER, not '4349.0')
     """
     out = df.copy()
     for col in out.columns:
         if pd.api.types.is_datetime64_any_dtype(out[col]):
             out[col] = out[col].astype("string")  # NaT -> <NA> -> NULL
         elif isinstance(out[col].dtype, pd.CategoricalDtype):
-            # Categories don't survive to_sql cleanly; store as plain text.
             out[col] = out[col].astype("string")
+        elif col in _INT_ID_COLUMNS:
+            # to_numeric handles strings like '4349.0', floats, and ints alike.
+            # Int64 (nullable) preserves NaN as <NA>, which to_sql writes as NULL.
+            out[col] = pd.to_numeric(out[col], errors="coerce").astype("Int64")
     return out
+
+
+# Backwards-compat alias — callers outside this module may still import it.
+_stringify_datetimes = _prepare_for_sqlite
 
 
 def upsert_bookings(conn: sqlite3.Connection, df: pd.DataFrame) -> dict:

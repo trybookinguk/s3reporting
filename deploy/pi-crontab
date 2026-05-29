@@ -4,13 +4,9 @@
 # Each job sources /root/s3reporting/.env (chmod 600) so secrets land in the
 # environment, then runs from the repo root. Logs append to /root/logs.
 # Weekdays only (Mon–Fri), staggered from 02:00.
-#
-# prepare_data.py runs FIRST and refreshes the S3 cache + builds the combined
-# booking pickle for the day. Because of that, the later jobs set
-# CACHE_TRUST_TODAY=1 (in /root/s3reporting/.env) so they trust today's cache
-# and skip redundant S3 head_object checks.
 
-# 1. Prep — refresh S3 cache + build combined booking dataset (heaviest read)
+# 1. Refresh S3 cache + maintain warehouse (bookings/accounts/users/ppc_attribution).
+#    The Svelte dashboard reads this warehouse directly via better-sqlite3.
 0 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py >> /root/logs/prepare-data.log 2>&1
 
 # 2. S3 -> SharePoint sync (manifest persists at /root/s3reporting/.sync_manifest)
@@ -22,8 +18,8 @@
 # 4. Zoho tiers update (reports saved to /root/s3reporting/reports via REPORTS_DIR)
 45 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 zoho_tiers.py >> /root/logs/zoho-tiers.log 2>&1
 
-# 5. Dashboard data — build aggregate JSON and upload to SharePoint (heaviest compute)
-15 3 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 generate_dashboard_data.py >> /root/logs/dashboard.log 2>&1
+# generate_dashboard_data.py was removed in 5490a60 — the SvelteKit reporting
+# dashboard now reads the warehouse directly (no JSON files to bake).
 
 # Log rotation: delete logs older than 30 days, weekly on Sunday at midnight
 0 0 * * 0 find /root/logs -name "*.log" -mtime +30 -delete

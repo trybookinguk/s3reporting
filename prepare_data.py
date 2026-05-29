@@ -143,6 +143,16 @@ def _update_warehouse(report_date, accounts_df, users_df) -> None:
         if users_df is not None:
             warehouse.replace_snapshot(conn, "users", users_df)
 
+        # PPC attribution from GA4 — isolated so a GA4 outage (auth, rate
+        # limit, network) doesn't roll back the rest of the day's ingest.
+        # Yesterday's ppc_attribution rows stay in place if GA4 fails today.
+        try:
+            from modules import ga4_ingest
+            n = ga4_ingest.refresh_ppc(conn, lookback_days=30)
+            log.info("  PPC attribution: refreshed %d rows", n)
+        except Exception as e:
+            log.error("  PPC refresh raised (skipping): %s", e)
+
         log.info("  Warehouse after: %s", warehouse.summary(conn))
     finally:
         conn.close()
@@ -172,6 +182,13 @@ if __name__ == "__main__":
              "vs hour+). Use this once on a dev box, then scp warehouse.db to "
              "the Pi so the Pi only ever does daily upserts.",
     )
+    parser.add_argument(
+        "--seed-ppc",
+        action="store_true",
+        help="One-off: backfill ppc_attribution from GA4 going back ~700 days "
+             "(to mid-2024, the legacy start date). Use this once after the "
+             "warehouse is seeded; daily runs only refresh the last 30 days.",
+    )
     args = parser.parse_args()
 
     if args.seed_from_pickle:
@@ -191,6 +208,16 @@ if __name__ == "__main__":
         try:
             warehouse.seed_bookings_from_frame(conn, df)
             log.info("Warehouse summary: %s", warehouse.summary(conn))
+        finally:
+            conn.close()
+        sys.exit(0)
+
+    if args.seed_ppc:
+        from modules import warehouse, ga4_ingest
+        conn = warehouse.connect()
+        try:
+            n = ga4_ingest.refresh_ppc(conn, lookback_days=700)
+            log.info("PPC backfill: %d rows", n)
         finally:
             conn.close()
         sys.exit(0)

@@ -43,7 +43,11 @@ from modules.utils.date_utils import get_latest_data_date
 
 # Constants
 COMMISSION_CONFIG_FILE = 'sales_commission_config.json'
-MD_EMAIL = 'joan@trybooking.co.uk'
+MD_EMAIL_PROD = 'joan@trybooking.co.uk'
+TEST_MODE_RECIPIENT = 'alex@trybooking.co.uk'
+# In TEST_MODE every email — MD summary, per-team-member reports, no-email-on-file
+# fallback — redirects here. Out of TEST_MODE, MD_EMAIL is the real MD recipient.
+MD_EMAIL = TEST_MODE_RECIPIENT if TEST_MODE else MD_EMAIL_PROD
 
 
 def validate_environment():
@@ -692,6 +696,32 @@ def send_reports(report_df, period_description, commission_config):
         'total_commission': 'Total Commission (£)'
     }
 
+    # Money columns must render with exactly 2dp in CSVs — commission cheques
+    # are cut from these numbers, so 15.0 / 15 / 15.000000001 are all
+    # unacceptable. Round in-memory and let to_csv's float_format pin the
+    # display precision belt-and-braces.
+    MONEY_COLUMNS = ['ticket_sales', 'total_fees', 'flat_fee',
+                     'commission_on_sales', 'total_commission']
+
+    def to_csv_2dp(df):
+        if df.empty:
+            return ','.join(csv_column_names.values()) + '\n'
+        out = df[csv_columns].copy()
+        # Money columns: pre-format as strings so to_csv emits exactly 2dp and
+        # float_format can't touch IDs. Anything that round-trips through float
+        # loses precision (e.g. 17.07 → 17.069999... → "17.07" requires the
+        # float_format step, which then also stringifies EventID as "97014.00").
+        for col in MONEY_COLUMNS:
+            out[col] = pd.to_numeric(out[col], errors='coerce').round(2).map(
+                lambda v: '' if pd.isna(v) else f'{v:.2f}'
+            )
+        # IDs come in as floats from the warehouse-merged frame; render as int.
+        for col in ('account_id', 'event_id'):
+            if col in out.columns:
+                out[col] = pd.to_numeric(out[col], errors='coerce').astype('Int64').astype(str)
+                out[col] = out[col].replace('<NA>', '')
+        return out.rename(columns=csv_column_names).to_csv(index=False)
+
     # In TEST_MODE, all emails go to MD_EMAIL only
     if TEST_MODE:
         print("\n*** TEST MODE: All emails will be sent to MD only ***")
@@ -700,11 +730,7 @@ def send_reports(report_df, period_description, commission_config):
     print("\nSending MD summary report...")
     summary_filename = f"commission_summary_{file_code}.csv"
 
-    if not report_df.empty:
-        summary_csv = report_df[csv_columns].rename(columns=csv_column_names).to_csv(index=False)
-    else:
-        # Empty CSV with friendly headers
-        summary_csv = ','.join(csv_column_names.values()) + '\n'
+    summary_csv = to_csv_2dp(report_df)
 
     summary_html = generate_html_email_content(report_df, period_name, is_individual=False)
 
@@ -735,7 +761,7 @@ def send_reports(report_df, period_description, commission_config):
         # Generate individual report files
         person_filename_csv = f"commission_{team_member_name.replace(' ', '_')}_{file_code}.csv"
         person_filename_pdf = f"commission_{team_member_name.replace(' ', '_')}_{file_code}.pdf"
-        person_csv = person_df[csv_columns].rename(columns=csv_column_names).to_csv(index=False)
+        person_csv = to_csv_2dp(person_df)
         person_pdf = generate_pdf_report(person_df, period_name, team_member_name)
         person_html = generate_html_email_content(
             person_df, period_name,
@@ -834,21 +860,44 @@ def main():
     target_date = get_latest_data_date()
     print(f"  Data date: {target_date.strftime('%Y-%m-%d')}")
 
-    booking_df = load_booking_data(target_date=target_date, data_type='BookingDataAll')
+    # Load bookings only for the claimed accounts. The original implementation
+    # loaded the full all-time BookingDataAll (>3 GB in memory) then filtered;
+    # that OOMs the 4 GB Pi. The warehouse can apply the AccountId filter at
+    # the source, which keeps the working set tiny (231 accounts' bookings,
+    # typically a few hundred thousand rows).
+    claimed_account_ids = set(claimed_accounts['account_id'].astype(str))
+    claimed_account_ints = sorted({int(a) for a in claimed_account_ids if a.isdigit()})
+
+    print(f"  Querying warehouse for bookings of {len(claimed_account_ints)} claimed accounts...")
+    from modules import warehouse
+    conn = warehouse.connect()
+    try:
+        # Chunk the IN clause — SQLite has a default 999-param limit.
+        chunks = [claimed_account_ints[i:i + 500] for i in range(0, len(claimed_account_ints), 500)]
+        booking_parts = []
+        for chunk in chunks:
+            placeholders = ",".join(["?"] * len(chunk))
+            booking_parts.append(pd.read_sql_query(
+                f"SELECT AccountId, EventId, EventName, EventDate, TransactionDate, "
+                f"Status, PaymentReceived, BookingFee, CardFee, ProcessingFee, "
+                f"TicketFee, TicketQuantity "
+                f"FROM bookings WHERE AccountId IN ({placeholders})",
+                conn, params=chunk,
+            ))
+        booking_df = pd.concat(booking_parts, ignore_index=True) if booking_parts else pd.DataFrame()
+    finally:
+        conn.close()
+
     accounts_df = load_accounts_data(target_date=target_date)
 
-    # Filter booking data to claimed accounts only
-    # Convert AccountId to clean string (handle float -> int -> str to avoid "12345.0")
-    claimed_account_ids = set(claimed_accounts['account_id'].astype(str))
-    booking_df['AccountId'] = booking_df['AccountId'].fillna(0).astype(int).astype(str)
+    # Parse EventDate back to datetime — warehouse stores ISO strings (see
+    # modules/warehouse.py header) and find_first_paid_events uses .dt accessors.
+    if not booking_df.empty:
+        booking_df['EventDate'] = pd.to_datetime(booking_df['EventDate'], errors='coerce')
+        booking_df['TransactionDate'] = pd.to_datetime(booking_df['TransactionDate'], errors='coerce')
+        # Match the str-typed AccountId convention the rest of the script uses.
+        booking_df['AccountId'] = booking_df['AccountId'].fillna(0).astype(int).astype(str)
 
-    # Debug: Show sample of IDs for matching diagnostics
-    sample_claimed = list(claimed_account_ids)[:5]
-    sample_booking = booking_df['AccountId'].unique()[:5].tolist()
-    print(f"  Sample claimed account IDs: {sample_claimed}")
-    print(f"  Sample booking AccountIds: {sample_booking}")
-
-    booking_df = booking_df[booking_df['AccountId'].isin(claimed_account_ids)]
     print(f"  Bookings for claimed accounts: {len(booking_df):,}")
 
     if booking_df.empty:

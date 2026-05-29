@@ -91,6 +91,20 @@ def main(build_combined: bool = False, build_warehouse: bool = True) -> int:
             log.error("Failed to update warehouse: %s", e)
             return 1
 
+        # Materialise to DuckDB for the dashboard. SQLite stores everything as
+        # BLOB which forces row-by-row processing on every dashboard query.
+        # DuckDB's columnar format reads ~50x faster on the analytical workload
+        # the dashboard runs (multi-table joins, percentile ranks, time
+        # bucketing across all 5M bookings).
+        try:
+            _materialise_duckdb()
+        except Exception as e:
+            # Don't fail the run — dashboard falls back to SQLite (it still
+            # works, just slowly). Failure email will fire from the cron
+            # wrapper, but the upstream Zoho/SharePoint jobs that depend on
+            # SQLite stay on the green path.
+            log.error("DuckDB materialise failed (dashboard stays on SQLite): %s", e)
+
     elapsed = (pd.Timestamp.now(UK_TZ) - started).total_seconds()
     log.info("Data preparation complete in %.1fs", elapsed)
     return 0
@@ -156,6 +170,139 @@ def _update_warehouse(report_date, accounts_df, users_df) -> None:
         log.info("  Warehouse after: %s", warehouse.summary(conn))
     finally:
         conn.close()
+
+
+# DuckDB destination path: sits next to warehouse.db so the dashboard's
+# WAREHOUSE_DUCK_DB env var defaults to a predictable location.
+def _duckdb_path() -> str:
+    import os
+    sqlite_path = warehouse.default_db_path()
+    return os.path.join(os.path.dirname(sqlite_path), "warehouse_duck.db")
+
+
+# Column list per table. Casts go BLOB -> VARCHAR (numeric/timestamp) or
+# BLOB -> BLOB -> decode() (text), because DuckDB's SQLite scanner serialises
+# BLOB-as-VARCHAR with hex escapes for anything it doesn't trust (including
+# 0x27 apostrophe). decode() round-trips the bytes as UTF-8, which is what
+# the SQLite columns actually contain.
+_DUCKDB_BOOKINGS_COLS = """
+    CAST(CAST(BookingTransactionId AS VARCHAR) AS BIGINT) AS BookingTransactionId,
+    CAST(CAST(AccountId AS VARCHAR) AS BIGINT) AS AccountId,
+    decode(CAST(AccountName AS BLOB)) AS AccountName,
+    CAST(CAST(EventId AS VARCHAR) AS BIGINT) AS EventId,
+    decode(CAST(EventName AS BLOB)) AS EventName,
+    CAST(CAST(TransactionDate AS VARCHAR) AS TIMESTAMP) AS TransactionDate,
+    CAST(CAST(EventDate AS VARCHAR) AS TIMESTAMP) AS EventDate,
+    decode(CAST(Status AS BLOB)) AS Status,
+    CAST(CAST(PaymentReceived AS VARCHAR) AS DOUBLE) AS PaymentReceived,
+    CAST(CAST(BookingFee AS VARCHAR) AS DOUBLE) AS BookingFee,
+    CAST(CAST(CardFee AS VARCHAR) AS DOUBLE) AS CardFee,
+    CAST(CAST(ProcessingFee AS VARCHAR) AS DOUBLE) AS ProcessingFee,
+    CAST(CAST(TicketFee AS VARCHAR) AS DOUBLE) AS TicketFee,
+    CAST(CAST(TicketQuantity AS VARCHAR) AS INTEGER) AS TicketQuantity,
+    decode(CAST(PaymentType AS BLOB)) AS PaymentType,
+    decode(CAST(GatewayGroup AS BLOB)) AS GatewayGroup,
+    decode(CAST(GatewayName AS BLOB)) AS GatewayName,
+    decode(CAST(EventPostcode AS BLOB)) AS EventPostcode,
+    decode(CAST(AccountPostcode AS BLOB)) AS AccountPostcode,
+    decode(CAST(Industry AS BLOB)) AS BookingIndustry,
+    decode(CAST(SubIndustry AS BLOB)) AS BookingSubIndustry
+"""
+
+_DUCKDB_ACCOUNTS_COLS = """
+    CAST(CAST(Id AS VARCHAR) AS BIGINT) AS Id,
+    decode(CAST(AccountName AS BLOB)) AS AccountName,
+    decode(CAST(AccountStatus AS BLOB)) AS AccountStatus,
+    CAST(CAST(DateTimeCreated AS VARCHAR) AS TIMESTAMP) AS DateTimeCreated,
+    CAST(CAST(LastLogIn AS VARCHAR) AS TIMESTAMP) AS LastLogIn,
+    CAST(CAST(FirstEventCreation AS VARCHAR) AS TIMESTAMP) AS FirstEventCreation,
+    CAST(CAST(LastEventCreation AS VARCHAR) AS TIMESTAMP) AS LastEventCreation,
+    decode(CAST(Industry AS BLOB)) AS Industry,
+    decode(CAST(SubIndustry AS BLOB)) AS SubIndustry,
+    decode(CAST(GatewayGroup AS BLOB)) AS GatewayGroup,
+    decode(CAST(Postcode AS BLOB)) AS Postcode
+"""
+
+
+def _materialise_duckdb() -> None:
+    """Build a fresh DuckDB file from the SQLite warehouse.
+
+    Writes to a .tmp path first then renames atomically. The dashboard reads
+    the final path, so partial writes never replace a working file.
+    """
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+    import time
+
+    duckdb_bin = shutil.which("duckdb")
+    if not duckdb_bin:
+        log.warning("duckdb CLI not on PATH — skipping DuckDB materialise.")
+        return
+
+    sqlite_path = warehouse.default_db_path()
+    if not os.path.exists(sqlite_path):
+        log.warning("SQLite warehouse missing at %s — skipping materialise.", sqlite_path)
+        return
+
+    target = _duckdb_path()
+    # NamedTemporaryFile in the same directory so the rename is atomic on the
+    # same filesystem. delete=False because we want the file to persist past
+    # the with-block; we delete it ourselves on failure.
+    fd, tmp_path = tempfile.mkstemp(suffix=".db.tmp", prefix="warehouse_duck.",
+                                    dir=os.path.dirname(target))
+    os.close(fd)
+    os.unlink(tmp_path)  # duckdb refuses to ATTACH an existing-but-empty file
+
+    sql = f"""
+INSTALL sqlite;
+LOAD sqlite;
+ATTACH '{sqlite_path}' AS src (TYPE sqlite, READ_ONLY);
+ATTACH '{tmp_path}' AS dst;
+
+CREATE TABLE dst.bookings AS SELECT {_DUCKDB_BOOKINGS_COLS} FROM src.bookings;
+CREATE TABLE dst.accounts AS SELECT {_DUCKDB_ACCOUNTS_COLS} FROM src.accounts;
+
+-- ppc_attribution and users come back with native types (the Python ingest
+-- writes them via pandas-typed to_sql), so a plain SELECT * is sufficient.
+CREATE TABLE dst.ppc_attribution AS SELECT * FROM src.ppc_attribution;
+CREATE TABLE dst.users AS SELECT * FROM src.users;
+
+-- Indexes that match the SQLite hot paths. DuckDB's planner mostly doesn't
+-- need them at this scale (columnar scans are fast), but the AccountId index
+-- helps point lookups like sales_commission_report.py's WHERE AccountId IN ().
+CREATE INDEX bookings_account ON dst.bookings (AccountId);
+CREATE INDEX bookings_event ON dst.bookings (EventId);
+CREATE INDEX accounts_id ON dst.accounts (Id);
+"""
+
+    log.info("Materialising DuckDB warehouse at %s...", target)
+    t0 = time.perf_counter()
+    try:
+        result = subprocess.run(
+            [duckdb_bin],
+            input=sql,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"duckdb exited {result.returncode}: stderr={result.stderr.strip()}"
+            )
+    except Exception:
+        # Clean up the partial file so the next run starts clean.
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+    # Atomic rename — the dashboard's mtime-watch will see the new file
+    # immediately and re-open it.
+    os.replace(tmp_path, target)
+    size_mb = os.path.getsize(target) / (1024 * 1024)
+    elapsed = time.perf_counter() - t0
+    log.info("  DuckDB written: %.1f MB in %.1fs", size_mb, elapsed)
 
 
 if __name__ == "__main__":

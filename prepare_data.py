@@ -144,12 +144,25 @@ def _update_warehouse(report_date, accounts_df, users_df) -> None:
             log.info("    Seed: %s", stats)
 
         # Daily delta: upsert the current-month BookingData (cumulative-to-date).
+        # On the 1st of the month the new month's BookingData file doesn't exist
+        # yet (the platform starts producing it on the 2nd), so there is simply
+        # no delta to apply — skip it rather than failing the whole refresh.
+        # Prior-month rows already seeded in the warehouse stay in place.
         log.info("  Upserting current-month BookingData (streamed)...")
-        month_chunks = loader.load_booking_chunks(
-            target_date=report_date, data_type="BookingData", chunk_size=100000
-        )
-        stats = warehouse.upsert_bookings_chunks(conn, month_chunks)
-        log.info("    Daily: %s", stats)
+        try:
+            month_chunks = loader.load_booking_chunks(
+                target_date=report_date, data_type="BookingData", chunk_size=100000
+            )
+            stats = warehouse.upsert_bookings_chunks(conn, month_chunks)
+            log.info("    Daily: %s", stats)
+        except Exception as e:
+            error_str = str(e)
+            if 'NoSuchKey' not in error_str and '404' not in error_str and 'Not Found' not in error_str:
+                raise
+            log.warning(
+                "    Current-month BookingData not published yet (expected on the "
+                "1st) — skipping daily delta: %s", e
+            )
 
         # Snapshots (these frames are small — accounts/users are tens of MB).
         if accounts_df is not None:

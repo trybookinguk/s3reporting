@@ -661,9 +661,27 @@ class UnifiedDataLoader:
         date_info = get_file_date_info(target_date)
         filename = f"{date_info['file_prefix']}-Accounts-TBUK.csv"
         s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
-        
+
         logger.info(f"Loading accounts data from S3: {s3_key}")
-        df = self.download_s3_file(s3_key)
+        try:
+            df = self.download_s3_file(s3_key)
+        except Exception as e:
+            # The monthly Accounts file for the new month isn't published until the
+            # 2nd, so on the 1st we still need the previous month's snapshot. Fall
+            # back to it when the current month's file isn't there yet.
+            error_str = str(e)
+            if 'NoSuchKey' not in error_str and '404' not in error_str and 'Not Found' not in error_str:
+                raise
+            prev_year, prev_month = calculate_previous_month(
+                int(date_info['folder_year']), int(date_info['folder_month'])
+            )
+            prev_prefix = f"{prev_year:04d}{prev_month:02d}"
+            prev_key = f"{prev_year:04d}/{prev_month:02d}/{prev_prefix}-Accounts-TBUK.csv"
+            logger.info(
+                "Current month's Accounts file not found; falling back to previous month: %s",
+                prev_key,
+            )
+            df = self.download_s3_file(prev_key)
         
         # Standardize column names
         if 'Id' in df.columns and 'AccountId' not in df.columns:
@@ -1018,7 +1036,25 @@ class UnifiedDataLoader:
         s3_key = f"{date_info['folder_year']}/{date_info['folder_month']}/{filename}"
 
         logger.info(f"Loading users data from S3: {s3_key}")
-        df = self.download_s3_file(s3_key)
+        try:
+            df = self.download_s3_file(s3_key)
+        except Exception as e:
+            # Like Accounts, the monthly users file for the new month isn't
+            # published until the 2nd, so fall back to the previous month on the
+            # 1st rather than failing.
+            error_str = str(e)
+            if 'NoSuchKey' not in error_str and '404' not in error_str and 'Not Found' not in error_str:
+                raise
+            prev_year, prev_month = calculate_previous_month(
+                int(date_info['folder_year']), int(date_info['folder_month'])
+            )
+            prev_prefix = f"{prev_year:04d}{prev_month:02d}"
+            prev_key = f"{prev_year:04d}/{prev_month:02d}/{prev_prefix}-users-TBUK.csv"
+            logger.info(
+                "Current month's users file not found; falling back to previous month: %s",
+                prev_key,
+            )
+            df = self.download_s3_file(prev_key)
 
         # Standardize columns
         if 'AccountID' in df.columns and 'AccountId' not in df.columns:

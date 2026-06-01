@@ -3,11 +3,16 @@
 #
 # Each job sources /root/s3reporting/.env (chmod 600) so secrets land in the
 # environment, then runs from the repo root. Logs append to /root/logs.
-# Weekdays only (Mon–Fri), staggered from 02:00.
+# Downstream Zoho/SharePoint jobs run weekdays only (Mon–Fri), staggered from
+# 02:00. prepare-data runs EVERY day so the last day of the month is always
+# ingested — the current-month BookingData file stops updating when the month
+# ends, so a weekend month-end would otherwise leave the warehouse missing the
+# month's final days until the new month's file appears.
 
 # 1. Refresh S3 cache + maintain warehouse (bookings/accounts/users/ppc_attribution).
 #    The Svelte dashboard reads this warehouse directly via better-sqlite3.
-0 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py >> /root/logs/prepare-data.log 2>&1
+#    Runs daily (incl. weekends) to guarantee month-end capture.
+0 2 * * * set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py >> /root/logs/prepare-data.log 2>&1
 
 # 2. S3 -> SharePoint sync (manifest persists at /root/s3reporting/.sync_manifest)
 15 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 s3_to_sharepoint.py >> /root/logs/s3-sharepoint.log 2>&1

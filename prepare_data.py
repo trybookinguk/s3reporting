@@ -144,20 +144,27 @@ def _update_warehouse(report_date, accounts_df, users_df) -> None:
             log.info("    Seed: %s", stats)
 
         # Daily delta: upsert the current-month BookingData (cumulative-to-date).
-        # On the 1st of the month the new month's BookingData file doesn't exist
-        # yet (the platform starts producing it on the 2nd). Last month's
-        # BookingData is still the freshest cumulative view of those bookings —
-        # more current than the BookingDataAll seed — so fall back to it. The
-        # upsert is keyed by BookingTransactionId (INSERT OR REPLACE), so
-        # re-applying last month's rows is idempotent: it corrects any rows whose
-        # Status/fees were revised, and never double-counts.
+        # The job runs every day (see deploy/pi-crontab), so each day's run picks
+        # up the previous day's bookings as they land in the cumulative file.
+        #
+        # Month boundary: a day's data lands in the cumulative file the *next*
+        # morning, so the final day of month M (e.g. 31 May) only appears in M's
+        # file on the 1st of M+1 — and the new month's file doesn't exist until
+        # the 2nd. So on the 1st the current-month file 404s; we must fall back to
+        # the *previous* month's file to capture that final day. This upsert is
+        # index-keyed and idempotent (INSERT OR REPLACE on BookingTransactionId),
+        # so re-reading last month's file just corrects/fills its last day.
         log.info("  Upserting current-month BookingData (streamed)...")
-        try:
-            month_chunks = loader.load_booking_chunks(
-                target_date=report_date, data_type="BookingData", chunk_size=100000
+
+        def _upsert_booking_month(target_date, label):
+            chunks = loader.load_booking_chunks(
+                target_date=target_date, data_type="BookingData", chunk_size=100000
             )
-            stats = warehouse.upsert_bookings_chunks(conn, month_chunks)
-            log.info("    Daily: %s", stats)
+            stats = warehouse.upsert_bookings_chunks(conn, chunks)
+            log.info("    %s: %s", label, stats)
+
+        try:
+            _upsert_booking_month(report_date, "Daily")
         except Exception as e:
             error_str = str(e)
             if 'NoSuchKey' not in error_str and '404' not in error_str and 'Not Found' not in error_str:
@@ -165,15 +172,11 @@ def _update_warehouse(report_date, accounts_df, users_df) -> None:
             prev_month_date = (report_date - pd.DateOffset(months=1)).normalize()
             log.warning(
                 "    Current-month BookingData not published yet (expected on the "
-                "1st) — falling back to previous month (%s).",
-                prev_month_date.strftime("%Y%m"),
+                "1st) — falling back to previous month (%s) to capture its final "
+                "day.", prev_month_date.strftime("%Y%m"),
             )
             try:
-                month_chunks = loader.load_booking_chunks(
-                    target_date=prev_month_date, data_type="BookingData", chunk_size=100000
-                )
-                stats = warehouse.upsert_bookings_chunks(conn, month_chunks)
-                log.info("    Daily (previous month): %s", stats)
+                _upsert_booking_month(prev_month_date, "Daily (previous month)")
             except Exception as e2:
                 error_str2 = str(e2)
                 if 'NoSuchKey' not in error_str2 and '404' not in error_str2 and 'Not Found' not in error_str2:

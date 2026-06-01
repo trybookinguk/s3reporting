@@ -195,7 +195,8 @@ def upsert_bookings_chunks(conn: sqlite3.Connection, chunk_iter,
     the first chunk creates the table + PK + indexes, subsequent chunks upsert.
     """
     staged = inserted = replaced = 0
-    created = _table_exists(conn, "bookings") and _table_rowcount(conn, "bookings") > 0
+    rows_before = _table_rowcount(conn, "bookings")
+    created = _table_exists(conn, "bookings") and rows_before > 0
 
     with conn:  # single transaction for the whole stream
         for chunk in chunk_iter:
@@ -204,6 +205,11 @@ def upsert_bookings_chunks(conn: sqlite3.Connection, chunk_iter,
             if BOOKINGS_KEY not in chunk.columns:
                 raise ValueError(f"bookings chunk missing {BOOKINGS_KEY!r}")
             chunk = chunk.dropna(subset=[BOOKINGS_KEY])
+            # The loader types BookingTransactionId as float64 to tolerate NaNs
+            # in the raw CSV. With NaNs dropped the values are whole numbers, so
+            # cast to a true integer before staging — keeps the key stored as
+            # INTEGER (matching the PK) rather than REAL like 1234.0.
+            chunk[BOOKINGS_KEY] = chunk[BOOKINGS_KEY].astype("int64")
             # Streamed CSV chunks can contain duplicate BookingTransactionIds
             # within a single chunk (e.g. when the fallback path stitches
             # multi-file source data). Dedupe per-chunk so the table-create's
@@ -219,30 +225,37 @@ def upsert_bookings_chunks(conn: sqlite3.Connection, chunk_iter,
                 conn.execute("CREATE INDEX IF NOT EXISTS ix_bookings_account ON bookings(AccountId)")
                 conn.execute("CREATE INDEX IF NOT EXISTS ix_bookings_txndate ON bookings(TransactionDate)")
                 created = True
-                inserted += len(chunk)
                 continue
 
             _ensure_columns(conn, "bookings", chunk.columns)
             chunk.to_sql("_stage_bookings", conn, if_exists="replace", index=False)
             cols = list(chunk.columns)
             collist = ",".join(f'"{c}"' for c in cols)
-            rep = conn.execute(
-                "SELECT COUNT(*) FROM _stage_bookings s "
-                "WHERE EXISTS (SELECT 1 FROM bookings b WHERE b.{k}=s.{k})".format(k=BOOKINGS_KEY)
-            ).fetchone()[0]
+            # No per-row probe to split inserted vs replaced — the old
+            # `SELECT COUNT(*) ... WHERE EXISTS` ran as a correlated subquery
+            # that scanned the whole multi-million-row bookings index once per
+            # staged row: fine for a small daily delta but a 15-minute CPU peg on
+            # a full month's file. INSERT OR REPLACE leaves the rowcount
+            # unchanged for a replaced row, so we derive the split from the net
+            # table growth over the whole stream after the loop (one COUNT, not
+            # two per chunk).
             conn.execute(
                 f"INSERT OR REPLACE INTO bookings ({collist}) "
                 f"SELECT {collist} FROM _stage_bookings"
             )
             conn.execute("DROP TABLE _stage_bookings")
-            replaced += rep
-            inserted += len(chunk) - rep
 
         _set_meta(conn, "schema_version", SCHEMA_VERSION)
         _set_meta(conn, "bookings_last_ingest", datetime.utcnow().isoformat())
         after = _table_rowcount(conn, "bookings")
         _set_meta(conn, "bookings_rowcount", after)
 
+    # Net new rows = table growth across the stream. On a fresh seed the table
+    # was empty so this equals all staged rows; on an upsert the remainder were
+    # in-place replacements of existing BookingTransactionIds.
+    if created:
+        inserted = after - rows_before
+        replaced = staged - inserted
     stats = {"staged": staged, "inserted": inserted, "replaced": replaced,
              "rows_after": after}
     logger.info("bookings chunk upsert: staged=%d inserted=%d replaced=%d total=%d",

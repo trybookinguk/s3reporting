@@ -145,9 +145,12 @@ def _update_warehouse(report_date, accounts_df, users_df) -> None:
 
         # Daily delta: upsert the current-month BookingData (cumulative-to-date).
         # On the 1st of the month the new month's BookingData file doesn't exist
-        # yet (the platform starts producing it on the 2nd), so there is simply
-        # no delta to apply — skip it rather than failing the whole refresh.
-        # Prior-month rows already seeded in the warehouse stay in place.
+        # yet (the platform starts producing it on the 2nd). Last month's
+        # BookingData is still the freshest cumulative view of those bookings —
+        # more current than the BookingDataAll seed — so fall back to it. The
+        # upsert is keyed by BookingTransactionId (INSERT OR REPLACE), so
+        # re-applying last month's rows is idempotent: it corrects any rows whose
+        # Status/fees were revised, and never double-counts.
         log.info("  Upserting current-month BookingData (streamed)...")
         try:
             month_chunks = loader.load_booking_chunks(
@@ -159,10 +162,26 @@ def _update_warehouse(report_date, accounts_df, users_df) -> None:
             error_str = str(e)
             if 'NoSuchKey' not in error_str and '404' not in error_str and 'Not Found' not in error_str:
                 raise
+            prev_month_date = (report_date - pd.DateOffset(months=1)).normalize()
             log.warning(
                 "    Current-month BookingData not published yet (expected on the "
-                "1st) — skipping daily delta: %s", e
+                "1st) — falling back to previous month (%s).",
+                prev_month_date.strftime("%Y%m"),
             )
+            try:
+                month_chunks = loader.load_booking_chunks(
+                    target_date=prev_month_date, data_type="BookingData", chunk_size=100000
+                )
+                stats = warehouse.upsert_bookings_chunks(conn, month_chunks)
+                log.info("    Daily (previous month): %s", stats)
+            except Exception as e2:
+                error_str2 = str(e2)
+                if 'NoSuchKey' not in error_str2 and '404' not in error_str2 and 'Not Found' not in error_str2:
+                    raise
+                log.warning(
+                    "    Previous-month BookingData also unavailable — skipping "
+                    "daily delta: %s", e2
+                )
 
         # Snapshots (these frames are small — accounts/users are tens of MB).
         if accounts_df is not None:

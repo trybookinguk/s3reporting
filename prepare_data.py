@@ -258,6 +258,122 @@ _DUCKDB_ACCOUNTS_COLS = """
     decode(CAST(Postcode AS BLOB)) AS Postcode
 """
 
+# Pre-aggregated account_metrics tables.
+#
+# getAccountMetricsDuck in the dashboard used to run these four GROUP BY scans
+# over the full 4.85M-row bookings table on every cold request (~6s). We move
+# the scans here — they run once per materialise — and the endpoint just
+# SELECTs the small results (~8.7k + ~94k rows) and does its JS post-processing
+# (tier scoring etc.) on those. Endpoint cold time drops from ~6s to <100ms.
+#
+# Date windows are baked at materialise time relative to "today" in
+# Europe/London. That's correct: the dashboard data is "as of" the last
+# materialise, and the page already labels it "Data as of …". The endpoint
+# must therefore NOT recompute these windows — it reads the baked sums.
+# (activity_rating / account_age are still computed live from now() in JS,
+# since those are elapsed-time fields, not windowed sums.)
+#
+# is_bo / txn_date / total_fees mirror the expressions in warehouse_duck.ts
+# exactly so the materialised path is byte-equivalent to the old live path.
+_DUCKDB_ACCOUNT_METRICS_AGG = """
+INSTALL icu; LOAD icu;
+
+-- Source rows with London-local txn date + Box-Office flag + ex-VAT fees,
+-- computed once so the conditional aggregates below reference cheap columns.
+CREATE TEMP TABLE _am_src AS
+SELECT
+    AccountId AS aid,
+    PaymentReceived,
+    (COALESCE(BookingFee,0)+COALESCE(CardFee,0)
+     +COALESCE(ProcessingFee,0)+COALESCE(TicketFee,0))/1.20 AS total_fees,
+    TicketQuantity,
+    TransactionDate,
+    EventId,
+    GatewayGroup,
+    AccountPostcode,
+    (TransactionDate AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE AS txn_date,
+    CAST(EXTRACT(year FROM
+        (TransactionDate AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE
+    ) AS INTEGER) AS txn_year,
+    CASE
+        WHEN UPPER(COALESCE(TRIM(PaymentType),'')) LIKE '%CARD PRESENT%'
+             OR UPPER(COALESCE(TRIM(PaymentType),'')) = 'CASH' THEN 1
+        ELSE 0
+    END AS is_bo
+FROM dst.bookings
+WHERE Status = 'Successful' AND AccountId IS NOT NULL;
+
+-- "today" in Europe/London and the rolling-window cutoffs, baked once.
+CREATE TEMP TABLE _am_cut AS
+SELECT
+    d AS today,
+    d - INTERVAL 365 DAY AS cut365,
+    d - INTERVAL 730 DAY AS cut730,
+    d - INTERVAL 180 DAY AS cut180
+FROM (SELECT (now() AT TIME ZONE 'Europe/London')::DATE AS d);
+
+-- 1. Per-account aggregate (windowed conditional sums). One row per account.
+CREATE TABLE dst.account_metrics_agg AS
+SELECT
+    s.aid,
+    SUM(s.total_fees) AS fees_lifetime,
+    SUM(COALESCE(s.PaymentReceived,0)) AS revenue_lifetime,
+    SUM(COALESCE(s.TicketQuantity,0)) AS tickets_lifetime,
+    COUNT(*) AS txns_lifetime,
+    COUNT(DISTINCT s.EventId) AS events_lifetime,
+    COUNT(DISTINCT s.txn_year) AS years_active,
+    CAST(MIN(s.TransactionDate) AS VARCHAR) AS first_txn,
+    CAST(MAX(s.TransactionDate) AS VARCHAR) AS last_txn,
+    SUM(CASE WHEN s.txn_date >= c.cut365 THEN s.total_fees ELSE 0 END) AS fees_current,
+    SUM(CASE WHEN s.txn_date >= c.cut365 THEN COALESCE(s.PaymentReceived,0) ELSE 0 END) AS revenue_current,
+    SUM(CASE WHEN s.txn_date >= c.cut365 THEN COALESCE(s.TicketQuantity,0) ELSE 0 END) AS tickets_current,
+    SUM(CASE WHEN s.txn_date >= c.cut365 THEN 1 ELSE 0 END) AS txns_current,
+    COUNT(DISTINCT CASE WHEN s.txn_date >= c.cut365 THEN s.EventId END) AS events_current,
+    SUM(CASE WHEN s.txn_date >= c.cut730 AND s.txn_date < c.cut365 THEN s.total_fees ELSE 0 END) AS fees_previous,
+    SUM(CASE WHEN s.txn_date >= c.cut730 AND s.txn_date < c.cut365 THEN COALESCE(s.PaymentReceived,0) ELSE 0 END) AS revenue_previous,
+    SUM(CASE WHEN s.txn_date >= c.cut730 AND s.txn_date < c.cut365 THEN COALESCE(s.TicketQuantity,0) ELSE 0 END) AS tickets_previous,
+    SUM(CASE WHEN s.is_bo = 1 THEN s.total_fees ELSE 0 END) AS fees_bo_lifetime,
+    SUM(CASE WHEN s.is_bo = 1 THEN COALESCE(s.PaymentReceived,0) ELSE 0 END) AS revenue_bo_lifetime,
+    SUM(CASE WHEN s.is_bo = 1 THEN COALESCE(s.TicketQuantity,0) ELSE 0 END) AS tickets_bo_lifetime,
+    SUM(CASE WHEN s.is_bo = 1 THEN 1 ELSE 0 END) AS txns_bo_lifetime,
+    CAST(MAX(CASE WHEN s.is_bo = 1 THEN s.TransactionDate END) AS VARCHAR) AS last_bo_txn,
+    SUM(CASE WHEN s.is_bo = 1 AND s.txn_date >= c.cut365 THEN s.total_fees ELSE 0 END) AS fees_bo_current,
+    SUM(CASE WHEN s.is_bo = 1 AND s.txn_date >= c.cut365 THEN COALESCE(s.PaymentReceived,0) ELSE 0 END) AS revenue_bo_current,
+    SUM(CASE WHEN s.is_bo = 1 AND s.txn_date >= c.cut365 THEN COALESCE(s.TicketQuantity,0) ELSE 0 END) AS tickets_bo_current,
+    SUM(CASE WHEN s.txn_date >= c.cut180 THEN COALESCE(s.PaymentReceived,0) ELSE 0 END) AS recent_180_paid_revenue
+FROM _am_src s CROSS JOIN _am_cut c
+GROUP BY s.aid;
+
+-- 2. Dominant-gateway feeder: per (account, gateway) txn count.
+CREATE TABLE dst.account_metrics_gateway AS
+SELECT aid, GatewayGroup AS gw, COUNT(*) AS n
+FROM _am_src
+GROUP BY aid, GatewayGroup;
+
+-- 3. Box-Office % feeder: per-account BO vs total Successful count.
+CREATE TABLE dst.account_metrics_bopct AS
+SELECT aid, SUM(is_bo) AS bo, COUNT(*) AS total
+FROM _am_src
+GROUP BY aid;
+
+-- 4. Price-band feeder: per (account, event) revenue + tickets.
+CREATE TABLE dst.account_metrics_eventrev AS
+SELECT aid, EventId, SUM(COALESCE(PaymentReceived,0)) AS rev, SUM(COALESCE(TicketQuantity,0)) AS tix
+FROM _am_src
+WHERE EventId IS NOT NULL
+GROUP BY aid, EventId;
+
+-- 5. Postcode-area feeder: first-by-MIN non-empty AccountPostcode per account.
+CREATE TABLE dst.account_metrics_postcode AS
+SELECT aid, MIN(AccountPostcode) AS pc
+FROM _am_src
+WHERE AccountPostcode IS NOT NULL AND AccountPostcode != ''
+GROUP BY aid;
+
+DROP TABLE _am_src;
+DROP TABLE _am_cut;
+"""
+
 
 def _materialise_duckdb() -> None:
     """Build a fresh DuckDB file from the SQLite warehouse.
@@ -310,6 +426,8 @@ CREATE TABLE dst.users AS SELECT * FROM src.users;
 CREATE INDEX bookings_account ON dst.bookings (AccountId);
 CREATE INDEX bookings_event ON dst.bookings (EventId);
 CREATE INDEX accounts_id ON dst.accounts (Id);
+
+{_DUCKDB_ACCOUNT_METRICS_AGG}
 """
 
     log.info("Materialising DuckDB warehouse at %s...", target)

@@ -543,7 +543,10 @@ WITH event_year AS (
 ), classified AS (
     SELECT *,
         CASE
-            WHEN avg_ticket_price = 0 THEN 'Free'
+            -- ROUND(...,2)=0 snaps refund-cancelled sub-penny dust (native-double
+            -- sums leave e.g. -7e-15) to Free, matching SQLite's text-parsed zero.
+            -- Other bands keep raw boundaries to preserve the inter-band Unknown gap.
+            WHEN ROUND(avg_ticket_price, 2) = 0 THEN 'Free'
             WHEN avg_ticket_price BETWEEN 0.01 AND 9.99 THEN '£1-£9.99'
             WHEN avg_ticket_price BETWEEN 10 AND 24.99 THEN '£10-£24.99'
             WHEN avg_ticket_price BETWEEN 25 AND 49.99 THEN '£25-£49.99'

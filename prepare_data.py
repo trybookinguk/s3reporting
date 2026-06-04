@@ -375,6 +375,296 @@ DROP TABLE _am_cut;
 """
 
 
+_DUCKDB_DAILY_METRICS_AGG = """
+-- daily_metrics: three day-grouped feeders + a one-row date-bounds table.
+-- Built from dst.bookings / dst.accounts, London-local dates. The series end
+-- ("today") is baked here so the reader's dense fill matches the build instant.
+CREATE TABLE dst.daily_metrics_agg AS
+SELECT
+    CAST((TransactionDate AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE AS VARCHAR) AS date,
+    ROUND(SUM(COALESCE(BookingFee,0)+COALESCE(CardFee,0)
+             +COALESCE(ProcessingFee,0)+COALESCE(TicketFee,0))/1.20, 2) AS total_fees,
+    ROUND(SUM(COALESCE(PaymentReceived,0)), 2) AS total_revenue,
+    CAST(SUM(COALESCE(TicketQuantity,0)) AS INTEGER) AS total_tickets,
+    COUNT(*) AS total_transactions,
+    COUNT(DISTINCT AccountId) AS accounts_selling,
+    COUNT(DISTINCT EventId) AS events_with_sales
+FROM dst.bookings
+WHERE Status = 'Successful'
+GROUP BY 1;
+
+CREATE TABLE dst.daily_metrics_accounts AS
+SELECT
+    CAST((DateTimeCreated AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE AS VARCHAR) AS date,
+    COUNT(*) AS new_accounts,
+    SUM(CASE WHEN FirstEventCreation IS NOT NULL AND CAST(FirstEventCreation AS VARCHAR) != ''
+             THEN 1 ELSE 0 END) AS new_accounts_with_events
+FROM dst.accounts
+WHERE DateTimeCreated IS NOT NULL AND CAST(DateTimeCreated AS VARCHAR) != ''
+GROUP BY 1;
+
+CREATE TABLE dst.daily_metrics_sales AS
+SELECT
+    CAST((a.DateTimeCreated AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE AS VARCHAR) AS date,
+    COUNT(*) AS new_accounts_with_sales
+FROM dst.accounts a
+WHERE a.DateTimeCreated IS NOT NULL AND CAST(a.DateTimeCreated AS VARCHAR) != ''
+  AND a.Id IN (
+    SELECT DISTINCT AccountId
+    FROM dst.bookings
+    WHERE AccountId IS NOT NULL AND Status = 'Successful'
+  )
+GROUP BY 1;
+
+CREATE TABLE dst.daily_metrics_bounds AS
+SELECT
+    (SELECT MIN(d) FROM (
+        SELECT CAST((TransactionDate AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE AS VARCHAR) AS d FROM dst.bookings
+        UNION ALL
+        SELECT CAST((DateTimeCreated AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE AS VARCHAR) AS d FROM dst.accounts
+    )) AS start_date,
+    CAST((now() AT TIME ZONE 'Europe/London')::DATE AS VARCHAR) AS end_date;
+"""
+
+
+_DUCKDB_MONTHLY_METRICS_AGG = """
+-- Pre-aggregated monthly_metrics tables.
+--
+-- getMonthlyMetricsDuck used to run three heavy GROUP BY scans over the full
+-- 4.85M-row bookings table plus the data-start bound on every cold request. We
+-- move those scans here — they run once per materialise — and the endpoint just
+-- SELECTs the small results and does its JS post-processing (London-month
+-- bucketing, activation windows, tier-qualified counts) on those.
+--
+-- The London-local year-month buckets are baked here via icu's AT TIME ZONE,
+-- reproducing SQLite's strftime('%Y-%m', date(...,'localtime')) exactly. The
+-- end-of-range month is NOT baked — the endpoint computes "now" in Europe/London
+-- live so the table runs through the current month, matching the SQLite path's
+-- date('now','localtime'). first_sale_dt is kept as a VARCHAR ISO string so the
+-- JS days-to-first-sale arithmetic round-trips identically.
+INSTALL icu; LOAD icu;
+
+-- 1. Per-account lifetime feeder (sales detection + tier qualification).
+--    lt uses ALL successful bookings (incl. NULL EventId); ev/per_event use
+--    only non-null EventId rows — mirrors the SQLite CTE split exactly.
+CREATE TABLE dst.monthly_metrics_acct AS
+WITH lt AS (
+    SELECT AccountId,
+        CAST(MIN(TransactionDate) AS VARCHAR) AS first_sale_dt,
+        CAST(SUM(COALESCE(TicketQuantity, 0)) AS INTEGER) AS tickets_lifetime
+    FROM dst.bookings
+    WHERE Status = 'Successful' AND AccountId IS NOT NULL
+    GROUP BY AccountId
+), per_event AS (
+    SELECT AccountId, EventId,
+        SUM(COALESCE(PaymentReceived, 0)) AS event_revenue
+    FROM dst.bookings
+    WHERE Status = 'Successful' AND AccountId IS NOT NULL AND EventId IS NOT NULL
+    GROUP BY AccountId, EventId
+), ev AS (
+    SELECT AccountId,
+        COUNT(*) AS events_lifetime,
+        MAX(event_revenue) AS max_event_paid_revenue
+    FROM per_event
+    GROUP BY AccountId
+)
+SELECT
+    lt.AccountId AS aid,
+    lt.first_sale_dt,
+    lt.tickets_lifetime,
+    COALESCE(ev.events_lifetime, 0) AS events_lifetime,
+    COALESCE(ev.max_event_paid_revenue, 0) AS max_event_paid_revenue
+FROM lt LEFT JOIN ev ON ev.AccountId = lt.AccountId;
+
+-- 2. Per-month booking aggregate (London year-month). One row per month.
+CREATE TABLE dst.monthly_metrics_agg AS
+SELECT
+    strftime((TransactionDate AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE, '%Y-%m') AS ym,
+    CAST(SUM(COALESCE(TicketQuantity, 0)) AS INTEGER) AS total_tickets,
+    ROUND(SUM(COALESCE(PaymentReceived, 0)), 2) AS total_revenue,
+    ROUND(SUM(COALESCE(BookingFee,0)+COALESCE(CardFee,0)
+        +COALESCE(ProcessingFee,0)+COALESCE(TicketFee,0))/1.20, 2) AS total_fees,
+    COUNT(*) AS total_txns,
+    COUNT(DISTINCT EventId) AS events_with_sales,
+    COUNT(DISTINCT AccountId) AS accounts_selling
+FROM dst.bookings WHERE Status = 'Successful'
+GROUP BY ym;
+
+-- 3. Per-(month, event) revenue feeder for the free/paid event split.
+CREATE TABLE dst.monthly_metrics_event_split AS
+SELECT
+    strftime((TransactionDate AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE, '%Y-%m') AS ym,
+    EventId,
+    SUM(COALESCE(PaymentReceived, 0)) AS rev
+FROM dst.bookings WHERE Status = 'Successful' AND EventId IS NOT NULL
+GROUP BY ym, EventId;
+
+-- 4. Data-start bound: earliest London year-month across bookings + accounts.
+--    Single-row table the endpoint reads to begin its month loop.
+CREATE TABLE dst.monthly_metrics_bounds AS
+SELECT MIN(d) AS data_start FROM (
+    SELECT MIN(strftime((TransactionDate AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE, '%Y-%m')) AS d
+    FROM dst.bookings
+    UNION ALL
+    SELECT MIN(strftime((DateTimeCreated AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE, '%Y-%m')) AS d
+    FROM dst.accounts
+);
+
+-- In _materialise_duckdb()'s SQL, after {_DUCKDB_ACCOUNT_METRICS_AGG}, add:
+--   {_DUCKDB_MONTHLY_METRICS_AGG}
+"""
+
+
+_DUCKDB_PRICE_BANDS_AGG = """
+-- price_bands: pre-classified event-year grain. One row per (EventId, year)
+-- with its price band, fees/revenue/tickets, the MIN-account owner and that
+-- account's Industry. Both result sets in getPriceBandsDuck (summary and
+-- by_industry) are cheap final GROUP BYs over this table. Year uses the
+-- Europe/London-local transaction date to match SQLite's strftime+localtime.
+CREATE TABLE dst.price_bands_agg AS
+WITH event_year AS (
+    SELECT
+        b.EventId,
+        CAST(EXTRACT(year FROM
+            (b.TransactionDate AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE
+        ) AS INTEGER) AS year,
+        SUM(COALESCE(b.PaymentReceived,0)) AS revenue,
+        SUM(COALESCE(b.TicketQuantity,0)) AS tickets,
+        SUM(COALESCE(b.BookingFee,0)+COALESCE(b.CardFee,0)
+           +COALESCE(b.ProcessingFee,0)+COALESCE(b.TicketFee,0))/1.20 AS fees,
+        MIN(b.AccountId) AS account_id
+    FROM dst.bookings b
+    WHERE b.Status = 'Successful' AND b.EventId IS NOT NULL
+    GROUP BY b.EventId, year
+), banded AS (
+    SELECT *,
+        revenue / CASE WHEN tickets = 0 THEN 1.0 ELSE tickets END AS avg_ticket_price
+    FROM event_year
+), classified AS (
+    SELECT *,
+        CASE
+            WHEN avg_ticket_price = 0 THEN 'Free'
+            WHEN avg_ticket_price BETWEEN 0.01 AND 9.99 THEN '£1-£9.99'
+            WHEN avg_ticket_price BETWEEN 10 AND 24.99 THEN '£10-£24.99'
+            WHEN avg_ticket_price BETWEEN 25 AND 49.99 THEN '£25-£49.99'
+            WHEN avg_ticket_price >= 50 THEN '£50+'
+            ELSE 'Unknown'
+        END AS price_band
+    FROM banded
+)
+SELECT
+    c.EventId,
+    c.year,
+    c.price_band,
+    c.revenue,
+    c.tickets,
+    c.fees,
+    c.account_id,
+    a.Industry AS industry
+FROM classified c
+LEFT JOIN dst.accounts a ON c.account_id = a.Id;
+"""
+
+
+_DUCKDB_DORMANCY_AGG = """
+-- Dormancy: one row per account with days-since-last-txn, recent-180d paid
+-- revenue, and account age in months. Date windows are baked at materialise
+-- time. SQLite's getDormancy compares in UTC (julianday('now') /
+-- datetime('now') are UTC, and TransactionDate/DateTimeCreated are naive-UTC),
+-- so we diff against (now() AT TIME ZONE 'UTC') — NO localtime conversion.
+CREATE TABLE dst.dormancy_agg AS
+WITH per_acct AS (
+    SELECT
+        a.Id AS aid,
+        a.Industry AS industry,
+        a.DateTimeCreated AS created_ts,
+        (SELECT MAX(b.TransactionDate) FROM dst.bookings b
+            WHERE b.AccountId = a.Id AND b.Status = 'Successful') AS last_txn_ts,
+        (SELECT COALESCE(SUM(b.PaymentReceived), 0) FROM dst.bookings b
+            WHERE b.AccountId = a.Id AND b.Status = 'Successful'
+              AND b.TransactionDate >= (now() AT TIME ZONE 'UTC') - INTERVAL 180 DAY) AS recent_paid
+    FROM dst.accounts a
+)
+SELECT
+    aid,
+    industry,
+    CASE
+        WHEN last_txn_ts IS NULL THEN NULL
+        ELSE EPOCH((now() AT TIME ZONE 'UTC') - last_txn_ts) / 86400.0
+    END AS days_since,
+    recent_paid,
+    CASE
+        WHEN created_ts IS NULL THEN NULL
+        ELSE EPOCH((now() AT TIME ZONE 'UTC') - created_ts) / 86400.0 / 30.44
+    END AS age_months
+FROM per_acct;
+"""
+
+
+_DUCKDB_CONCENTRATION_AGG = """
+-- === concentration_agg (getConcentrationDuck) ============================
+-- Two feeders for the tier-concentration endpoint, baked daily. Reuses the
+-- same _am_src London-local rollup if present; if you add this block AFTER
+-- _DUCKDB_ACCOUNT_METRICS_AGG you can reference _am_src/_am_cut, but to keep
+-- this self-contained (and runnable independently) it rebuilds its own temp.
+
+INSTALL icu; LOAD icu;
+
+CREATE TEMP TABLE _conc_src AS
+SELECT
+    AccountId AS aid,
+    PaymentReceived,
+    (COALESCE(BookingFee,0)+COALESCE(CardFee,0)
+     +COALESCE(ProcessingFee,0)+COALESCE(TicketFee,0))/1.20 AS total_fees,
+    TicketQuantity,
+    (TransactionDate AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE AS txn_date,
+    CAST(EXTRACT(year FROM
+        (TransactionDate AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/London')::DATE
+    ) AS INTEGER) AS year
+FROM dst.bookings
+WHERE Status = 'Successful' AND AccountId IS NOT NULL;
+
+CREATE TEMP TABLE _conc_cut AS
+SELECT
+    d - INTERVAL 365 DAY AS cut365,
+    d - INTERVAL 730 DAY AS cut730
+FROM (SELECT (now() AT TIME ZONE 'Europe/London')::DATE AS d);
+
+-- 1. Per-account aggregate (v2-scoring inputs). One row per ticketed account.
+CREATE TABLE dst.concentration_account_agg AS
+SELECT
+    s.aid,
+    SUM(s.total_fees) AS revenue_lifetime,
+    SUM(s.TicketQuantity) AS tickets_lifetime,
+    COUNT(DISTINCT s.year) AS years_loyalty,
+    SUM(CASE WHEN s.txn_date >= c.cut365 THEN s.total_fees ELSE 0 END) AS revenue_current,
+    SUM(CASE WHEN s.txn_date >= c.cut365 THEN s.TicketQuantity ELSE 0 END) AS tickets_current,
+    SUM(CASE WHEN s.txn_date >= c.cut730 AND s.txn_date < c.cut365
+             THEN s.total_fees ELSE 0 END) AS revenue_previous,
+    SUM(CASE WHEN s.txn_date >= c.cut730 AND s.txn_date < c.cut365
+             THEN s.TicketQuantity ELSE 0 END) AS tickets_previous
+FROM _conc_src s CROSS JOIN _conc_cut c
+GROUP BY s.aid
+HAVING SUM(s.TicketQuantity) > 0;
+
+-- 2. Per-(account, year) booking rollup for the tier / year-tier sums.
+--    Lossless vs the SQLite per-row iterate(): the JS only Set-dedupes aid and
+--    sums fees/revenue, both grouped by aid and year.
+CREATE TABLE dst.concentration_booking_agg AS
+SELECT
+    aid,
+    year,
+    SUM(COALESCE(PaymentReceived, 0)) AS revenue,
+    SUM(total_fees) AS fees
+FROM _conc_src
+GROUP BY aid, year;
+
+DROP TABLE _conc_src;
+DROP TABLE _conc_cut;
+"""
+
+
+
 def _materialise_duckdb() -> None:
     """Build a fresh DuckDB file from the SQLite warehouse.
 
@@ -428,6 +718,16 @@ CREATE INDEX bookings_event ON dst.bookings (EventId);
 CREATE INDEX accounts_id ON dst.accounts (Id);
 
 {_DUCKDB_ACCOUNT_METRICS_AGG}
+
+{_DUCKDB_DAILY_METRICS_AGG}
+
+{_DUCKDB_MONTHLY_METRICS_AGG}
+
+{_DUCKDB_PRICE_BANDS_AGG}
+
+{_DUCKDB_DORMANCY_AGG}
+
+{_DUCKDB_CONCENTRATION_AGG}
 """
 
     log.info("Materialising DuckDB warehouse at %s...", target)

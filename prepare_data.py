@@ -1023,6 +1023,16 @@ if __name__ == "__main__":
         help="Skip updating the SQLite warehouse (warehouse.db).",
     )
     parser.add_argument(
+        "--materialise-only",
+        action="store_true",
+        help="Run ONLY the DuckDB materialise (no S3 cache refresh, no SQLite "
+             "update). Use this as the LAST step of the nightly chain — after "
+             "zoho_tiers.py has written that morning's retention priority into "
+             "SQLite — so the dashboard's DuckDB includes same-day tiers/priority "
+             "instead of yesterday's. (The 02:00 full run still materialises so "
+             "weekends, when the downstream jobs don't run, stay fresh.)",
+    )
+    parser.add_argument(
         "--seed-from-pickle",
         action="store_true",
         help="Bulk-seed the warehouse bookings table from an existing "
@@ -1068,6 +1078,22 @@ if __name__ == "__main__":
             log.info("PPC backfill: %d rows", n)
         finally:
             conn.close()
+        sys.exit(0)
+
+    if args.materialise_only:
+        # End-of-chain refresh: rebuild the DuckDB file from the now-current
+        # SQLite warehouse (which zoho_tiers has just updated with today's
+        # retention priority). No cache/S3 work, no SQLite mutation.
+        started = pd.Timestamp.now(UK_TZ)
+        log.info("Materialise-only run started at %s",
+                 started.strftime("%Y-%m-%d %H:%M:%S %Z"))
+        try:
+            _materialise_duckdb()
+        except Exception as e:
+            log.error("DuckDB materialise failed: %s", e)
+            sys.exit(1)
+        log.info("Materialise-only complete in %.1fs",
+                 (pd.Timestamp.now(UK_TZ) - started).total_seconds())
         sys.exit(0)
 
     sys.exit(main(build_combined=args.combined,

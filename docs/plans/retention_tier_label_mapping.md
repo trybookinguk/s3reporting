@@ -55,10 +55,26 @@ roughly line up when eyeballing the report:
 (The composite v2 calculator is score-based, so the boundaries aren't a strict
 1:1 — treat the table as indicative.)
 
-## Timing caveat
+## Timing — same-day, via an end-of-chain re-materialise
 
-`prepare_data.py` (~02:00) materialises DuckDB **before** `zoho_tiers.py`
-(~02:45) writes the new priority. So the priority the dashboard reads is from
-the **previous** tier run (~a day old). This matches how the dashboard's tier
-and rating already lag (they too come from the prior pipeline run), so the
-columns stay internally consistent. Documented and accepted (decision §8 timing).
+The dashboard reads **only** the DuckDB file, which is built by
+`prepare_data.py`'s materialise. The naive ordering was a perpetual 1-day lag:
+
+- `prepare_data.py` (02:00) materialises DuckDB — but it's the *first* nightly job.
+- `zoho_tiers.py` (02:45) writes retention priority into **SQLite** — *after* the
+  DuckDB snapshot was already taken. That write only reaches DuckDB at the *next*
+  morning's materialise → 24h stale, and blank for the first day after deploy.
+
+Note this lag is **unique to retention priority**: everything else the dashboard
+shows — tier, previous_tier, tier_movement, activity_rating — is computed *in
+DuckDB* (`warehouse_duck.ts`'s v2 composite scoring) from the bookings/accounts
+data that step 1 already materialised. Industry comes from the accounts snapshot.
+None of those depend on a downstream job. Retention priority is the one
+dashboard-visible value produced *after* the materialise.
+
+**Fix:** a second, materialise-only run at the end of the weekday chain
+(`prepare_data.py --materialise-only`, ~03:30, after `zoho_tiers`). It rebuilds
+DuckDB from the now-updated SQLite, so retention priority is **same-day**. The
+02:00 full run still materialises so weekends (when `zoho_tiers` doesn't run)
+stay fresh off the previous weekday's priority. See `deploy/pi-crontab` steps 1
+and 5.

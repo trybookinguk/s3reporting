@@ -9,9 +9,11 @@
 # ends, so a weekend month-end would otherwise leave the warehouse missing the
 # month's final days until the new month's file appears.
 
-# 1. Refresh S3 cache + maintain warehouse (bookings/accounts/users/ppc_attribution).
-#    The Svelte dashboard reads this warehouse directly via better-sqlite3.
-#    Runs daily (incl. weekends) to guarantee month-end capture.
+# 1. Refresh S3 cache + maintain SQLite warehouse, then materialise the DuckDB
+#    file the Svelte dashboard reads (bookings/accounts/users/ppc_attribution +
+#    the *_agg tables). Runs daily (incl. weekends) to guarantee month-end
+#    capture and keep weekend DuckDB fresh (the downstream weekday jobs below
+#    don't run at the weekend).
 0 2 * * * set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py >> /root/logs/prepare-data.log 2>&1
 
 # 2. S3 -> SharePoint sync (manifest persists at /root/s3reporting/.sync_manifest)
@@ -20,11 +22,21 @@
 # 3. Zoho industry sync
 30 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 zoho_industry.py >> /root/logs/zoho-industry.log 2>&1
 
-# 4. Zoho tiers update (reports saved to /root/s3reporting/reports via REPORTS_DIR)
+# 4. Zoho tiers update (reports saved to /root/s3reporting/reports via REPORTS_DIR).
+#    Also writes the per-account retention priority into the SQLite warehouse.
 45 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 zoho_tiers.py >> /root/logs/zoho-tiers.log 2>&1
 
+# 5. Re-materialise the DuckDB warehouse AFTER zoho_tiers (weekdays only).
+#    Everything else the dashboard shows (tiers, ratings, industry) is computed
+#    fresh from bookings/accounts in step 1's materialise. Retention priority is
+#    the ONE dashboard value produced downstream (by zoho_tiers, into SQLite),
+#    so without this second materialise it would always be a day stale. This
+#    rebuilds DuckDB from the now-updated SQLite so priority is same-day.
+#    Buffer is generous: zoho_tiers' full pandas pass can run for a while.
+30 3 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py --materialise-only >> /root/logs/prepare-data.log 2>&1
+
 # generate_dashboard_data.py was removed in 5490a60 — the SvelteKit reporting
-# dashboard now reads the warehouse directly (no JSON files to bake).
+# dashboard now reads the DuckDB warehouse directly (no JSON files to bake).
 
 # Log rotation: delete logs older than 30 days, weekly on Sunday at midnight
 0 0 * * 0 find /root/logs -name "*.log" -mtime +30 -delete

@@ -345,9 +345,8 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     # Best indicator: if they had a Previous_Tier, they existed in previous period
     if 'Previous_Tier' in metrics_df.columns:
         had_previous_tier = (
-            metrics_df['Previous_Tier'].notna() & 
-            (metrics_df['Previous_Tier'] != '') & 
-            (metrics_df['Previous_Tier'] != 'NIL')
+            metrics_df['Previous_Tier'].notna() &
+            (~metrics_df['Previous_Tier'].isin(['', 'NIL', 'Nil']))
         )
         has_previous_data |= had_previous_tier
     
@@ -624,8 +623,12 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     logger.debug("Detecting rapid revenue drops...")
     rapid_drop_start = time.time()
     
-    # Define high-value tiers that qualify for rapid drop detection
-    HIGH_VALUE_TIERS = ["Key Account", "High Value", "Tier 4", "Tier 3"]
+    # Define high-value tiers that qualify for rapid drop detection.
+    # v2 taxonomy (Tier 1 = top): the top tiers are Tier 1–Tier 4. v1 aliases
+    # (Key Account/High Value/Tier 4/Tier 3) kept so legacy batches still match.
+    # NB: this filter gates whether rapid_drop_alert is computed at all, which in
+    # turn drives the high-value rapid/critical-drop boosts in retention_priority.
+    HIGH_VALUE_TIERS = ["Tier 1", "Tier 2", "Tier 3", "Tier 4", "Key Account", "High Value"]
     
     # Filter accounts eligible for rapid drop detection
     # Include accounts that are currently high-value OR were high-value previously

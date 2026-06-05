@@ -30,16 +30,32 @@ def calculate_retention_priorities(df):
     # Initialize result series
     priority_scores = pd.Series(0, index=df.index, dtype='int64')
     
-    # Define tier weights
+    # Define tier weights.
+    # v2 taxonomy (Tier 1 = HIGHEST value, Tier 5 = lowest, plus Free/Nil). This
+    # is INVERTED relative to the old v1 scheme (where Tier 4 > Tier 3 and "Key
+    # Account" was the top). The pipeline now feeds v2 labels into scoring, so
+    # the top tiers that warrant the strongest retention attention are Tier 1/2.
+    # v1 keys are kept as legacy aliases so a mixed/old batch never silently
+    # scores 1.
     tier_weights = {
+        # v2 (current)
+        "Tier 1": 5,
+        "Tier 2": 4,
+        "Tier 3": 3,
+        "Tier 4": 2,
+        "Tier 5": 1,
+        "Free": 1,
+        "Nil": 1,
+        # v1 (legacy aliases)
         "Key Account": 5,
-        "High Value": 4, 
-        "Tier 4": 3,
-        "Tier 3": 2,
-        "Tier 2": 1,
-        "Tier 1": 1,
-        "NIL": 1
+        "High Value": 4,
+        "NIL": 1,
     }
+
+    # The top tiers that warrant the strongest retention attention. v2: Tier 1 &
+    # Tier 2 (the highest-value accounts). v1 aliases included so legacy batches
+    # still match. Used by every "high-value + rapid/critical drop" boost below.
+    TOP_TIERS = ['Tier 1', 'Tier 2', 'Key Account', 'High Value']
     
     # Define rating severity
     # Hybrid AU/UK rating values
@@ -94,11 +110,14 @@ def calculate_retention_priorities(df):
         is_new_account = df['Years_Loyalty'] <= 1
         rapid_drop_alerts[is_new_account] = 0
     
-    # Also clear for accounts that upgraded from NIL tier
+    # Also clear for accounts that upgraded from the bottom tier (no revenue yet
+    # last period, so a year-over-year "drop" is spurious). v2 bottom = Nil/Free;
+    # 'NIL' kept for legacy batches.
+    bottom_tiers = ('', 'Nil', 'NIL', 'Free')
     if 'Previous_Tier' in df.columns:
         upgraded_from_nil = (
-            (df['Previous_Tier'].isna() | (df['Previous_Tier'] == '') | (df['Previous_Tier'] == 'NIL')) &
-            df['Current_Tier'].notna() & (df['Current_Tier'] != '') & (df['Current_Tier'] != 'NIL')
+            (df['Previous_Tier'].isna() | df['Previous_Tier'].isin(bottom_tiers)) &
+            df['Current_Tier'].notna() & (~df['Current_Tier'].isin(bottom_tiers))
         )
         rapid_drop_alerts[upgraded_from_nil] = 0
     
@@ -164,9 +183,14 @@ def calculate_retention_priorities(df):
     # Note: Removed minimum score logic as the new additive formula 
     # already produces appropriate base scores for high-value accounts
     
-    # Tier drop boost
-    tier_hierarchy = ["NIL", "Tier 1", "Tier 2", "Tier 3", "Tier 4", "High Value", "Key Account"]
+    # Tier drop boost. Hierarchy is ordered lowest → highest value, so a positive
+    # (previous_index - current_index) means the account moved DOWN tiers. v2:
+    # Nil/Free are the floor, Tier 5 .. Tier 1 ascend (Tier 1 = top).
+    tier_hierarchy = ["Nil", "Free", "Tier 5", "Tier 4", "Tier 3", "Tier 2", "Tier 1"]
     tier_to_index = {tier: i for i, tier in enumerate(tier_hierarchy)}
+    # Legacy v1 aliases mapped onto the equivalent v2 rung so old batches still
+    # compute sane drops (Key Account≈Tier 1, High Value≈Tier 2, NIL≈Nil).
+    tier_to_index.update({"NIL": 0, "Key Account": 6, "High Value": 5})
     
     # Calculate tier drops
     has_previous_tier = df['Previous_Tier'].notna() & (df['Previous_Tier'] != df['Current_Tier'])
@@ -280,8 +304,8 @@ def calculate_retention_priorities(df):
     
     # High-value accounts with significant drops (score 2) - boost but check other factors
     high_value_significant_mask = (
-        (rapid_drop_alerts == 2) & 
-        df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4'])
+        (rapid_drop_alerts == 2) &
+        df['Current_Tier'].isin(TOP_TIERS)
     )
     # Only push to Very High if they also have other risk factors
     # Otherwise keep in High priority
@@ -307,12 +331,14 @@ def calculate_retention_priorities(df):
                 (df['revenue_prev'] >= 100)  # And previous revenue was meaningful
             )
         
-        # Also exclude accounts that upgraded tiers (NIL to something)
+        # Also exclude accounts that upgraded from the bottom tier (Nil/Free) into
+        # any real tier — their year-over-year "drop" is an artefact of having had
+        # no prior revenue, not a genuine decline.
         tier_upgraded = pd.Series(False, index=df.index)
         if 'Previous_Tier' in df.columns:
             tier_upgraded = (
-                (df['Previous_Tier'].isna() | (df['Previous_Tier'] == '') | (df['Previous_Tier'] == 'NIL')) &
-                df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1'])
+                (df['Previous_Tier'].isna() | df['Previous_Tier'].isin(bottom_tiers)) &
+                df['Current_Tier'].notna() & (~df['Current_Tier'].isin(bottom_tiers))
             )
         
         # For rapid drop score 3, also check the revenue drop category
@@ -325,8 +351,8 @@ def calculate_retention_priorities(df):
             has_severe_revenue_drop = severe_drop_string | severe_drop_numeric
         
         critical_rapid_mask = (
-            (rapid_drop_alerts == 3) & 
-            df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4']) &
+            (rapid_drop_alerts == 3) &
+            df['Current_Tier'].isin(TOP_TIERS) &
             has_revenue_decline &
             has_severe_revenue_drop &  # Must have severe/significant revenue drop too
             (~tier_upgraded)  # Exclude tier upgrades
@@ -335,8 +361,8 @@ def calculate_retention_priorities(df):
     else:
         # Fallback if revenue columns not available
         critical_rapid_mask = (
-            (rapid_drop_alerts == 3) & 
-            df['Current_Tier'].isin(['Key Account', 'High Value', 'Tier 4'])
+            (rapid_drop_alerts == 3) &
+            df['Current_Tier'].isin(TOP_TIERS)
         )
         priority_scores[critical_rapid_mask] = 19
     

@@ -755,6 +755,36 @@ DROP TABLE _cmi_lastbooked;
 """
 
 
+# === retention_agg (getRetentionDuck) ====================================
+# The CS /retention worklist shows the *exact* retention priority the pandas
+# tier pipeline computes (retention_priority.py), not a JS re-derivation.
+# zoho_tiers.py writes that figure into the SQLite warehouse's
+# retention_priority table (keyed by account_id); here we just copy it across
+# verbatim so the dashboard can SELECT it.
+#
+# Guarded with a SQLite-side existence check: the table only appears after the
+# first zoho_tiers run, and that job runs *after* this materialise (≈02:45 vs
+# ≈02:00), so on a fresh Pi — or the very first day — the source table won't
+# exist yet. The IF-absent branch creates an empty, correctly-typed agg table
+# so the dashboard join degrades to NULL priority rather than erroring.
+_DUCKDB_RETENTION_AGG = """
+CREATE TABLE dst.retention_agg AS
+SELECT
+    CAST(account_id AS VARCHAR) AS account_id,
+    retention_priority,
+    TRY_CAST(retention_priority_score AS INTEGER) AS retention_priority_score
+FROM src.retention_priority;
+"""
+
+# Empty fallback used when src.retention_priority does not yet exist.
+_DUCKDB_RETENTION_AGG_EMPTY = """
+CREATE TABLE dst.retention_agg (
+    account_id VARCHAR,
+    retention_priority VARCHAR,
+    retention_priority_score INTEGER
+);
+"""
+
 
 def _materialise_duckdb() -> None:
     """Build a fresh DuckDB file from the SQLite warehouse.
@@ -768,9 +798,24 @@ def _materialise_duckdb() -> None:
     import tempfile
     import time
 
-    duckdb_bin = shutil.which("duckdb")
+    # Resolve the duckdb binary. shutil.which() relies on PATH, which is minimal
+    # under cron (no /usr/local/bin) — that silently froze the DuckDB warehouse
+    # for days (the dashboard reads it; cron skipped the materialise nightly while
+    # interactive runs worked). Fall back to known install locations, and allow an
+    # explicit override via DUCKDB_BIN, before giving up.
+    duckdb_bin = (
+        os.environ.get("DUCKDB_BIN")
+        or shutil.which("duckdb")
+        or next((p for p in ("/usr/local/bin/duckdb", "/usr/bin/duckdb",
+                             "/opt/homebrew/bin/duckdb") if os.path.exists(p)), None)
+    )
     if not duckdb_bin:
-        log.warning("duckdb CLI not on PATH — skipping DuckDB materialise.")
+        log.error(
+            "duckdb binary not found (checked DUCKDB_BIN, PATH, and "
+            "/usr/local/bin, /usr/bin, /opt/homebrew/bin) — DuckDB materialise "
+            "SKIPPED. The dashboard warehouse will go stale. Install duckdb or "
+            "set DUCKDB_BIN."
+        )
         return
 
     sqlite_path = warehouse.default_db_path()

@@ -349,7 +349,10 @@ SELECT
     SUM(CASE WHEN s.is_bo = 1 THEN COALESCE(s.PaymentReceived,0) ELSE 0 END) AS revenue_bo_lifetime,
     SUM(CASE WHEN s.is_bo = 1 THEN COALESCE(s.TicketQuantity,0) ELSE 0 END) AS tickets_bo_lifetime,
     SUM(CASE WHEN s.is_bo = 1 THEN 1 ELSE 0 END) AS txns_bo_lifetime,
-    CAST(MAX(CASE WHEN s.is_bo = 1 THEN s.TransactionDate END) AS VARCHAR) AS last_bo_txn,
+    -- London-local DATE of the last box-office txn (was raw UTC, which pushed
+    -- late-evening BST bookings onto the previous day). MAX over the already-
+    -- London-converted txn_date gives the correct local last-used date.
+    CAST(MAX(CASE WHEN s.is_bo = 1 THEN s.txn_date END) AS VARCHAR) AS last_bo_txn,
     SUM(CASE WHEN s.is_bo = 1 AND s.txn_date >= c.cut365 THEN s.total_fees ELSE 0 END) AS fees_bo_current,
     SUM(CASE WHEN s.is_bo = 1 AND s.txn_date >= c.cut365 THEN COALESCE(s.PaymentReceived,0) ELSE 0 END) AS revenue_bo_current,
     SUM(CASE WHEN s.is_bo = 1 AND s.txn_date >= c.cut365 THEN COALESCE(s.TicketQuantity,0) ELSE 0 END) AS tickets_bo_current,
@@ -804,12 +807,17 @@ DROP TABLE _cmi_lastbooked;
 # ≈02:00), so on a fresh Pi — or the very first day — the source table won't
 # exist yet. The IF-absent branch creates an empty, correctly-typed agg table
 # so the dashboard join degrades to NULL priority rather than erroring.
+# NB: warehouse columns come through the SQLite scanner as BLOB, so a plain
+# CAST(... AS INTEGER) on the score yields NULL and the priority stays BLOB
+# (a Buffer in @duckdb/node-api, not a JS string). decode(CAST(col AS BLOB))
+# round-trips the bytes to UTF-8 VARCHAR first — same idiom as the bookings/
+# accounts column casts above — then we cast the score from that string.
 _DUCKDB_RETENTION_AGG = """
 CREATE TABLE dst.retention_agg AS
 SELECT
-    CAST(account_id AS VARCHAR) AS account_id,
-    retention_priority,
-    TRY_CAST(retention_priority_score AS INTEGER) AS retention_priority_score
+    decode(CAST(account_id AS BLOB)) AS account_id,
+    decode(CAST(retention_priority AS BLOB)) AS retention_priority,
+    TRY_CAST(decode(CAST(retention_priority_score AS BLOB)) AS INTEGER) AS retention_priority_score
 FROM src.retention_priority;
 """
 

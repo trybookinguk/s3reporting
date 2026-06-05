@@ -331,6 +331,61 @@ def replace_snapshot(conn: sqlite3.Connection, table: str, df: pd.DataFrame,
     return len(df)
 
 
+def write_retention_priority(conn: sqlite3.Connection, updates: pd.DataFrame) -> int:
+    """Persist the per-account retention priority into the warehouse.
+
+    The dashboard's /retention worklist surfaces the *exact* priority the
+    pandas tier pipeline already computes (retention_priority.py), rather than
+    re-deriving it in JS. zoho_tiers.py calls this after process_accounts so
+    the figure is the canonical one the CS team trusts.
+
+    ``updates`` is process_accounts' frame: Account_Name holds the AccountId,
+    Retention_Priority is the Low/Medium/High/Very High category, and
+    _retention_priority_score is the numeric score. We snapshot just those into
+    a small ``retention_priority`` table keyed by account_id; prepare_data's
+    next DuckDB materialise copies it across as ``retention_agg`` for the
+    dashboard to SELECT.
+
+    Note on timing: prepare_data (≈02:00) materialises DuckDB *before*
+    zoho_tiers (≈02:45) runs, so the priority the dashboard reads is from the
+    previous tier run — about a day old. That is consistent with how the
+    dashboard's tier/rating already lag (they too derive from the prior
+    pipeline run), so "priority" and "current tier" shown side-by-side stay
+    coherent.
+    """
+    required = {"Account_Name", "Retention_Priority"}
+    missing = required - set(updates.columns)
+    if missing:
+        raise ValueError(f"updates missing columns for retention snapshot: {missing}")
+
+    snap = pd.DataFrame(
+        {
+            # Account_Name == AccountId (process_accounts sets df['Account_Name']
+            # = df.index, the AccountId). Store as string so the DuckDB join to
+            # the account_metrics aid (also stringified) lines up.
+            "account_id": updates["Account_Name"].astype(str),
+            "retention_priority": updates["Retention_Priority"].fillna("").astype(str),
+        }
+    )
+    if "_retention_priority_score" in updates.columns:
+        snap["retention_priority_score"] = pd.to_numeric(
+            updates["_retention_priority_score"], errors="coerce"
+        ).astype("Int64")
+
+    # Drop accounts with no usable id, and de-dupe (keep the highest score) so
+    # account_id can be a clean primary key.
+    snap = snap[snap["account_id"].notna() & (snap["account_id"] != "")]
+    if "retention_priority_score" in snap.columns:
+        snap = (
+            snap.sort_values("retention_priority_score", na_position="first")
+            .drop_duplicates("account_id", keep="last")
+        )
+    else:
+        snap = snap.drop_duplicates("account_id", keep="last")
+
+    return replace_snapshot(conn, "retention_priority", snap, key="account_id")
+
+
 # ---- read helpers (re-parse dates so callers get pickle-equivalent dtypes) ----
 
 def read_bookings(conn: sqlite3.Connection, where: str = None,

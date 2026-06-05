@@ -30,7 +30,7 @@ from modules.utils.validation import validate_environment_variables
 from modules.utils.performance import timer_decorator
 from modules.industry_revenue_report import generate_industry_revenue_reports
 from modules.tier_calculator_v2 import calculate_composite_tiers
-from modules import tier_snapshot, tier_history, tier_movement_email
+from modules import tier_snapshot, tier_history, tier_movement_email, warehouse
 from modules.zoho_account_links import lookup_account_urls
 from modules.utils.sharepoint import authenticate_graph
 
@@ -609,6 +609,22 @@ def main(dry_run: bool = False, use_combined: bool = False):
     updates[csv_columns].to_csv(csv_filename, index=False)
     logger.info(f"Saved tier calculations to: {csv_filename}")
     print(f"\nSaved tier calculations to: {csv_filename}")
+
+    # Persist retention priority to the warehouse for the CS /retention
+    # dashboard. The dashboard surfaces this exact figure (no JS re-derivation),
+    # so it stays identical to the number the team already trusts. Isolated in
+    # its own try/except: a warehouse hiccup must not block the Zoho push.
+    try:
+        conn = warehouse.connect()
+        try:
+            n = warehouse.write_retention_priority(conn, updates)
+            logger.info("Retention priority snapshot written: %d accounts", n)
+            print(f"✓ Retention priority snapshot written to warehouse: {n:,} accounts")
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error("Failed to write retention priority snapshot (continuing): %s", e)
+        print(f"⚠ Could not write retention priority snapshot: {e}")
     
     # Summary statistics
     tier_counts = updates['Current_Tier'].value_counts()

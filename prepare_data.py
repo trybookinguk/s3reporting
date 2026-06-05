@@ -680,7 +680,11 @@ DROP TABLE _conc_cut;
 #   - domains: comma-joined distinct email domains from the Users table
 #     (the strongest match signal — exact email-domain hit). Freemail domains
 #     are kept here and filtered in JS, so the list stays source-of-truth.
-#   - postcode_area: most-frequent AccountPostcode outward area from bookings
+#   - postcode_area: outward area letters, AccountPostcode first then a
+#     fallback to the most-common EventPostcode area (most bookings carry a
+#     venue postcode but few carry an account postcode). Mirrors the
+#     account-then-event precedence in modules/uk_regional_segmentation.py's
+#     assign_account_regions; postcode_source records which one won.
 #   - last_booked: most recent Successful transaction date
 #
 # Freshness is inherited from the nightly materialise — same exposure the old
@@ -704,26 +708,38 @@ FROM _cmi_domains
 WHERE domain IS NOT NULL AND domain != ''
 GROUP BY aid;
 
--- Per-account postcode + last-booked from Successful bookings. Postcode area =
--- the most frequent leading-letters outward area across the account's bookings.
+-- One scan of Successful bookings → per-row account area (from AccountPostcode)
+-- and event area (from EventPostcode), plus the transaction date. The area is
+-- the leading 1-2 letters, matching extract_postcode_areas_vectorized's
+-- ^[A-Z]{1,2} rule. NULLIF turns an empty extract into a real NULL so the
+-- frequency rollups below ignore it.
 CREATE TEMP TABLE _cmi_book AS
 SELECT
     AccountId AS aid,
-    REGEXP_EXTRACT(UPPER(TRIM(AccountPostcode)), '^[A-Z]{1,2}') AS pc_area,
+    NULLIF(REGEXP_EXTRACT(UPPER(TRIM(AccountPostcode)), '^[A-Z]{1,2}'), '') AS acct_area,
+    NULLIF(REGEXP_EXTRACT(UPPER(TRIM(EventPostcode)), '^[A-Z]{1,2}'), '') AS event_area,
     TransactionDate
 FROM dst.bookings
 WHERE Status = 'Successful' AND AccountId IS NOT NULL;
 
-CREATE TEMP TABLE _cmi_pc AS
-SELECT aid, pc_area
-FROM (
-    SELECT aid, pc_area,
+-- Most-frequent AccountPostcode area per account (the authoritative signal).
+CREATE TEMP TABLE _cmi_acct_pc AS
+SELECT aid, area FROM (
+    SELECT aid, acct_area AS area,
            ROW_NUMBER() OVER (PARTITION BY aid ORDER BY COUNT(*) DESC) AS rn
-    FROM _cmi_book
-    WHERE pc_area IS NOT NULL AND pc_area != ''
-    GROUP BY aid, pc_area
-)
-WHERE rn = 1;
+    FROM _cmi_book WHERE acct_area IS NOT NULL
+    GROUP BY aid, acct_area
+) WHERE rn = 1;
+
+-- Most-frequent EventPostcode (venue) area per account — the fallback, used
+-- only where the account has no AccountPostcode of its own.
+CREATE TEMP TABLE _cmi_event_pc AS
+SELECT aid, area FROM (
+    SELECT aid, event_area AS area,
+           ROW_NUMBER() OVER (PARTITION BY aid ORDER BY COUNT(*) DESC) AS rn
+    FROM _cmi_book WHERE event_area IS NOT NULL
+    GROUP BY aid, event_area
+) WHERE rn = 1;
 
 CREATE TEMP TABLE _cmi_lastbooked AS
 SELECT aid, CAST(MAX(TransactionDate) AS VARCHAR) AS last_booked
@@ -731,7 +747,8 @@ FROM _cmi_book
 GROUP BY aid;
 
 -- One row per account. LEFT JOINs so accounts with no bookings/users still
--- appear (name-only match still possible).
+-- appear (name-only match still possible). postcode_area prefers the account's
+-- own area and falls back to the venue area; postcode_source flags which.
 CREATE TABLE dst.client_match_index AS
 SELECT
     a.Id AS aid,
@@ -740,17 +757,24 @@ SELECT
     a.Industry AS industry,
     CAST(a.DateTimeCreated AS VARCHAR) AS created_at,
     d.domains AS domains,
-    pc.pc_area AS postcode_area,
+    COALESCE(apc.area, epc.area) AS postcode_area,
+    CASE
+        WHEN apc.area IS NOT NULL THEN 'account'
+        WHEN epc.area IS NOT NULL THEN 'event'
+        ELSE NULL
+    END AS postcode_source,
     lb.last_booked AS last_booked
 FROM dst.accounts a
 LEFT JOIN _cmi_domain_agg d ON d.aid = a.Id
-LEFT JOIN _cmi_pc pc ON pc.aid = a.Id
+LEFT JOIN _cmi_acct_pc apc ON apc.aid = a.Id
+LEFT JOIN _cmi_event_pc epc ON epc.aid = a.Id
 LEFT JOIN _cmi_lastbooked lb ON lb.aid = a.Id;
 
 DROP TABLE _cmi_domains;
 DROP TABLE _cmi_domain_agg;
 DROP TABLE _cmi_book;
-DROP TABLE _cmi_pc;
+DROP TABLE _cmi_acct_pc;
+DROP TABLE _cmi_event_pc;
 DROP TABLE _cmi_lastbooked;
 """
 
@@ -823,6 +847,31 @@ def _materialise_duckdb() -> None:
         log.warning("SQLite warehouse missing at %s — skipping materialise.", sqlite_path)
         return
 
+    # retention_priority is written by zoho_tiers.py, which runs *after* this
+    # job, so on a fresh Pi / first day the source table won't exist yet. Probe
+    # SQLite directly and pick the copy-across vs empty-shell fragment — a
+    # missing table inside the single duckdb CLI run would otherwise abort the
+    # whole materialise.
+    import sqlite3
+    retention_sql = _DUCKDB_RETENTION_AGG_EMPTY
+    try:
+        _probe = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
+        try:
+            exists = _probe.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='retention_priority'"
+            ).fetchone()
+            if exists:
+                retention_sql = _DUCKDB_RETENTION_AGG
+            else:
+                log.info(
+                    "retention_priority table not present yet (zoho_tiers hasn't "
+                    "run) — materialising an empty retention_agg."
+                )
+        finally:
+            _probe.close()
+    except Exception as e:
+        log.warning("Could not probe retention_priority table (%s) — empty agg.", e)
+
     target = _duckdb_path()
     # NamedTemporaryFile in the same directory so the rename is atomic on the
     # same filesystem. delete=False because we want the file to persist past
@@ -866,6 +915,8 @@ CREATE INDEX accounts_id ON dst.accounts (Id);
 {_DUCKDB_CONCENTRATION_AGG}
 
 {_DUCKDB_CLIENT_MATCH_INDEX}
+
+{retention_sql}
 """
 
     log.info("Materialising DuckDB warehouse at %s...", target)

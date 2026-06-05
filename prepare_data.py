@@ -46,6 +46,7 @@ log = logging.getLogger("prepare-data")
 def main(build_combined: bool = False, build_warehouse: bool = True) -> int:
     started = pd.Timestamp.now(UK_TZ)
     log.info("Data preparation started at %s", started.strftime("%Y-%m-%d %H:%M:%S %Z"))
+    materialise_failed = False
 
     # Force a fresh look at S3 regardless of any CACHE_TRUST_TODAY set for the
     # downstream jobs — this job is the one that establishes "today's" cache.
@@ -96,17 +97,29 @@ def main(build_combined: bool = False, build_warehouse: bool = True) -> int:
         # DuckDB's columnar format reads ~50x faster on the analytical workload
         # the dashboard runs (multi-table joins, percentile ranks, time
         # bucketing across all 5M bookings).
+        #
+        # IMPORTANT: the dashboard reads the DuckDB warehouse *exclusively* — the
+        # old SQLite read-path was retired in the DuckDB migration. So a failed
+        # or skipped materialise means a STALE DASHBOARD, not a slow fallback.
+        # We therefore treat it as a real failure: finish the run (the SQLite
+        # warehouse + downstream Zoho/SharePoint jobs already succeeded and must
+        # stay green), but exit non-zero so the cron wrapper emails an alert.
+        # This is the fix for repeated silent staleness (PATH skip June 2025;
+        # box-office dates frozen) — failures are now loud, not swallowed.
         try:
             _materialise_duckdb()
         except Exception as e:
-            # Don't fail the run — dashboard falls back to SQLite (it still
-            # works, just slowly). Failure email will fire from the cron
-            # wrapper, but the upstream Zoho/SharePoint jobs that depend on
-            # SQLite stay on the green path.
-            log.error("DuckDB materialise failed (dashboard stays on SQLite): %s", e)
+            log.error("DuckDB materialise FAILED — dashboard will be stale: %s", e)
+            materialise_failed = True
 
     elapsed = (pd.Timestamp.now(UK_TZ) - started).total_seconds()
     log.info("Data preparation complete in %.1fs", elapsed)
+    if materialise_failed:
+        log.error(
+            "Run finished but the DuckDB materialise did not succeed — the "
+            "dashboard warehouse is STALE. Exiting non-zero to trigger an alert."
+        )
+        return 1
     return 0
 
 
@@ -834,18 +847,20 @@ def _materialise_duckdb() -> None:
                              "/opt/homebrew/bin/duckdb") if os.path.exists(p)), None)
     )
     if not duckdb_bin:
-        log.error(
+        # Raise, don't return: a missing binary is a real failure that must
+        # surface (it silently froze the warehouse before). The caller flags
+        # materialise_failed and the run exits non-zero → cron alert.
+        raise RuntimeError(
             "duckdb binary not found (checked DUCKDB_BIN, PATH, and "
-            "/usr/local/bin, /usr/bin, /opt/homebrew/bin) — DuckDB materialise "
-            "SKIPPED. The dashboard warehouse will go stale. Install duckdb or "
-            "set DUCKDB_BIN."
+            "/usr/local/bin, /usr/bin, /opt/homebrew/bin). Install duckdb or "
+            "set DUCKDB_BIN — the dashboard warehouse cannot be built without it."
         )
-        return
 
     sqlite_path = warehouse.default_db_path()
     if not os.path.exists(sqlite_path):
-        log.warning("SQLite warehouse missing at %s — skipping materialise.", sqlite_path)
-        return
+        raise RuntimeError(
+            f"SQLite warehouse missing at {sqlite_path} — cannot materialise DuckDB."
+        )
 
     # retention_priority is written by zoho_tiers.py, which runs *after* this
     # job, so on a fresh Pi / first day the source table won't exist yet. Probe
@@ -939,12 +954,56 @@ CREATE INDEX accounts_id ON dst.accounts (Id);
             os.unlink(tmp_path)
         raise
 
+    # Verify BEFORE swapping into place: a duckdb run can exit 0 yet produce a
+    # truncated/empty file (disk full, a silently-dropped table). Cross-check the
+    # new file's bookings count against SQLite — if it's empty or wildly off, the
+    # build is bad; raise (and leave the existing good file untouched) rather than
+    # publish stale/empty data. This is the second guard against silent staleness.
+    try:
+        sqlite_rows = _sqlite_bookings_count(sqlite_path)
+        duck_rows = _duckdb_bookings_count(duckdb_bin, tmp_path)
+        if duck_rows == 0:
+            raise RuntimeError("materialised DuckDB has 0 bookings rows")
+        # Allow a small tolerance (SQLite may have upserted a few rows between the
+        # two reads), but a >1% gap means tables silently failed to copy.
+        if abs(duck_rows - sqlite_rows) > max(100, sqlite_rows * 0.01):
+            raise RuntimeError(
+                f"row-count mismatch: SQLite={sqlite_rows:,} DuckDB={duck_rows:,} "
+                "— materialise likely dropped tables; not publishing."
+            )
+        log.info("  Verify OK: bookings SQLite=%s DuckDB=%s", f"{sqlite_rows:,}", f"{duck_rows:,}")
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
     # Atomic rename — the dashboard's mtime-watch will see the new file
     # immediately and re-open it.
     os.replace(tmp_path, target)
     size_mb = os.path.getsize(target) / (1024 * 1024)
     elapsed = time.perf_counter() - t0
     log.info("  DuckDB written: %.1f MB in %.1fs", size_mb, elapsed)
+
+
+def _sqlite_bookings_count(sqlite_path: str) -> int:
+    import sqlite3
+    conn = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
+    try:
+        return conn.execute("SELECT COUNT(*) FROM bookings").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _duckdb_bookings_count(duckdb_bin: str, db_path: str) -> int:
+    import subprocess
+    out = subprocess.run(
+        [duckdb_bin, db_path, "-noheader", "-list",
+         "-c", "SELECT COUNT(*) FROM bookings;"],
+        capture_output=True, text=True, timeout=60,
+    )
+    if out.returncode != 0:
+        raise RuntimeError(f"duckdb verify query failed: {out.stderr.strip()}")
+    return int(out.stdout.strip())
 
 
 if __name__ == "__main__":

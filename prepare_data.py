@@ -667,6 +667,94 @@ DROP TABLE _conc_cut;
 """
 
 
+# Client-match index for the Database Builder's Stage 1 (reporting-dashboard).
+#
+# Stage 1 matches an uploaded prospect list against our existing client base.
+# Doing that live would mean joining accounts + users + the 4.95M-row bookings
+# per build run — so we bake a small one-row-per-account index here (same
+# pattern as the other *_agg tables) and the dashboard endpoint just SELECTs it.
+#
+# Per account it carries the signals the matcher corroborates on:
+#   - normalised AccountName (+ raw, for display)
+#   - AccountStatus, Industry, DateTimeCreated (context shown at the gate)
+#   - domains: comma-joined distinct email domains from the Users table
+#     (the strongest match signal — exact email-domain hit). Freemail domains
+#     are kept here and filtered in JS, so the list stays source-of-truth.
+#   - postcode_area: most-frequent AccountPostcode outward area from bookings
+#   - last_booked: most recent Successful transaction date
+#
+# Freshness is inherited from the nightly materialise — same exposure the old
+# accounts.json blob already had (brief §4a), no new risk.
+_DUCKDB_CLIENT_MATCH_INDEX = """
+-- === client_match_index (Database Builder Stage 1) =======================
+INSTALL icu; LOAD icu;
+
+-- Per-account email domains from the Users table. Username is the email;
+-- take the part after '@', lowercased. Distinct per (account, domain).
+CREATE TEMP TABLE _cmi_domains AS
+SELECT
+    CAST(CAST(AccountId AS VARCHAR) AS BIGINT) AS aid,
+    LOWER(TRIM(SPLIT_PART(Username, '@', 2))) AS domain
+FROM dst.users
+WHERE Username IS NOT NULL AND Username LIKE '%@%';
+
+CREATE TEMP TABLE _cmi_domain_agg AS
+SELECT aid, STRING_AGG(DISTINCT domain, ',') AS domains
+FROM _cmi_domains
+WHERE domain IS NOT NULL AND domain != ''
+GROUP BY aid;
+
+-- Per-account postcode + last-booked from Successful bookings. Postcode area =
+-- the most frequent leading-letters outward area across the account's bookings.
+CREATE TEMP TABLE _cmi_book AS
+SELECT
+    AccountId AS aid,
+    REGEXP_EXTRACT(UPPER(TRIM(AccountPostcode)), '^[A-Z]{1,2}') AS pc_area,
+    TransactionDate
+FROM dst.bookings
+WHERE Status = 'Successful' AND AccountId IS NOT NULL;
+
+CREATE TEMP TABLE _cmi_pc AS
+SELECT aid, pc_area
+FROM (
+    SELECT aid, pc_area,
+           ROW_NUMBER() OVER (PARTITION BY aid ORDER BY COUNT(*) DESC) AS rn
+    FROM _cmi_book
+    WHERE pc_area IS NOT NULL AND pc_area != ''
+    GROUP BY aid, pc_area
+)
+WHERE rn = 1;
+
+CREATE TEMP TABLE _cmi_lastbooked AS
+SELECT aid, CAST(MAX(TransactionDate) AS VARCHAR) AS last_booked
+FROM _cmi_book
+GROUP BY aid;
+
+-- One row per account. LEFT JOINs so accounts with no bookings/users still
+-- appear (name-only match still possible).
+CREATE TABLE dst.client_match_index AS
+SELECT
+    a.Id AS aid,
+    a.AccountName AS account_name,
+    a.AccountStatus AS account_status,
+    a.Industry AS industry,
+    CAST(a.DateTimeCreated AS VARCHAR) AS created_at,
+    d.domains AS domains,
+    pc.pc_area AS postcode_area,
+    lb.last_booked AS last_booked
+FROM dst.accounts a
+LEFT JOIN _cmi_domain_agg d ON d.aid = a.Id
+LEFT JOIN _cmi_pc pc ON pc.aid = a.Id
+LEFT JOIN _cmi_lastbooked lb ON lb.aid = a.Id;
+
+DROP TABLE _cmi_domains;
+DROP TABLE _cmi_domain_agg;
+DROP TABLE _cmi_book;
+DROP TABLE _cmi_pc;
+DROP TABLE _cmi_lastbooked;
+"""
+
+
 
 def _materialise_duckdb() -> None:
     """Build a fresh DuckDB file from the SQLite warehouse.
@@ -731,6 +819,8 @@ CREATE INDEX accounts_id ON dst.accounts (Id);
 {_DUCKDB_DORMANCY_AGG}
 
 {_DUCKDB_CONCENTRATION_AGG}
+
+{_DUCKDB_CLIENT_MATCH_INDEX}
 """
 
     log.info("Materialising DuckDB warehouse at %s...", target)

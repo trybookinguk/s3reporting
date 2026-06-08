@@ -1,12 +1,18 @@
 # TryBooking UK Reporting Stack — Owner's Handover
 
-An internal dashboard and a set of nightly automated reports for TryBooking UK. It runs
-the team's retention/revenue dashboard, syncs account data to Zoho CRM, and sends weekly
-email reports. It is **reporting and CRM only — it does not touch live bookings or
-payments**, so an outage is an internal-visibility problem, not customer-facing.
+This document details the internal data handling for TryBooking UK, which runs on a single
+Raspberry Pi.
 
-It all runs on **one Raspberry Pi**. The single biggest thing to sort out is who looks
-after it now (§1).
+The Pi currently runs:
+
+- Daily and weekly email reporting
+- Syncs enriched account data to Zoho CRM
+- Processes the data for the reporting dashboard
+- Hosts the reporting dashboard
+- Cloudflared for Cloudflare Access, plus Tailscale and Caddy for access and routing
+
+It is reporting and CRM only — it does not touch live bookings or payments. An outage is an
+internal-visibility problem, not customer-facing.
 
 ---
 
@@ -25,18 +31,8 @@ Decide this and write it at the top of this doc.
 
 ## 2. Bus factor — secrets & access
 
-The four parts, for reference:
-
-| | |
-| --- | --- |
-| **Dashboard** | `https://trybooking.internal` — CS & Marketing tool (retention, tiers, PPC). Microsoft login. |
-| **Zoho sync** | Nightly push of industry, tiers, retention priority to Zoho CRM. |
-| **Email reports** | Weekly stakeholder reports. |
-| **SharePoint feed** | Data export for the wider business. |
-
-
-One Raspberry Pi ("TrybookingPi", office LAN + Tailscale), external SSD for data. Code is
-on GitHub (`trybookinguk` org). **Secrets are not** — they live only on the Pi:
+One Raspberry Pi ("TrybookingPi"), external SSD for data. Code is on GitHub
+(`trybookinguk` org). **Secrets are not** — they live only on the Pi:
 
 | File | Holds |
 | --- | --- |
@@ -52,11 +48,13 @@ warehouses to SharePoint (`Backups/pi/<date>/`, last 7 kept).
 **Restore** onto a fresh Pi: clone both repos, run `restore_from_sharepoint.py`, enter the
 Azure values when prompted.
 
-**Access:** two ways into the Pi — a normal **SSH key** (key auth, no password) on the LAN,
-and **Tailscale SSH** off-network (granted by company Tailnet membership). You're not locked
-out if one is lost: a new local SSH key can be generated, and Tailnet access re-granted. The
-thing to safeguard is **Tailnet admin control**. ‼️ *operator: confirm who is the Tailscale
-admin / how a new device is approved.*
+**Access:**
+- **Dashboard** — published via **Cloudflared** (Cloudflare Access); users sign in through
+  Cloudflare. Caddy reverse-proxies to the app locally with a TLS cert.
+- **Pi admin** — a normal **SSH key** on the LAN, and **Tailscale SSH** off-network (granted
+  by company Tailnet membership). You're not locked out if one is lost: a new local SSH key
+  can be generated and Tailnet access re-granted. Safeguard **Tailnet admin control** and the
+  **Cloudflare account**. ‼️ *operator: confirm who admins the Tailnet and Cloudflare.*
 
 **Do now — the disaster-recovery key:** put these four in the company password manager.
 Without them you cannot reach the backup that holds everything else:
@@ -78,7 +76,8 @@ All vendor accounts sit under **one company account** (not personal logins).
 | Mailgun | Report emails | SMTP password |
 | Mailshake | Lead/outreach | API key |
 | GA4 | PPC data | Service-account JSON |
-| Tailscale | Pi access (Tailscale SSH) | Tailnet membership |
+| Tailscale | Pi admin access (SSH) | Tailnet membership |
+| Cloudflare | Dashboard access (Cloudflared) | Cloudflare account |
 | Domain/TLS | Dashboard URL | Caddy local cert, auto |
 
 > ⚠️ **Diarise now: Azure client secret expires March 2028.** When it lapses, dashboard

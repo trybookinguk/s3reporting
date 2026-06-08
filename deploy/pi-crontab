@@ -18,13 +18,18 @@
 
 PATH=/usr/local/bin:/usr/bin:/bin
 WRAP=/root/s3reporting/scripts/cron_wrapper.sh
+# Cache-warming: after a materialise the dashboard's in-process caches are stale
+# (busted by the new warehouse mtime). Hitting /api/warm rebuilds them so the
+# first real user never pays the cold recompute. Token must match WARM_TOKEN in
+# the dashboard's ecosystem.config.cjs env block.
+WARMURL=http://127.0.0.1:3000/api/warm?token=xU2tGU1zJUmZya1IH2GiNmKrBIre8p
 
 # 1. Refresh S3 cache + maintain SQLite warehouse, then materialise the DuckDB
 #    file the Svelte dashboard reads (bookings/accounts/users/ppc_attribution +
 #    the *_agg tables). Runs daily (incl. weekends) to guarantee month-end
 #    capture and keep weekend DuckDB fresh (the downstream weekday jobs below
 #    don't run at the weekend).
-0 2 * * * $WRAP prepare-data /root/logs/prepare-data.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py'
+0 2 * * * $WRAP prepare-data /root/logs/prepare-data.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py' ; curl -fsS "$WARMURL" -o /dev/null
 
 # 2. S3 -> SharePoint sync (manifest persists at /root/s3reporting/.sync_manifest)
 15 2 * * 1-5 $WRAP s3-sharepoint /root/logs/s3-sharepoint.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 s3_to_sharepoint.py'
@@ -43,7 +48,7 @@ WRAP=/root/s3reporting/scripts/cron_wrapper.sh
 #    so without this second materialise it would always be a day stale. This
 #    rebuilds DuckDB from the now-updated SQLite so priority is same-day.
 #    Buffer is generous: zoho_tiers' full pandas pass can run for a while.
-30 3 * * 1-5 $WRAP prepare-data-mat /root/logs/prepare-data.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py --materialise-only'
+30 3 * * 1-5 $WRAP prepare-data-mat /root/logs/prepare-data.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py --materialise-only' ; curl -fsS "$WARMURL" -o /dev/null
 
 # generate_dashboard_data.py was removed in 5490a60 — the SvelteKit reporting
 # dashboard now reads the DuckDB warehouse directly (no JSON files to bake).

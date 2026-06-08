@@ -1,30 +1,40 @@
 # Reporting jobs — Raspberry Pi (root crontab)
 # Install with:  crontab deploy/pi-crontab
 #
-# Each job sources /root/s3reporting/.env (chmod 600) so secrets land in the
-# environment, then runs from the repo root. Logs append to /root/logs.
+# Each job runs through cron_wrapper.sh, which captures output to a log (with
+# start/finish markers) and emails on failure. The command is wrapped in
+# `bash -c` because it uses `source` to load /root/s3reporting/.env, and cron's
+# default shell is dash, where `source` is not a builtin — running it bare makes
+# every job die silently at the source step. PATH is set so the duckdb CLI
+# (/usr/local/bin) is on PATH during the DuckDB materialise; without it
+# prepare_data.py logs "duckdb CLI not on PATH — skipping DuckDB materialise"
+# and the dashboard's warehouse_duck.db goes stale.
+#
 # Downstream Zoho/SharePoint jobs run weekdays only (Mon–Fri), staggered from
 # 02:00. prepare-data runs EVERY day so the last day of the month is always
 # ingested — the current-month BookingData file stops updating when the month
 # ends, so a weekend month-end would otherwise leave the warehouse missing the
 # month's final days until the new month's file appears.
 
+PATH=/usr/local/bin:/usr/bin:/bin
+WRAP=/root/s3reporting/scripts/cron_wrapper.sh
+
 # 1. Refresh S3 cache + maintain SQLite warehouse, then materialise the DuckDB
 #    file the Svelte dashboard reads (bookings/accounts/users/ppc_attribution +
 #    the *_agg tables). Runs daily (incl. weekends) to guarantee month-end
 #    capture and keep weekend DuckDB fresh (the downstream weekday jobs below
 #    don't run at the weekend).
-0 2 * * * set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py >> /root/logs/prepare-data.log 2>&1
+0 2 * * * $WRAP prepare-data /root/logs/prepare-data.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py'
 
 # 2. S3 -> SharePoint sync (manifest persists at /root/s3reporting/.sync_manifest)
-15 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 s3_to_sharepoint.py >> /root/logs/s3-sharepoint.log 2>&1
+15 2 * * 1-5 $WRAP s3-sharepoint /root/logs/s3-sharepoint.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 s3_to_sharepoint.py'
 
 # 3. Zoho industry sync
-30 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 zoho_industry.py >> /root/logs/zoho-industry.log 2>&1
+30 2 * * 1-5 $WRAP zoho-industry /root/logs/zoho-industry.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 zoho_industry.py'
 
 # 4. Zoho tiers update (reports saved to /root/s3reporting/reports via REPORTS_DIR).
 #    Also writes the per-account retention priority into the SQLite warehouse.
-45 2 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 zoho_tiers.py >> /root/logs/zoho-tiers.log 2>&1
+45 2 * * 1-5 $WRAP zoho-tiers /root/logs/zoho-tiers.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 zoho_tiers.py'
 
 # 5. Re-materialise the DuckDB warehouse AFTER zoho_tiers (weekdays only).
 #    Everything else the dashboard shows (tiers, ratings, industry) is computed
@@ -33,7 +43,7 @@
 #    so without this second materialise it would always be a day stale. This
 #    rebuilds DuckDB from the now-updated SQLite so priority is same-day.
 #    Buffer is generous: zoho_tiers' full pandas pass can run for a while.
-30 3 * * 1-5 set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py --materialise-only >> /root/logs/prepare-data.log 2>&1
+30 3 * * 1-5 $WRAP prepare-data-mat /root/logs/prepare-data.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 prepare_data.py --materialise-only'
 
 # generate_dashboard_data.py was removed in 5490a60 — the SvelteKit reporting
 # dashboard now reads the DuckDB warehouse directly (no JSON files to bake).

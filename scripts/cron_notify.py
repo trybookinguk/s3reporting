@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from modules.utils.email_utils import send_html_email
 
-FAILURE_RECIPIENT = "alex@trybooking.co.uk"
+FAILURE_RECIPIENT = ["alex@trybooking.co.uk", "henry@trybooking.co.uk"]
 LOG_TAIL_LINES = 80
 
 
@@ -64,7 +64,7 @@ def main():
         subject=subject,
         html_content=html_body,
     )
-    print(f"Failure notification sent to {FAILURE_RECIPIENT}")
+    print(f"Failure notification sent to {', '.join(FAILURE_RECIPIENT)}")
 
 
 if __name__ == "__main__":

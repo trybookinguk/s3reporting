@@ -2,20 +2,29 @@
 
 The full daily pipeline runs from cron on the Pi instead of GitHub Actions.
 
-| # | Script | Schedule (UTC, Mon–Fri) | Notes |
+| # | Script | Schedule (UTC) | Notes |
 | --- | --- | --- | --- |
-| 1 | `prepare_data.py` | 02:00 | Refreshes the S3 cache, builds the combined booking pickle, and updates the SQLite warehouse. |
-| 2 | `s3_to_sharepoint.py` | 02:15 | S3 → SharePoint sync. Manifest persists locally. |
-| 3 | `zoho_industry.py` | 02:30 | Zoho industry sync. Runs from env vars. |
-| 4 | `zoho_tiers.py` | 02:45 | Zoho tiers + tier-movement pipeline. Reports saved locally. |
-| 5 | `generate_dashboard_data.py` | 03:15 | Builds dashboard JSON (incl. PPC/GA4) and uploads to SharePoint. |
+| 1 | `prepare_data.py` | 02:00 daily | Refreshes the S3 cache, updates the SQLite warehouse, and materialises the DuckDB warehouse the dashboard reads. Warms dashboard caches afterwards. |
+| 2 | `s3_to_sharepoint.py` | 02:15 Mon–Fri | S3 → SharePoint sync. Manifest persists locally. |
+| 3 | `zoho_industry.py` | 02:30 Mon–Fri | Zoho industry sync. Runs from env vars. |
+| 4 | `zoho_tiers.py` | 02:45 Mon–Fri | Zoho tiers + retention priority. Writes priority to SQLite; reports saved locally. |
+| 5 | `prepare_data.py --materialise-only` | 03:30 Mon–Fri | Re-materialises DuckDB *after* `zoho_tiers` so the dashboard's retention priority is same-day. Warms caches afterwards. |
 
-`prepare_data.py` runs first so the rest of the jobs reuse one cache refresh and
-one combined-booking build instead of each re-downloading and re-combining from
-S3. The later jobs trust that day's cache via `CACHE_TRUST_TODAY=1`.
+`prepare_data.py` runs first so the rest of the jobs reuse one cache refresh
+instead of each re-downloading from S3. The later jobs trust that day's cache via
+`CACHE_TRUST_TODAY=1`. The dashboard reads **only** the DuckDB warehouse; the 03:30
+re-materialise exists because retention priority is the one dashboard value produced
+downstream of the 02:00 build (by `zoho_tiers` at 02:45).
 
-The old GitHub Actions workflows (`daily_sync.yml`, `tier_movements.yml`) have
-been removed — the Pi now owns all of this.
+> The previous `generate_dashboard_data.py` job (which built dashboard JSON and
+> uploaded it to SharePoint) was removed when the dashboard moved to reading DuckDB
+> directly — see commit `8e8b20f`. The source of truth for the live schedule is
+> `deploy/pi-crontab`, not this table.
+
+The old daily-sync / tier-movement GitHub Actions workflows have been removed — the
+Pi now owns the daily pipeline above. Note that other GitHub Actions workflows still
+exist in `.github/workflows/` (monthly reports, PPC, regional analysis, etc.) and may
+still run on their own schedules; the Pi did not absorb those.
 
 ## SQLite warehouse
 

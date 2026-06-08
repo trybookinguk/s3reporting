@@ -52,10 +52,11 @@ warehouses to SharePoint (`Backups/pi/<date>/`, last 7 kept).
 **Restore** onto a fresh Pi: clone both repos, run `restore_from_sharepoint.py`, enter the
 Azure values when prompted.
 
-**Access:** SSH to the Pi is via **Tailscale SSH** — there's no private key to lose;
-access is granted by membership of the company Tailnet. So the real key is **control of
-the Tailnet** (and the Azure values below for the backup). ‼️ *operator: confirm who is
-the Tailscale admin / how a new device is approved.*
+**Access:** two ways into the Pi — a normal **SSH key** (key auth, no password) on the LAN,
+and **Tailscale SSH** off-network (granted by company Tailnet membership). You're not locked
+out if one is lost: a new local SSH key can be generated, and Tailnet access re-granted. The
+thing to safeguard is **Tailnet admin control**. ‼️ *operator: confirm who is the Tailscale
+admin / how a new device is approved.*
 
 **Do now — the disaster-recovery key:** put these four in the company password manager.
 Without them you cannot reach the backup that holds everything else:

@@ -1,15 +1,19 @@
-# Owner's Handover — TryBooking UK Reporting Stack
+# TryBooking UK Reporting Stack — Owner's Handover
 
-Owner-level overview. For hands-on operation, see the **Pi / Dashboard Handover** doc.
-Items marked **‼️** need filling in by the outgoing operator. 🔎 boxes are commands you
-(or an AI assistant) can run to find an answer. Snapshot 2026-06.
+An internal dashboard and a set of nightly automated reports for TryBooking UK. It runs
+the team's retention/revenue dashboard, syncs account data to Zoho CRM, and sends weekly
+email reports. It is **reporting and CRM only — it does not touch live bookings or
+payments**, so an outage is an internal-visibility problem, not customer-facing.
+
+It all runs on **one Raspberry Pi**. The single biggest thing to sort out is who looks
+after it now (§1).
 
 ---
 
-## 0. Decide first: who operates this?
+## 1. Decide first: who operates this?
 
-No designated operator yet. The whole stack runs on **one Raspberry Pi + SSD over SSH**,
-historically run by one person. Bus factor of one. Options:
+No designated operator yet. Everything runs on that one Pi, historically run by one
+person — so it's a single point of failure. Options:
 
 1. **Operate it yourself** — low effort in normal weeks, but you own incidents (§4).
 2. **Delegate to an engineer** — lowest risk; a competent person picks it up in a day.
@@ -19,7 +23,9 @@ Decide this and write it at the top of this doc.
 
 ---
 
-## 1. What it does
+## 2. Bus factor — secrets & access
+
+The four parts, for reference:
 
 | | |
 | --- | --- |
@@ -28,12 +34,6 @@ Decide this and write it at the top of this doc.
 | **Email reports** | Weekly stakeholder reports. |
 | **SharePoint feed** | Data export for the wider business. |
 
-Reporting + CRM only. **Does not touch live bookings or payments** — an outage is an
-internal-visibility problem, not customer-facing.
-
----
-
-## 2. Bus factor — secrets & access
 
 One Raspberry Pi ("TrybookingPi", office LAN + Tailscale), external SSD for data. Code is
 on GitHub (`trybookinguk` org). **Secrets are not** — they live only on the Pi:
@@ -127,7 +127,7 @@ All vendor accounts sit under **one company account** (not personal logins).
    `ssh root@<Pi> 'tail -5 /root/logs/prepare-data.log'` shows success.
 4. **Diarise** the Azure secret expiry (§3).
 5. **Check Actions** (§6).
-6. **Decide §0** and record it.
+6. **Decide §1** (who operates this) and record it.
 
 ---
 

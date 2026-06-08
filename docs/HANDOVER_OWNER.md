@@ -82,11 +82,28 @@ live only on the Pi, in two gitignored files:
 If the SSD or the Pi dies, **these are gone** unless backed up elsewhere. The code
 survives (it's on GitHub); the credentials do not.
 
-> 🔎 **Find out — is anything backed up?**
-> Ask your AI to check for a backup mechanism on the Pi:
-> > `ssh root@<Pi-address> 'crontab -l | grep -iE "backup|rclone|rsync"; ls -la /root/*.bak /root/**/*.bak 2>/dev/null'`
-> If that finds nothing, **assume there is no backup** and make §7 step 1 your first job.
-> ‼️ Confirm with the outgoing operator whether an off-Pi backup of the SSD exists.
+**There is now an automated nightly backup to SharePoint.** A cron job (04:00 daily,
+`backup_to_sharepoint.py`) copies the two secret files, the dashboard state DBs, and
+the warehouses into SharePoint under `Backups/pi/<date>/`, keeping the last 7 dated
+copies. It reuses the same Azure/SharePoint credentials as the existing export sync.
+
+> 🔎 **Confirm the backup is running:**
+> > `ssh root@<Pi-address> 'tail -5 /root/logs/backup-sharepoint.log'`
+> A healthy run ends with `Backup complete: N uploaded`. If a nightly run fails you'll
+> get the standard cron failure email. The backup folder is in the same SharePoint
+> drive as the S3 exports — confirm you can see `Backups/pi/` there.
+
+**To restore onto a fresh Pi/SSD** (`restore_from_sharepoint.py`): clone the two repos,
+then run the script. It prompts for the three Azure values + the SharePoint drive ID
+(get them from your secret store — see below), lists available backups, and pulls the
+chosen one back into place. This solves the chicken-and-egg problem: the secrets are in
+the backup, but you need *just the Azure credentials* in hand to reach it.
+
+> **The secrets are no longer single-SSD.** They are in GitHub-adjacent SharePoint
+> nightly. But the **Azure bootstrap credentials still need to live somewhere off the
+> Pi** — without them you can't reach the backup. ‼️ Put `AZURE_TENANT_ID`,
+> `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` and `SHAREPOINT_DRIVE_ID` in the company
+> password manager. That four-value card is now your true disaster-recovery key.
 
 > 🔎 **Find out — who can get in?**
 > The SSH private key is what grants root on the Pi. ‼️ Ask the outgoing operator where
@@ -196,8 +213,11 @@ this section exists: trust the *running machine*, not every markdown file.
 
 You can have an AI assistant run each of these and explain the output.
 
-1. **Back up the secrets** (§2) — `.env`, `ecosystem.config.cjs`, SSH key → company
-   secret store. Before anything else.
+1. **Save the disaster-recovery key** (§2) — the four-value Azure bootstrap card
+   (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `SHAREPOINT_DRIVE_ID`)
+   plus the SSH private key → company secret store. The nightly job already backs up the
+   *rest* to SharePoint; these are the keys that get you *into* that backup. Before
+   anything else.
 2. **Confirm you can get in:**
    > `ssh root@<Pi-address> 'pm2 list && crontab -l'`
    If you can't connect, you have an access problem to solve first (§2 SSH-key ‼️).

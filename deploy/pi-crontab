@@ -53,5 +53,14 @@ WARMURL=http://127.0.0.1:3000/api/warm?token=xU2tGU1zJUmZya1IH2GiNmKrBIre8p
 # generate_dashboard_data.py was removed in 5490a60 — the SvelteKit reporting
 # dashboard now reads the DuckDB warehouse directly (no JSON files to bake).
 
+# 6. Nightly backup of the irreplaceable Pi state to SharePoint: the two secret
+#    files (.env, ecosystem.config.cjs), the dashboard-owned state DBs, and the
+#    warehouses. Runs daily at 04:00 — after the 03:30 re-materialise has settled
+#    — so it captures that day's fresh warehouse + retention priority. Restore
+#    with restore_from_sharepoint.py. Keeps the last BACKUP_KEEP dated copies
+#    (default 7). Code/secrets survive on GitHub + here; without this the SSD is
+#    a single point of failure for everything that ISN'T in git.
+0 4 * * * $WRAP backup-sharepoint /root/logs/backup-sharepoint.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 backup_to_sharepoint.py'
+
 # Log rotation: delete logs older than 30 days, weekly on Sunday at midnight
 0 0 * * 0 find /root/logs -name "*.log" -mtime +30 -delete

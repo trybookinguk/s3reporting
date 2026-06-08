@@ -52,11 +52,14 @@ warehouses to SharePoint (`Backups/pi/<date>/`, last 7 kept).
 **Restore** onto a fresh Pi: clone both repos, run `restore_from_sharepoint.py`, enter the
 Azure values when prompted.
 
-**Do now — the disaster-recovery key:** put these in the company password manager. Without
-them you cannot reach the backup that holds everything else:
-- `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `SHAREPOINT_DRIVE_ID`
-- the SSH private key for the Pi ‼️ *operator: where is a copy?*
-- ‼️ *operator: which Tailscale account owns the Pi node?*
+**Access:** SSH to the Pi is via **Tailscale SSH** — there's no private key to lose;
+access is granted by membership of the company Tailnet. So the real key is **control of
+the Tailnet** (and the Azure values below for the backup). ‼️ *operator: confirm who is
+the Tailscale admin / how a new device is approved.*
+
+**Do now — the disaster-recovery key:** put these four in the company password manager.
+Without them you cannot reach the backup that holds everything else:
+`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `SHAREPOINT_DRIVE_ID`.
 
 ---
 
@@ -64,30 +67,33 @@ them you cannot reach the backup that holds everything else:
 
 > 🔎 List configured secret names (values hidden): `ssh root@<Pi> 'sed -E "s/=.*/=<set>/" /root/s3reporting/.env'`
 
-| Service | Used for | Owner ‼️ | Renewal |
-| --- | --- | --- | --- |
-| AWS | S3 booking data | | Access keys, manual rotate |
-| Zoho CRM | Tier/industry sync | | OAuth refresh token ⚠️ |
-| Azure (Entra) | Dashboard login + SharePoint | | Client secret — **expires** ⚠️ |
-| Mailgun | Report emails | | SMTP password |
-| Mailshake | Lead/outreach | | API key |
-| GA4 | PPC data | | Service-account JSON |
-| Tailscale | Off-network Pi access | | Device auth |
-| Domain/TLS | Dashboard URL | n/a | Caddy local cert, auto |
+All vendor accounts sit under **one company account** (not personal logins).
 
-> ⚠️ **Diarise:** **Azure client secret** expires on a fixed date — when it lapses,
-> dashboard login *and* SharePoint sync break together. ‼️ Get the expiry date (Azure
-> portal → Entra → App registrations → Certificates & secrets) and put it in your calendar.
-> **Zoho token** is revocable; failure surfaces via the nightly email.
+| Service | Used for | Renewal |
+| --- | --- | --- |
+| AWS | S3 booking data | Access keys, manual rotate |
+| Zoho CRM | Tier/industry sync | OAuth refresh token ⚠️ |
+| Azure (Entra) | Dashboard login + SharePoint | Client secret — **expires Mar 2028** ⚠️ |
+| Mailgun | Report emails | SMTP password |
+| Mailshake | Lead/outreach | API key |
+| GA4 | PPC data | Service-account JSON |
+| Tailscale | Pi access (Tailscale SSH) | Tailnet membership |
+| Domain/TLS | Dashboard URL | Caddy local cert, auto |
+
+> ⚠️ **Diarise now: Azure client secret expires March 2028.** When it lapses, dashboard
+> login *and* SharePoint sync (incl. the nightly backup) break together — put it in the
+> calendar with a renewal reminder a month before. **Zoho token** is revocable; failure
+> surfaces via the nightly email.
 
 ---
 
 ## 4. Cost
 
-- **Time:** near-zero in normal weeks (cron self-heals, emails only on failure). Most
-  incidents are a 5-min restart (§7 of the engineer doc). Rare ones (expired secret, dead
-  SSD) need a rebuild. ‼️ *operator: honest hours/month?*
-- **Money:** ‼️ AWS bill + any paid Zoho/Mailgun/Mailshake/Tailscale tiers, and who's billed.
+- **Time:** historically **under 1 hour/month** — cron self-heals and emails only on
+  failure; most incidents are a 5-min restart (§7 of the engineer doc). Rare ones (expired
+  secret, dead SSD) need a rebuild.
+- **Money:** ‼️ AWS bill + any paid Zoho/Mailgun/Mailshake/Tailscale tiers (all on the one
+  company account).
 
 ---
 
@@ -114,7 +120,7 @@ them you cannot reach the backup that holds everything else:
 
 ## 7. First hour
 
-1. **Save the DR key** (§2) — Azure four-value card + SSH key → password manager.
+1. **Save the DR key** (§2) — Azure four-value card → password manager; confirm Tailnet access.
 2. **Get in:** `ssh root@<Pi> 'pm2 list && crontab -l'`.
 3. **Health:** dashboard URL loads (a Microsoft-login redirect = healthy);
    `ssh root@<Pi> 'tail -5 /root/logs/prepare-data.log'` shows success.

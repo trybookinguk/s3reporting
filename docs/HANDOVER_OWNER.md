@@ -71,7 +71,7 @@ All vendor accounts sit under **one company account** (not personal logins).
 | Service | Used for | Renewal |
 | --- | --- | --- |
 | AWS | S3 booking data | Access keys, manual rotate |
-| Zoho CRM | Tier/industry sync | OAuth refresh token ⚠️ |
+| Zoho CRM | Tier/industry sync | OAuth refresh token — re-mint if its account is removed ⚠️ |
 | Azure (Entra) | Dashboard login + SharePoint | Client secret — **expires Mar 2028** ⚠️ |
 | Mailgun | Report emails | SMTP password |
 | Mailshake | Lead/outreach | API key |
@@ -82,8 +82,10 @@ All vendor accounts sit under **one company account** (not personal logins).
 
 > ⚠️ **Diarise now: Azure client secret expires March 2028.** When it lapses, dashboard
 > login *and* SharePoint sync (incl. the nightly backup) break together — put it in the
-> calendar with a renewal reminder a month before. **Zoho token** is revocable; failure
-> surfaces via the nightly email.
+> calendar with a renewal reminder a month before. **Zoho token** is bound to the user who
+> authorised it — **if that Zoho account is removed, all Zoho sync stops.** Re-mint a refresh
+> token (ideally under a shared/service account) before removing the account; steps + scopes
+> are in the Pi handover doc ("Re-authenticating Zoho").
 
 ---
 

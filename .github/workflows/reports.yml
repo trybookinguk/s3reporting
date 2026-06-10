@@ -1,8 +1,9 @@
 name: Weekly Reports
 
 on:
-  schedule:
-    - cron: '0 8 * * 2'  # Every Tuesday at 08:00 UTC (09:00 BST)
+  # Scheduled run removed — the weekly reports now run on the Pi cron
+  # (deploy/pi-crontab: weekly-reports, Tue 08:00 UTC). This workflow is kept
+  # for manual runs only (workflow_dispatch) as a fallback.
   workflow_dispatch:
     inputs:
       test_mode:

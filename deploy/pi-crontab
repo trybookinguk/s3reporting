@@ -62,5 +62,11 @@ WARMURL=http://127.0.0.1:3000/api/warm?token=xU2tGU1zJUmZya1IH2GiNmKrBIre8p
 #    a single point of failure for everything that ISN'T in git.
 0 4 * * * $WRAP backup-sharepoint /root/logs/backup-sharepoint.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 backup_to_sharepoint.py'
 
+# 7. Weekly reports (Tue 08:00 UTC / 09:00 BST) — SalesIQ chat summary, then the
+#    new-accounts report. Moved off GitHub Actions (reports.yml schedule removed);
+#    the Pi now owns these. Each emails stakeholders directly.
+0 8 * * 2 $WRAP salesiq-weekly /root/logs/salesiq-weekly.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 salesiq_weekly.py'
+5 8 * * 2 $WRAP weekly-reporting /root/logs/weekly-reporting.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 weekly_reporting_unified.py'
+
 # Log rotation: delete logs older than 30 days, weekly on Sunday at midnight
 0 0 * * 0 find /root/logs -name "*.log" -mtime +30 -delete

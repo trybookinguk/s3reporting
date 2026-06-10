@@ -374,7 +374,7 @@ def main():
     
     print(f"\n=== Industry Analysis Report Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')} ===")
     if TEST_MODE:
-        print("TEST MODE: Email will be sent to alex@trybooking.co.uk only")
+        print("TEST MODE: email sending is disabled for this report (no recipient).")
     
     try:
         # Initialize S3 client
@@ -479,28 +479,10 @@ def main():
             print(f"  - {industry}: £{row['total_revenue']:,.2f} "
                   f"({row['total_accounts']:,} accounts)")
         
-        # Create and send email
-        print("\nPreparing email report...")
-        html_content = create_summary_email(all_time_metrics, period_comparison, movements_df)
-        
-        # Determine recipients
-        if TEST_MODE:
-            recipients = 'alex@trybooking.co.uk'
-        else:
-            recipients = 'alex@trybooking.co.uk'
-        
-        send_html_email_with_attachments(
-            to=recipients,
-            subject=f"Industry Performance Analysis - {datetime.now(UK_TZ).strftime('%B %Y')}",
-            html_content=html_content,
-            attachments=[
-                all_time_filename,
-                period_filename,
-                movements_filename
-            ]
-        )
-        
-        print(f"\nEmail sent to: {recipients if isinstance(recipients, str) else ', '.join(recipients)}")
+        # Email sending removed — this report previously went only to
+        # alex@trybooking.co.uk, who has left. Reinstate send_html_email_with_attachments
+        # with a real recipient if this report is wanted again.
+        print("\nReport generated; email sending disabled (no recipient).")
         
         elapsed_time = time.time() - start_time
         print(f"\n=== Industry Analysis Completed in {elapsed_time:.1f} seconds ===")

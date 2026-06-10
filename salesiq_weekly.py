@@ -152,8 +152,8 @@ Chats by day:
 """
     
     send_html_email(
-        to="alex@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk, kathryn@trybooking.co.uk",
-        cc="alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk",
+        to="henry@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk, kathryn@trybooking.co.uk",
+        cc="henry@trybooking.co.uk" if TEST_MODE else "",
         subject=f"SalesIQ Weekly Chat Summary w/c {last_monday.strftime('%d %B %Y')}",
         html_content=html_content,
         plain_text=plain_text
@@ -174,7 +174,7 @@ def main():
     print(f"\n=== SalesIQ Weekly Report ===")
     print(f"Email sending: {'ENABLED' if send_email_report else 'DISABLED'}")
     if send_email_report and TEST_MODE:
-        print("TEST MODE: Email will be sent to alex@trybooking.co.uk only")
+        print("TEST MODE: Email will be sent to henry@trybooking.co.uk only")
     
     try:
         access_token = get_access_token()

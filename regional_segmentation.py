@@ -369,15 +369,10 @@ def main():
                 postcode_data = f.read()
                 attachments.append((postcode_area_filename, postcode_data, 'text', 'csv'))
         
-        # Send email
-        logger.info("\nSending email report...")
-        send_html_email(
-            to='alex@trybooking.co.uk',
-            subject=f'Regional Segmentation Reports - {datetime.now(UK_TZ).strftime("%B %Y")}',
-            html_content=html_content,
-            plain_text=plain_text,
-            attachments=attachments
-        )
+        # Email sending removed — this report previously went only to
+        # alex@trybooking.co.uk, who has left. Reinstate send_html_email with a
+        # real recipient if this report is wanted again.
+        logger.info("\nReport generated; email sending disabled (no recipient).")
         
         elapsed_time = time.time() - start_time
         logger.info(f"\nRegional segmentation analysis complete in {elapsed_time:.1f} seconds!")

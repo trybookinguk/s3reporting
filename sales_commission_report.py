@@ -18,7 +18,7 @@ Environment Variables:
     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY - S3 access
     ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN - Zoho CRM access
     AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_SENDER_MAILBOX - Email sending via Microsoft Graph
-    TEST_MODE - If 'true', sends emails only to alex@trybooking.co.uk
+    TEST_MODE - If 'true', sends emails only to henry@trybooking.co.uk
     REPORT_MONTH - Optional, format 'YYYY-MM' to specify report month (defaults to previous month)
 """
 import os
@@ -44,7 +44,7 @@ from modules.utils.date_utils import get_latest_data_date
 # Constants
 COMMISSION_CONFIG_FILE = 'sales_commission_config.json'
 MD_EMAIL_PROD = 'joan@trybooking.co.uk'
-TEST_MODE_RECIPIENT = 'alex@trybooking.co.uk'
+TEST_MODE_RECIPIENT = 'henry@trybooking.co.uk'
 # In TEST_MODE every email — MD summary, per-team-member reports, no-email-on-file
 # fallback — redirects here. Out of TEST_MODE, MD_EMAIL is the real MD recipient.
 MD_EMAIL = TEST_MODE_RECIPIENT if TEST_MODE else MD_EMAIL_PROD

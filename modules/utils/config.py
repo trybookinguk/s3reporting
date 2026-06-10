@@ -98,7 +98,7 @@ EVENT_FREQUENCY_THRESHOLDS = {
 }
 
 # === EMAIL SETTINGS ===
-DEFAULT_RECIPIENT = "alex@trybooking.co.uk"
+DEFAULT_RECIPIENT = "henry@trybooking.co.uk"
 CC_RECIPIENT = ""
 
 # Owner + CC list per v2 tier. Only Tier 1 / Tier 2 are owned — movements
@@ -108,8 +108,8 @@ CC_RECIPIENT = ""
 # on every email for that tier. Set 'cc' to [] for none.
 # Update via PR — values intentionally left as TODO until CS team confirms.
 TIER_OWNERS = {
-    "Tier 1": {"to": ["joan@trybooking.co.uk", "kathryn@trybooking.co.uk"], "cc": ["alex@trybooking.co.uk"]},
-    "Tier 2": {"to": ["joan@trybooking.co.uk", "kathryn@trybooking.co.uk"], "cc": ["alex@trybooking.co.uk"]},
+    "Tier 1": {"to": ["joan@trybooking.co.uk", "kathryn@trybooking.co.uk"], "cc": []},
+    "Tier 2": {"to": ["joan@trybooking.co.uk", "kathryn@trybooking.co.uk"], "cc": []},
 }
 
 # Accounts sitting on a tier boundary can flip-flop between T1/T2 on tiny

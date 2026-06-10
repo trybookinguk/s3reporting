@@ -82,7 +82,7 @@ def generate_domain_report():
         
         # Determine recipients based on TEST_MODE
         if TEST_MODE:
-            recipients = ["alex@trybooking.co.uk"]
+            recipients = ["henry@trybooking.co.uk"]
             print("TEST MODE: Sending to test recipients only")
         else:
             # Marketing/data team recipients

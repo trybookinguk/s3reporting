@@ -241,7 +241,7 @@ def main(send_email_report=True):
     print(f"\n=== Weekly Reporting Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')} ===")
     print(f"Email sending: {'ENABLED' if send_email_report else 'DISABLED'}")
     if send_email_report and TEST_MODE:
-        print("TEST MODE: Email will be sent to alex@trybooking.co.uk only")
+        print("TEST MODE: Email will be sent to henry@trybooking.co.uk only")
     
     try:
         # Initialize S3 client
@@ -276,8 +276,8 @@ def main(send_email_report=True):
             # Email A - Internal
             internal_html = create_internal_email_content(stats, stats['current_week'])
             send_html_email(
-                to="alex@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk, kathryn@trybooking.co.uk",
-                cc="alex@trybooking.co.uk" if TEST_MODE else "alex@trybooking.co.uk, louise@trybooking.co.uk",
+                to="henry@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk, kathryn@trybooking.co.uk",
+                cc="henry@trybooking.co.uk" if TEST_MODE else "louise@trybooking.co.uk",
                 subject=f"New Accounts w/c {stats['week_start'].strftime('%d %B %Y')}",
                 html_content=internal_html
             )

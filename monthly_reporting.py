@@ -702,7 +702,7 @@ def main():
     
     print(f"\n=== Monthly Reporting Started at {datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z')} ===")
     if TEST_MODE:
-        print("TEST MODE: Email will be sent to alex@trybooking.co.uk only")
+        print("TEST MODE: Email will be sent to henry@trybooking.co.uk only")
     
     try:
         # Initialize S3 client
@@ -807,25 +807,25 @@ def main():
         print("\nPreparing MD email with full financial details...")
         md_html_content = create_md_email_content(metrics, dates)
         send_html_email(
-            to='alex@trybooking.co.uk' if TEST_MODE else 'joan@trybooking.co.uk, henry@trybooking.co.uk',
+            to='henry@trybooking.co.uk' if TEST_MODE else 'joan@trybooking.co.uk, henry@trybooking.co.uk',
             cc=None,
-            bcc='alex@trybooking.co.uk',
+            bcc=None,
             subject=f"Monthly Report - {dates['month_name']}",
             html_content=md_html_content
         )
-        print(f"MD update email sent to: {'alex@trybooking.co.uk (TEST MODE)' if TEST_MODE else 'joan@trybooking.co.uk'}")
+        print(f"MD update email sent to: {'henry@trybooking.co.uk (TEST MODE)' if TEST_MODE else 'joan@trybooking.co.uk'}")
         
         # Create and send general staff email (limited financial details)
         print("\nPreparing general staff email (limited financial details)...")
         staff_html_content = create_staff_email_content(metrics, dates)
         send_html_email(
-            to='alex@trybooking.co.uk' if TEST_MODE else ['louise@trybooking.co.uk', 'jules@trybooking.co.uk'],
+            to='henry@trybooking.co.uk' if TEST_MODE else ['louise@trybooking.co.uk', 'jules@trybooking.co.uk'],
             cc=None,
-            bcc='alex@trybooking.co.uk',
+            bcc=None,
             subject=f"Monthly Report - {dates['month_name']}",
             html_content=staff_html_content
         )
-        print(f"General staff email sent to: {'alex@trybooking.co.uk (TEST MODE)' if TEST_MODE else 'louise@trybooking.co.uk, jules@trybooking.co.uk'}")
+        print(f"General staff email sent to: {'henry@trybooking.co.uk (TEST MODE)' if TEST_MODE else 'louise@trybooking.co.uk, jules@trybooking.co.uk'}")
         
         print(f"\n=== Monthly Reporting Completed in {time.time() - start_time:.1f} seconds ===")
         

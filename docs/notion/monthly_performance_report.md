@@ -6,11 +6,18 @@
 
 ## What it does
 
-Sends the monthly performance report covering the previous calendar month — new accounts, revenue, fees, and key trends.
+Sends the monthly performance report covering the previous calendar month — new accounts, revenue, fees, and key trends. Two versions go out: a full-financials version for the MD, and a lighter version for general staff.
 
 ## Who receives it
 
-Email to stakeholders. CSV also saved to `reports/`.
+| Version | To | CC |
+|---|---|---|
+| **MD** (full financials) | joan@trybooking.co.uk, henry@trybooking.co.uk | (none) |
+| **Staff** (lighter) | louise@trybooking.co.uk, jules@trybooking.co.uk | (none) |
+
+CSV also saved to `reports/`.
+
+**To add or remove recipients:** edit **`report_recipients.json`** in SharePoint (Platform Data folder) — block `monthly_performance_md` for the MD version, `monthly_performance_staff` for the staff version. No code needed — see [Managing Report Emails](managing_report_emails.md).
 
 ## How to run manually
 

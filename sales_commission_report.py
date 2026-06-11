@@ -35,6 +35,7 @@ from modules.utils.config import (
     AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
     ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN,
     AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_SENDER_MAILBOX,
+    get_recipients,
 )
 from modules.utils.zoho_api import get_access_token, get_session
 from modules.utils.data_loader import load_booking_data, load_accounts_data
@@ -43,11 +44,16 @@ from modules.utils.date_utils import get_latest_data_date
 
 # Constants
 COMMISSION_CONFIG_FILE = 'sales_commission_config.json'
-MD_EMAIL_PROD = 'joan@trybooking.co.uk'
 TEST_MODE_RECIPIENT = 'henry@trybooking.co.uk'
-# In TEST_MODE every email — MD summary, per-team-member reports, no-email-on-file
-# fallback — redirects here. Out of TEST_MODE, MD_EMAIL is the real MD recipient.
-MD_EMAIL = TEST_MODE_RECIPIENT if TEST_MODE else MD_EMAIL_PROD
+# The MD recipient is managed in SharePoint → Platform Data/report_recipients.json
+# (key "monthly_commission_md"). See docs/notion/managing_report_emails.md.
+# get_recipients() already returns the test recipient when TEST_MODE is on, so
+# MD_EMAIL becomes the catch-all that per-team-member emails also redirect to.
+_md_to, _ = get_recipients("monthly_commission_md")
+MD_EMAIL = _md_to or TEST_MODE_RECIPIENT
+# Individual team members are emailed their own report using the address held
+# in sales_commission_config.json — that file is the source for per-person
+# addresses, not the distribution list.
 
 
 def validate_environment():

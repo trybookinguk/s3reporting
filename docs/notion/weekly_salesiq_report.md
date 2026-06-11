@@ -10,7 +10,12 @@ Sends a summary of the week's Zoho SalesIQ chat activity to the team — volume,
 
 ## Who receives it
 
-Email to stakeholders via the standard distribution list.
+| | Recipients |
+|---|---|
+| **To** | jules@trybooking.co.uk, kathryn@trybooking.co.uk |
+| **CC** | (none) |
+
+**To add or remove recipients:** edit **`report_recipients.json`** in SharePoint (Platform Data folder), block `weekly_salesiq`. No code needed — see [Managing Report Emails](managing_report_emails.md).
 
 ## How to run manually
 

@@ -21,10 +21,9 @@ downstream of the 02:00 build (by `zoho_tiers` at 02:45).
 > directly — see commit `8e8b20f`. The source of truth for the live schedule is
 > `deploy/pi-crontab`, not this table.
 
-The old daily-sync / tier-movement GitHub Actions workflows have been removed — the
-Pi now owns the daily pipeline above. Note that other GitHub Actions workflows still
-exist in `.github/workflows/` (monthly reports, PPC, regional analysis, etc.) and may
-still run on their own schedules; the Pi did not absorb those.
+All GitHub Actions workflows have been removed — the Pi cron now owns every job
+(daily pipeline above, plus the weekly and monthly report emails). The source of
+truth for the live schedule is `deploy/pi-crontab`.
 
 ## SQLite warehouse
 
@@ -60,6 +59,12 @@ chmod 600 /root/s3reporting/.env
 pip install --break-system-packages boto3 msal requests pandas pytz numpy scipy \
     python-dateutil google-analytics-data matplotlib
 crontab /root/s3reporting/deploy/pi-crontab
+
+# Seed the report-recipients file into SharePoint (root of Platform Data).
+# After this, staff edit it directly in SharePoint — see
+# docs/notion/managing_report_emails.md.
+set -a && source /root/s3reporting/.env && set +a
+python3 upload_recipients.py
 ```
 
 `python-dateutil` is required by the dashboard; `google-analytics-data` is
@@ -91,10 +96,12 @@ SYNC_MANIFEST_DIR=/root/s3reporting/.sync_manifest
 # all jobs see it; prepare_data.py always refreshes regardless.
 CACHE_TRUST_TODAY=1
 
-# --- Dashboard secrets (generate_dashboard_data.py) ---
+# --- GA4 (PPC reporting + planning reports) ---
 GA4_PROPERTY_ID=...
 GA4_SERVICE_ACCOUNT_KEY=...   # service account JSON (single line, or a path the script reads)
-MAILSHAKE_API_KEY=...
+
+# --- SharePoint drive holding Platform Data (report recipients, sync, backups) ---
+SHAREPOINT_DRIVE_ID=...
 ```
 
 `TIER_SYSTEM=v1` is already in `.env` per the migration plan. `TEST_MODE`
@@ -123,8 +130,11 @@ TEST_MODE=true python3 zoho_tiers.py --dry-run
 # Rebuild tier_history.json from scratch
 python3 zoho_tiers.py --rebuild-history --rebuild-from-scratch
 
-# Dashboard, generate locally without uploading
-python3 generate_dashboard_data.py --dry-run --local-dir ./dashboard_output
+# Show the live report-recipients file in SharePoint
+python3 upload_recipients.py --show
+
+# Push a corrected recipients file if the live one gets broken
+python3 upload_recipients.py
 ```
 
 For any manual run, source the env first. To force fresh S3 reads bypassing the

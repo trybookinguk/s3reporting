@@ -10,7 +10,12 @@ Extracts the email domains of new users and counts them — useful for understan
 
 ## Who receives it
 
-CSV saved to `reports/`. No email is sent.
+| | Recipients |
+|---|---|
+| **To** | louise@trybooking.co.uk |
+| **CC** | (none) |
+
+The report is emailed with the CSV attached. **To add or remove recipients:** edit **`report_recipients.json`** in SharePoint (Platform Data folder), block `weekly_domain`. No code needed — see [Managing Report Emails](managing_report_emails.md).
 
 ## How to run manually
 

@@ -6,7 +6,7 @@ import os
 # Import shared modules
 from modules.utils.config import (
     ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN,
-    ZOHO_PORTAL_NAME, TEST_MODE
+    ZOHO_PORTAL_NAME, TEST_MODE, get_recipients
 )
 from modules.utils.zoho_api import get_access_token
 from modules.utils.email_utils import send_html_email
@@ -151,9 +151,11 @@ Chats by day:
 {day_lines}
 """
     
+    # Recipients are managed in modules/utils/config.py → DISTRIBUTION_LISTS["weekly_salesiq"]
+    to_recipients, cc_recipients = get_recipients("weekly_salesiq")
     send_html_email(
-        to="henry@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk, kathryn@trybooking.co.uk",
-        cc="henry@trybooking.co.uk" if TEST_MODE else "",
+        to=to_recipients,
+        cc=cc_recipients,
         subject=f"SalesIQ Weekly Chat Summary w/c {last_monday.strftime('%d %B %Y')}",
         html_content=html_content,
         plain_text=plain_text

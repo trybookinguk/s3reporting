@@ -11,7 +11,7 @@ import pandas as pd
 from datetime import datetime
 
 # Import shared modules
-from modules.utils.config import TEST_MODE, UK_TZ
+from modules.utils.config import TEST_MODE, UK_TZ, get_recipients
 from modules.utils.data_loader import get_s3_client, download_s3_file_cached
 from modules.utils.date_utils import get_last_month_dates, get_ytd_dates
 from modules.utils.data_loader import load_accounts_data, load_booking_data, filter_successful_transactions
@@ -806,26 +806,32 @@ def main():
         # Create and send MD email (full financial details)
         print("\nPreparing MD email with full financial details...")
         md_html_content = create_md_email_content(metrics, dates)
+        # Recipients are managed in SharePoint → Platform Data/report_recipients.json
+        # (key "monthly_performance_md"). See docs/notion/managing_report_emails.md.
+        md_to, md_cc = get_recipients("monthly_performance_md")
         send_html_email(
-            to='henry@trybooking.co.uk' if TEST_MODE else 'joan@trybooking.co.uk, henry@trybooking.co.uk',
-            cc=None,
+            to=md_to,
+            cc=md_cc or None,
             bcc=None,
             subject=f"Monthly Report - {dates['month_name']}",
             html_content=md_html_content
         )
-        print(f"MD update email sent to: {'henry@trybooking.co.uk (TEST MODE)' if TEST_MODE else 'joan@trybooking.co.uk'}")
+        print(f"MD update email sent to: {md_to}")
         
         # Create and send general staff email (limited financial details)
         print("\nPreparing general staff email (limited financial details)...")
         staff_html_content = create_staff_email_content(metrics, dates)
+        # Recipients are managed in SharePoint → Platform Data/report_recipients.json
+        # (key "monthly_performance_staff"). See docs/notion/managing_report_emails.md.
+        staff_to, staff_cc = get_recipients("monthly_performance_staff")
         send_html_email(
-            to='henry@trybooking.co.uk' if TEST_MODE else ['louise@trybooking.co.uk', 'jules@trybooking.co.uk'],
-            cc=None,
+            to=staff_to,
+            cc=staff_cc or None,
             bcc=None,
             subject=f"Monthly Report - {dates['month_name']}",
             html_content=staff_html_content
         )
-        print(f"General staff email sent to: {'henry@trybooking.co.uk (TEST MODE)' if TEST_MODE else 'louise@trybooking.co.uk, jules@trybooking.co.uk'}")
+        print(f"General staff email sent to: {staff_to}")
         
         print(f"\n=== Monthly Reporting Completed in {time.time() - start_time:.1f} seconds ===")
         

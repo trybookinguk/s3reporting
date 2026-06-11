@@ -1,0 +1,26 @@
+{
+  "weekly_new_accounts": {
+    "to": ["jules@trybooking.co.uk", "kathryn@trybooking.co.uk"],
+    "cc": ["louise@trybooking.co.uk"]
+  },
+  "weekly_salesiq": {
+    "to": ["jules@trybooking.co.uk", "kathryn@trybooking.co.uk"],
+    "cc": []
+  },
+  "weekly_domain": {
+    "to": ["louise@trybooking.co.uk"],
+    "cc": []
+  },
+  "monthly_performance_md": {
+    "to": ["joan@trybooking.co.uk", "henry@trybooking.co.uk"],
+    "cc": []
+  },
+  "monthly_performance_staff": {
+    "to": ["louise@trybooking.co.uk", "jules@trybooking.co.uk"],
+    "cc": []
+  },
+  "monthly_commission_md": {
+    "to": ["joan@trybooking.co.uk"],
+    "cc": []
+  }
+}

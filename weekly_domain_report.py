@@ -7,7 +7,7 @@ import os
 import pandas as pd
 
 # Import shared modules
-from modules.utils.config import TEST_MODE
+from modules.utils.config import TEST_MODE, get_recipients
 
 # Check if email sending is enabled (GitHub Actions boolean)
 SEND_EMAILS = os.environ.get("SEND_EMAILS", "true").lower() == "true"
@@ -80,20 +80,15 @@ def generate_domain_report():
         </html>
         """
         
-        # Determine recipients based on TEST_MODE
+        # Recipients are managed in modules/utils/config.py → DISTRIBUTION_LISTS["weekly_domain"]
+        recipients, _ = get_recipients("weekly_domain")
         if TEST_MODE:
-            recipients = ["henry@trybooking.co.uk"]
             print("TEST MODE: Sending to test recipients only")
-        else:
-            # Marketing/data team recipients
-            recipients = [
-                "louise@trybooking.co.uk",  # Update with actual marketing team email
-            ]
-        
+
         # Save CSV to temporary file for attachment
         temp_csv_path = f'/tmp/email_domains_{target_date.strftime("%Y%m%d")}.csv'
         domain_report.to_csv(temp_csv_path, index=False)
-        
+
         # Send email if enabled
         if SEND_EMAILS:
             send_html_email_with_attachments(
@@ -102,7 +97,7 @@ def generate_domain_report():
                 html_content=html_body,
                 attachments=[temp_csv_path]
             )
-            print(f"Report sent successfully to {', '.join(recipients)}")
+            print(f"Report sent successfully to {recipients}")
         else:
             print("Email sending disabled - report generated but not sent")
         

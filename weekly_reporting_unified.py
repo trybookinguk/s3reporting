@@ -10,7 +10,7 @@ import pandas as pd
 from datetime import datetime
 
 # Import shared modules
-from modules.utils.config import TEST_MODE, UK_TZ
+from modules.utils.config import TEST_MODE, UK_TZ, get_recipients
 from modules.utils.data_loader import get_s3_client
 from modules.utils.date_utils import get_week_dates, get_latest_data_date
 from modules.utils.data_loader import load_accounts_data
@@ -275,9 +275,11 @@ def main(send_email_report=True):
         if send_email_report:
             # Email A - Internal
             internal_html = create_internal_email_content(stats, stats['current_week'])
+            # Recipients are managed in modules/utils/config.py → DISTRIBUTION_LISTS["weekly_new_accounts"]
+            to_recipients, cc_recipients = get_recipients("weekly_new_accounts")
             send_html_email(
-                to="henry@trybooking.co.uk" if TEST_MODE else "jules@trybooking.co.uk, kathryn@trybooking.co.uk",
-                cc="henry@trybooking.co.uk" if TEST_MODE else "louise@trybooking.co.uk",
+                to=to_recipients,
+                cc=cc_recipients,
                 subject=f"New Accounts w/c {stats['week_start'].strftime('%d %B %Y')}",
                 html_content=internal_html
             )

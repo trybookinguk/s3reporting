@@ -10,7 +10,14 @@ Sends the weekly new accounts report — how many accounts signed up this week, 
 
 ## Who receives it
 
-Email to stakeholders. CSV also saved to `reports/`.
+| | Recipients |
+|---|---|
+| **To** | jules@trybooking.co.uk, kathryn@trybooking.co.uk |
+| **CC** | louise@trybooking.co.uk |
+
+CSV also saved to `reports/`.
+
+**To add or remove recipients:** edit **`report_recipients.json`** in SharePoint (Platform Data folder), block `weekly_new_accounts`. No code needed — see [Managing Report Emails](managing_report_emails.md).
 
 ## How to run manually
 

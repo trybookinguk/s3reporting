@@ -10,7 +10,12 @@ Calculates monthly sales commissions for each member of the sales team based on 
 
 ## Who receives it
 
-Email (PDF + HTML) to stakeholders. CSV also saved to `reports/`.
+- **Each salesperson** receives their own commission report (PDF), sent to the address held in `sales_commission_config.json`.
+- **The MD** receives an overall copy (CSV of each person's commission). MD recipient: joan@trybooking.co.uk.
+
+**To add or remove the MD copy recipient:** edit **`report_recipients.json`** in SharePoint (Platform Data folder), block `monthly_commission_md` — see [Managing Report Emails](managing_report_emails.md).
+
+**To change a salesperson's own address:** that lives in `sales_commission_config.json` and needs an engineer to update.
 
 ## How to run manually
 

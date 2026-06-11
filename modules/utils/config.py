@@ -2,10 +2,14 @@
 Configuration and constants for TryBooking tier calculation system.
 """
 
+import json
+import logging
 import os
 from datetime import datetime, timedelta
 
 import pytz
+
+log = logging.getLogger(__name__)
 
 # === ENVIRONMENT VARIABLES ===
 # AWS Credentials - support both naming conventions
@@ -32,6 +36,7 @@ AZURE_TENANT_ID = os.environ.get("AZURE_TENANT_ID")
 AZURE_CLIENT_ID = os.environ.get("AZURE_CLIENT_ID")
 AZURE_CLIENT_SECRET = os.environ.get("AZURE_CLIENT_SECRET")
 AZURE_SENDER_MAILBOX = os.environ.get("AZURE_SENDER_MAILBOX")
+SHAREPOINT_DRIVE_ID = os.environ.get("SHAREPOINT_DRIVE_ID")
 
 # Vero Credentials
 VERO_API_KEY = os.environ.get("VERO_API_KEY")
@@ -100,6 +105,120 @@ EVENT_FREQUENCY_THRESHOLDS = {
 # === EMAIL SETTINGS ===
 DEFAULT_RECIPIENT = "henry@trybooking.co.uk"
 CC_RECIPIENT = ""
+
+# === REPORT DISTRIBUTION LISTS ===
+# Report email recipients are managed in a JSON file in SharePoint:
+#
+#     Platform Data / report_recipients.json
+#
+# Non-technical staff edit that file directly in SharePoint — no code, no git.
+# See docs/notion/managing_report_emails.md for the step-by-step guide.
+#
+# The values below are the FALLBACK only. They are used if the SharePoint file
+# is missing, unreadable, or malformed — so reports always go out even if the
+# JSON gets broken. Keep them roughly in sync with SharePoint as a safety net,
+# but SharePoint is the source of truth.
+#
+# When TEST_MODE is on, every report redirects to TEST_MODE_RECIPIENT, so a
+# recipient change can be tested without reaching real inboxes.
+
+TEST_MODE_RECIPIENT = "henry@trybooking.co.uk"
+
+# Filename + folder of the SharePoint source of truth (root of Platform Data).
+RECIPIENTS_FILENAME = "report_recipients.json"
+RECIPIENTS_FOLDER = "Platform Data"
+
+# Fallback lists — used only if the SharePoint file can't be loaded.
+DISTRIBUTION_LISTS_FALLBACK = {
+    "weekly_new_accounts": {
+        "to": ["jules@trybooking.co.uk", "kathryn@trybooking.co.uk"],
+        "cc": ["louise@trybooking.co.uk"],
+    },
+    "weekly_salesiq": {
+        "to": ["jules@trybooking.co.uk", "kathryn@trybooking.co.uk"],
+        "cc": [],
+    },
+    "weekly_domain": {
+        "to": ["louise@trybooking.co.uk"],
+        "cc": [],
+    },
+    "monthly_performance_md": {
+        "to": ["joan@trybooking.co.uk", "henry@trybooking.co.uk"],
+        "cc": [],
+    },
+    "monthly_performance_staff": {
+        "to": ["louise@trybooking.co.uk", "jules@trybooking.co.uk"],
+        "cc": [],
+    },
+    "monthly_commission_md": {
+        "to": ["joan@trybooking.co.uk"],
+        "cc": [],
+    },
+}
+
+# Cached after the first SharePoint fetch so a single run hits Graph once.
+_distribution_lists_cache = None
+
+
+def _load_distribution_lists():
+    """Fetch report_recipients.json from SharePoint, falling back to the
+    hardcoded lists above if anything goes wrong.
+
+    Cached for the lifetime of the process. Never raises — a failure to load
+    must not stop reports going out, so it logs and returns the fallback.
+    """
+    global _distribution_lists_cache
+    if _distribution_lists_cache is not None:
+        return _distribution_lists_cache
+
+    lists = DISTRIBUTION_LISTS_FALLBACK
+    try:
+        # Imported lazily so config.py has no hard dependency on the Graph stack.
+        from . import sharepoint
+
+        if not SHAREPOINT_DRIVE_ID:
+            log.warning("SHAREPOINT_DRIVE_ID not set — using fallback recipient lists.")
+        else:
+            token = sharepoint.authenticate_graph()
+            if not token:
+                log.warning("Graph auth failed — using fallback recipient lists.")
+            else:
+                raw = sharepoint.download_file(
+                    token, SHAREPOINT_DRIVE_ID, RECIPIENTS_FILENAME,
+                    folder=RECIPIENTS_FOLDER,
+                )
+                if raw is None:
+                    log.warning("%s not found in SharePoint — using fallback recipient lists.",
+                                RECIPIENTS_FILENAME)
+                else:
+                    parsed = json.loads(raw)
+                    # Basic shape check: every entry needs to/cc lists.
+                    for key, entry in parsed.items():
+                        if not isinstance(entry, dict) or "to" not in entry:
+                            raise ValueError(f"entry '{key}' missing a 'to' list")
+                        entry.setdefault("cc", [])
+                    lists = parsed
+                    log.info("Loaded report recipients from SharePoint (%d reports).", len(parsed))
+    except Exception as e:
+        log.warning("Could not load report recipients from SharePoint (%s) — using fallback.", e)
+        lists = DISTRIBUTION_LISTS_FALLBACK
+
+    _distribution_lists_cache = lists
+    return lists
+
+
+def get_recipients(report_key):
+    """Return (to, cc) for a named report as comma-separated strings.
+
+    Pulls the live lists from SharePoint (cached per run) and respects
+    TEST_MODE, which redirects everything to TEST_MODE_RECIPIENT.
+    """
+    if TEST_MODE:
+        return TEST_MODE_RECIPIENT, ""
+
+    lists = _load_distribution_lists()
+    entry = lists.get(report_key) or DISTRIBUTION_LISTS_FALLBACK.get(report_key, {"to": [], "cc": []})
+    return ", ".join(entry.get("to", [])), ", ".join(entry.get("cc", []))
 
 # Owner + CC list per v2 tier. Only Tier 1 / Tier 2 are owned — movements
 # involving those tiers fire individual per-account notification emails.

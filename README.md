@@ -40,8 +40,19 @@ These are run manually when needed — typically from the Pi or a machine with c
 | `salesiq_monthly_report.py` | Full year of monthly SalesIQ chat stats |
 | `ppc_reporting.py` | PPC campaign conversion and revenue attribution |
 | `regional_segmentation.py` | UK regional distribution of accounts and events |
-| `analyse_wales_ni_sectors.py` | Industry breakdown for Wales and Northern Ireland |
 | `keyword_analysis_report.py` | Analysis of event types by keyword (balls, concerts, etc.) |
+
+---
+
+## Managing report email recipients
+
+Who receives each emailed report is controlled by a single file in SharePoint:
+**Platform Data → `report_recipients.json`**. Non-technical staff can add or remove
+people by editing that file directly — no code or git required. See
+`docs/notion/managing_report_emails.md` for the step-by-step guide.
+
+If the file is ever missing or broken, the scripts fall back to a built-in default
+list (in `modules/utils/config.py`) so reports always go out.
 
 ---
 

@@ -2,7 +2,14 @@
 `funds_remaining_reminder.py`
 
 **Category:** CRM action
-**Schedule:** Run manually when needed
+**Status:** ⏸️ **Paused project** — kept for reference, not in active use
+**Schedule:** Not scheduled (would be run manually if the project resumes)
+
+> ⏸️ **This is part of a paused project.** The script works and is kept in the
+> repo in case the funds-transfer reminder work is picked back up, but it is
+> **not on the cron and not currently run**. Don't treat it as a live report.
+> If the project is formally abandoned, it can be removed (it's self-contained —
+> the modules it uses are shared with the active Event Completion Reminders).
 
 ## What it does
 

@@ -5,15 +5,15 @@ These scripts are run manually on an ad-hoc basis. They don't send emails or upd
 
 ---
 
-## zoho_tiers_v2.py — Tier dry run
+## zoho_tiers.py --preview — Tier preview
 
-Runs the tier calculation and shows what the results would be, without making any changes to Zoho CRM. Always run this before `zoho_tiers.py` to check for unexpected changes.
+Runs the tier calculation and shows what the results would be, **without making any changes** to Zoho CRM, SharePoint, email, or the warehouse. Needs only AWS credentials. Always run this before the live `zoho_tiers.py` to check for unexpected changes.
 
 ```bash
-python3 zoho_tiers_v2.py
+python3 zoho_tiers.py --preview
 ```
 
-**Output:** `tier_output.csv` + summary printed to console
+**Output:** a `tier_preview_*.csv` in `reports/` + summary printed to console. (This was previously a separate script, `zoho_tiers_v2.py`, now folded into the main tier script as a flag.)
 
 ---
 

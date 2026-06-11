@@ -95,7 +95,7 @@ python3 restore_from_sharepoint.py --list        # see available backups
 python3 restore_from_sharepoint.py --date YYYY-MM-DD
 ```
 
-**Tiers look wrong** — run `zoho_tiers_v2.py` first (a dry run that makes no changes) to preview the output before running the live `zoho_tiers.py`.
+**Tiers look wrong** — run `zoho_tiers.py --preview` first (read-only, makes no changes) to check the output before running the live `zoho_tiers.py`.
 
 Full handover notes are in `docs/HANDOVER_OWNER.md`.
 

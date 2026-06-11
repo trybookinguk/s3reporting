@@ -16,9 +16,9 @@ Recalculates which tier every account belongs to based on their revenue history,
 
 ## How to run manually
 
-To preview changes without updating Zoho, use the dry-run version first:
+To preview changes without updating Zoho (read-only — no writes anywhere), run:
 ```bash
-python3 zoho_tiers_v2.py
+python3 zoho_tiers.py --preview
 ```
 
 To apply live:

@@ -1,4 +1,4 @@
-# Box Office Account Breakdown
+# Box Office Account Ranking
 `account_box_office_cardpresent.py`
 
 **Category:** Utility
@@ -6,26 +6,35 @@
 
 ## What it does
 
-Shows a breakdown of Box Office card-present revenue for **one specific account** over the last 365 days. Useful when someone asks "how much has account X taken through the card reader this year?"
+Ranks **every account** by how much it has taken on Box Office **card-present** transactions over the rolling last 365 days. Useful for spotting your biggest box-office clients, or for sizing the box-office segment overall. You can also pass a single account ID to get just that account's figures.
+
+Cash is excluded — card-present only.
 
 ## How to run manually
 
-Pass the account's TryBooking ID:
-
+Rank all accounts:
 ```bash
-ACCOUNT_ID=12345 python3 account_box_office_cardpresent.py
+python3 account_box_office_cardpresent.py
+```
+
+Just one account:
+```bash
+python3 account_box_office_cardpresent.py 19815
+# or: ACCOUNT_ID=19815 python3 account_box_office_cardpresent.py
 ```
 
 ## Inputs
 
-- S3: BookingData
-- `ACCOUNT_ID` — the TryBooking account ID to report on (environment variable)
+- S3: BookingData (BookingDataAll + current month)
 
 ## Outputs
 
-- Console summary + CSV
+- `box_office_cardpresent_accounts.csv` — one row per account: fees (inc VAT), revenue, tickets, transactions, last transaction date — ranked by fees descending
+- A summary + the top 15 printed to the console
 
 ## Technical notes
 
-- Rolling 365-day window
+- Rolling 365 days, Europe/London, relative to today
+- "Card present" = `PaymentType` contains `CARDPRESENT` (any spacing); Cash is not included
+- Fees are inc VAT = sum of BookingFee + CardFee + ProcessingFee + TicketFee
 - Read-only — makes no changes to any system

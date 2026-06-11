@@ -27,8 +27,15 @@ import argparse
 import sqlite3
 from openpyxl import load_workbook
 
+# DB machine-value -> display label (must match build_workbook.py).
+STATUS_FROM_DB = {
+    "draft": "Draft", "pending_payment": "Pending payment", "confirmed": "Confirmed",
+    "shipped": "Shipped", "in_use": "In use", "returned": "Returned",
+    "completed": "Completed", "cancelled": "Cancelled",
+}
+DELIVERY_FROM_DB = {"ship": "Ship", "drop_off": "Drop off", "collect": "Collect"}
+
 # Friendly headers — must match build_workbook.py exactly (display names).
-TICK = "✓"
 HIRE_HEADERS = [
     "Ref", "Account ref", "Account", "Contact name", "Contact email",
     "Contact phone", "Status", "Trial", "Hire from", "Hire to",
@@ -37,15 +44,11 @@ HIRE_HEADERS = [
     "Box Office Web", "Terminals linked", "Notes", "Changed by", "Changed at",
 ]
 TERMINAL_HEADERS = [
-    "Terminal", "Model", "Retired", "Status", "Available from",
+    "Terminal", "Model", "Status", "Available from",
     "Future hires", "Utilisation", "Notes",
 ]
 # Terminal-sheet columns that are formulas (don't overwrite on migrate).
 TERMINAL_FORMULA_HEADERS = {"Status", "Available from", "Future hires", "Utilisation"}
-
-
-def tick(b):
-    return TICK if b else ""
 
 
 def iso_date(v):
@@ -94,21 +97,21 @@ def hire_to_rows(h, terminal_ids):
         "Contact name": h["contact_name"],
         "Contact email": h["contact_email"],
         "Contact phone": h.get("contact_phone") or "",
-        "Status": h["status"],
-        "Trial": tick(bool(h.get("is_trial"))),
+        "Status": STATUS_FROM_DB.get(h["status"], h["status"]),
+        "Trial": bool(h.get("is_trial")),
         "Hire from": iso_date(h["hire_from"]),
         "Hire to": iso_date(h["hire_to"]),
         "Terminal": "",
         "Cradles": h.get("cradle_count") or 0,
-        "Send out by": h["outbound_method"],
-        "Return by": h["return_method"],
+        "Send out by": DELIVERY_FROM_DB.get(h["outbound_method"], h["outbound_method"]),
+        "Return by": DELIVERY_FROM_DB.get(h["return_method"], h["return_method"]),
         "Shipping address": fmt_address(h.get("shipping_address")),
-        "Paid": tick(bool(h.get("payment_received"))),
+        "Paid": bool(h.get("payment_received")),
         "Amount due": (h["amount_due_pence"] / 100) if h.get("amount_due_pence") is not None else None,
         "Payment ref": h.get("payment_reference") or "",
         "Continues from (ref)": h.get("continues_from_hire_id") or "",
-        "Box Office Web": tick(bool(h.get("box_office_web_enabled"))),
-        "Terminals linked": tick(bool(h.get("terminals_linked_to_account"))),
+        "Box Office Web": bool(h.get("box_office_web_enabled")),
+        "Terminals linked": bool(h.get("terminals_linked_to_account")),
         "Notes": h.get("notes") or "",
         "Changed by": h.get("changed_by") or "",
         "Changed at": iso_date(h.get("changed_at")),
@@ -139,13 +142,11 @@ def clear_table_body(ws, ncols, keep_formula_cols=None):
 
 
 def write_rows(ws, columns, dict_rows):
+    # Booleans are written as real TRUE/FALSE so the native checkboxes bind to them.
     idx = {name: i + 1 for i, name in enumerate(columns)}
     for ri, d in enumerate(dict_rows, start=2):
         for name, col in idx.items():
-            val = d.get(name)
-            if isinstance(val, bool):
-                val = "TRUE" if val else "FALSE"
-            ws.cell(row=ri, column=col, value=val)
+            ws.cell(row=ri, column=col, value=d.get(name))
 
 
 def main():
@@ -165,9 +166,8 @@ def main():
     term_rows = []
     for inv in sorted(inventory, key=lambda x: x["id"]):
         term_rows.append({
-            "TerminalId": inv["id"],
+            "Terminal": inv["id"],
             "Model": inv.get("model") or "",
-            "Retired": "TRUE" if inv.get("retired_at") else "FALSE",
             "Notes": inv.get("notes") or "",
         })
 
@@ -176,20 +176,18 @@ def main():
     terms_ws = wb["Terminals"]
 
     # Clear existing data bodies (Hires has no formulas; Terminals keeps its
-    # Status/AvailableFrom/FutureHires/Utilisation formula columns).
-    clear_table_body(hires_ws, len(HIRE_COLUMNS))
-    term_formula_cols = {TERMINAL_COLUMNS.index(c) + 1
-                         for c in ("Status", "AvailableFrom", "FutureHires", "UtilisationPct")}
-    clear_table_body(terms_ws, len(TERMINAL_COLUMNS), keep_formula_cols=term_formula_cols)
+    # formula columns).
+    clear_table_body(hires_ws, len(HIRE_HEADERS))
+    term_formula_cols = {TERMINAL_HEADERS.index(c) + 1 for c in TERMINAL_FORMULA_HEADERS}
+    clear_table_body(terms_ws, len(TERMINAL_HEADERS), keep_formula_cols=term_formula_cols)
 
-    write_rows(hires_ws, HIRE_COLUMNS, hire_rows)
-    # For terminals, only write the input columns (id/model/retired/notes).
-    t_input_cols = ["TerminalId", "Model", "Retired", "", "", "", "", "Notes"]
+    write_rows(hires_ws, HIRE_HEADERS, hire_rows)
+    # Terminals: write only the input columns by header (skip formula columns).
+    t_idx = {hdr: i + 1 for i, hdr in enumerate(TERMINAL_HEADERS)}
     for ri, d in enumerate(term_rows, start=2):
-        for ci, name in enumerate(t_input_cols, start=1):
-            if name:
-                val = d.get(name)
-                terms_ws.cell(row=ri, column=ci, value=val)
+        for hdr, ci in t_idx.items():
+            if hdr in d:
+                terms_ws.cell(row=ri, column=ci, value=d[hdr])
 
     # Seed cradles-owned into the ReadMe (a known cell) for reference.
     if "cradles_owned" in settings:

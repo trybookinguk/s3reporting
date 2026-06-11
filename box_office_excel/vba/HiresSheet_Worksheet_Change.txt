@@ -29,9 +29,9 @@ Private Sub Worksheet_Change(ByVal Target As Range)
     Application.EnableEvents = False
     On Error GoTo cleanup
 
-    ' Which table column is "ContinuesFromHireId"? (to detect a continuation edit)
+    ' Which table column is the continuation link? (to detect a continuation edit)
     Dim contColAbs As Long
-    contColAbs = lo.Range.Column + lo.ListColumns("ContinuesFromHireId").Index - 1
+    contColAbs = lo.Range.Column + lo.ListColumns(BoxOfficeRules.CONTINUES_HEADER).Index - 1
 
     ' Process each affected row once.
     Dim seen As Object: Set seen = CreateObject("Scripting.Dictionary")
@@ -64,6 +64,11 @@ Private Sub Worksheet_Change(ByVal Target As Range)
             End If
         End If
     Next cell
+
+    ' Hires changed -> refresh the derived Terminals columns.
+    On Error Resume Next
+    RefreshTerminals.Refresh
+    On Error GoTo 0
 
 cleanup:
     Application.EnableEvents = True

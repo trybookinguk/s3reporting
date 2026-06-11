@@ -36,14 +36,24 @@ from openpyxl.utils import get_column_letter
 OUT = "box_office_excel/BoxOfficeTerminals.xlsx"
 DATA_ROWS = 500
 
-# ── domain constants (mirror src/lib/types/boxOffice.ts) ────────────────────
+# ── domain constants ────────────────────────────────────────────────────────
+# Cells store the HUMAN-READABLE label (no machine values / underscores).
+# The VBA + migration work in these same labels.
 HIRE_STATUSES = [
-    "draft", "pending_payment", "confirmed", "shipped",
-    "in_use", "returned", "completed", "cancelled",
+    "Draft", "Pending payment", "Confirmed", "Shipped",
+    "In use", "Returned", "Completed", "Cancelled",
 ]
-ACTIVE_STATUSES = ["confirmed", "shipped", "in_use"]
-DELIVERY_METHODS = ["ship", "drop_off", "collect"]
+ACTIVE_STATUSES = ["Confirmed", "Shipped", "In use"]      # committed / out
+DELIVERY_METHODS = ["Ship", "Drop off", "Collect"]
 TERMINAL_MODELS = ["BBPOS WisePOS E"]
+
+# DB machine-value -> display label, for the migration.
+STATUS_FROM_DB = {
+    "draft": "Draft", "pending_payment": "Pending payment", "confirmed": "Confirmed",
+    "shipped": "Shipped", "in_use": "In use", "returned": "Returned",
+    "completed": "Completed", "cancelled": "Cancelled",
+}
+DELIVERY_FROM_DB = {"ship": "Ship", "drop_off": "Drop off", "collect": "Collect"}
 
 # Columns carry a friendly HEADER (what users see, and what VBA/migration
 # reference by name), a HIDDEN flag (internal IDs the macros need but users
@@ -80,7 +90,6 @@ HIRE_COLUMNS = [
 TERMINAL_COLUMNS = [
     ("Terminal",        False, "text"),    # the terminal ID (human-named e.g. "01")
     ("Model",           False, "model"),
-    ("Retired",         False, "tick"),
     ("Status",          False, "formula"),
     ("Available from",  False, "formula"),
     ("Future hires",    False, "formula"),
@@ -124,7 +133,10 @@ def add_list_validation(ws, col_letter, first_row, last_row, formula1):
     dv.add(f"{col_letter}{first_row}:{col_letter}{last_row}")
 
 
-TICK = "✓"  # tick-box character; the macros read this cell as TRUE
+# Tick columns hold TRUE/FALSE. Native Excel checkboxes (Insert -> Checkbox,
+# added in Microsoft 365) sit on these cells and toggle the value; until they're
+# inserted the cells just show TRUE/FALSE. openpyxl can't author the checkbox
+# control, so inserting it is a one-time manual step (see SETUP.md).
 
 
 def build():
@@ -136,7 +148,7 @@ def build():
     cols = [("A", "Statuses", HIRE_STATUSES),
             ("B", "DeliveryMethods", DELIVERY_METHODS),
             ("C", "Models", TERMINAL_MODELS),
-            ("D", "Tick", [TICK])]
+            ("D", "Bool", ["TRUE", "FALSE"])]
     for letter, head, vals in cols:
         lists[f"{letter}1"] = head
         lists[f"{letter}1"].font = Font(bold=True)
@@ -156,7 +168,6 @@ def build():
 
     add_list_validation(terms, tc["Model"], 2, last,
                         f"=Lists!$C$2:$C${len(TERMINAL_MODELS) + 1}")
-    tick_dv(terms, tc["Retired"], 2, last)
 
     # Named range over the Terminal-id column (data validation accepts a name,
     # but NOT a structured table reference — that was what corrupted the file).
@@ -164,7 +175,12 @@ def build():
     wb.defined_names.add(DefinedName(
         "TerminalIds", attr_text=f"Terminals!${tc['Terminal']}$2:${tc['Terminal']}${last}"))
 
-    _write_terminal_formulas(terms, tc, last)
+    # Status / Available from / Future hires / Utilisation are filled by the
+    # RefreshTerminals macro (array formulas were fragile on Mac Excel). Just set
+    # display formats here; the cells start blank.
+    for r in range(2, last + 1):
+        terms[f"{tc['Available from']}{r}"].number_format = "dd mmm yyyy"
+        terms[f"{tc['Utilisation']}{r}"].number_format = "0%"
     terms.column_dimensions[tc["Terminal"]].width = 12
     terms.column_dimensions[tc["Notes"]].width = 28
     terms.column_dimensions[tc["Available from"]].width = 14
@@ -193,9 +209,6 @@ def build():
             hires[f"{hc[f]}{r}"].number_format = "dd mmm yyyy"
     for r in range(2, last + 1):
         hires[f"{hc['Amount due']}{r}"].number_format = "£#,##0.00"
-        # Centre the tick columns so the ✓ sits nicely.
-        for f in ("Trial", "Paid", "Box Office Web", "Terminals linked"):
-            hires[f"{hc[f]}{r}"].alignment = Alignment(horizontal="center")
 
     for hdr, w in {"Account": 24, "Contact name": 18, "Contact email": 24,
                    "Shipping address": 28, "Notes": 28, "Changed at": 18,
@@ -216,7 +229,8 @@ def build():
         "  • Hires sheet = source of truth (ONE terminal per row).",
         "  • Terminals sheet = your kit; Status / Utilisation / Available are formulas.",
         "",
-        "Tick boxes: type or pick the ✓ to mean yes; leave blank for no.",
+        "Tick columns (Trial, Paid, …) are checkboxes — tick = yes. (Insert the",
+        "checkbox controls once per SETUP.md; they store TRUE/FALSE.)",
         "Hidden reference columns (Ref / Account ref) are used by the macros — leave them.",
         "",
         "Business rules that formulas can't enforce live in VBA macros — paste them",
@@ -240,50 +254,13 @@ def build():
 
 
 def tick_dv(ws, col_letter, first_row, last_row):
-    """Tick-box validation: cell is either ✓ or blank."""
-    add_list_validation(ws, col_letter, first_row, last_row, f'"{TICK}"')
+    """Seed a checkbox column to FALSE so the native checkbox renders unchecked.
+    (No data validation — the inserted checkbox control owns the cell.)"""
+    for r in range(first_row, last_row + 1):
+        ws[f"{col_letter}{r}"] = False
+        ws[f"{col_letter}{r}"].alignment = Alignment(horizontal="center")
 
 
-def _write_terminal_formulas(terms, tc, last):
-    """Status / Available from / Future hires / Utilisation as formulas that read
-    the Hires table by its friendly column names."""
-    active_sql = ",".join(f'"{s}"' for s in ACTIVE_STATUSES)
-    year_end = "DATE(YEAR(TODAY()),12,31)"
-    days_remaining = f"({year_end}-TODAY()+1)"
-    for r in range(2, last + 1):
-        tid = "[@Terminal]"
-        on_hire = (
-            "SUMPRODUCT("
-            f"(HiresTable[Terminal]={tid})*"
-            "ISNUMBER(MATCH(HiresTable[Status],{" + active_sql + "},0))*"
-            "(HiresTable[Hire from]<=TODAY())*"
-            "((HiresTable[Hire to]>=TODAY())+(HiresTable[Hire to]=\"\")>0)"
-            ")"
-        )
-        terms[f"{tc['Status']}{r}"] = (
-            f'=IF({tid}="","",IF([@Retired]="{TICK}","Retired",'
-            f'IF({on_hire}>0,"On hire","Available")))'
-        )
-        committed = (
-            "SUMPRODUCT("
-            f"(HiresTable[Terminal]={tid})*"
-            "ISNUMBER(MATCH(HiresTable[Status],{" + active_sql + "},0))*"
-            "(MAX(0,"
-            f"MIN({year_end},IF(HiresTable[Hire to]=\"\",{year_end},HiresTable[Hire to]))"
-            "-MAX(TODAY(),HiresTable[Hire from])+1))"
-            ")"
-        )
-        terms[f"{tc['Utilisation']}{r}"] = (
-            f'=IF({tid}="","",IFERROR(MIN(1,{committed}/{days_remaining}),0))'
-        )
-        terms[f"{tc['Future hires']}{r}"] = (
-            f'=IF({tid}="","",SUMPRODUCT('
-            f'(HiresTable[Terminal]={tid})*'
-            "ISNUMBER(MATCH(HiresTable[Status],{" + active_sql + "},0))*"
-            "(HiresTable[Hire from]>TODAY())))"
-        )
-        terms[f"{tc['Available from']}{r}"].number_format = "dd mmm yyyy"
-        terms[f"{tc['Utilisation']}{r}"].number_format = "0%"
 
 
 if __name__ == "__main__":

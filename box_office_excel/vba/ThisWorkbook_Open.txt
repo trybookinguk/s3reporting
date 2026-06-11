@@ -1,0 +1,13 @@
+' ── Workbook open hook ────────────────────────────────────────────────────
+' Paste this into the CODE PANE OF "ThisWorkbook" (in the VBA editor, under
+' Microsoft Excel Objects -> double-click ThisWorkbook).
+'
+' Refreshes the derived Terminals columns each time the workbook opens, so
+' Status / Available from / Future hires / Utilisation are current without
+' anyone having to click the Refresh button.
+
+Private Sub Workbook_Open()
+    On Error Resume Next
+    RefreshTerminals.Refresh
+    On Error GoTo 0
+End Sub

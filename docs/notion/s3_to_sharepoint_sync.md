@@ -1,4 +1,5 @@
-# s3_to_sharepoint.py
+# S3 to SharePoint Sync
+`s3_to_sharepoint.py`
 
 **Category:** Daily automation
 **Schedule:** Weekdays at 02:15 UTC

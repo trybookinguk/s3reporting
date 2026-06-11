@@ -1,4 +1,5 @@
-# prepare_data.py
+# Daily Data Refresh
+`prepare_data.py`
 
 **Category:** Daily automation
 **Schedule:** Every day at 02:00 UTC (including weekends)

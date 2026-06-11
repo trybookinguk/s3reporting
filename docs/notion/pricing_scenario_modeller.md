@@ -1,4 +1,5 @@
-# pricing_scenarios_2026.py / pricing_model_comparison.py
+# Pricing Scenario Modeller
+`pricing_scenarios_2026.py / pricing_model_comparison.py`
 
 **Category:** Planning & analysis
 **Schedule:** Run manually when needed

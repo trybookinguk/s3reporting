@@ -1,4 +1,5 @@
-# analyse_wales_ni_sectors.py
+# Wales & NI Sector Report
+`analyse_wales_ni_sectors.py`
 
 **Category:** On-demand report
 **Schedule:** Run manually when needed

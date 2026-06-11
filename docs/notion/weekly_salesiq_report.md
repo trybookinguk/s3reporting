@@ -1,4 +1,5 @@
-# salesiq_weekly.py
+# Weekly SalesIQ Report
+`salesiq_weekly.py`
 
 **Category:** Weekly report
 **Schedule:** Every Tuesday at 08:00 UTC (09:00 BST)

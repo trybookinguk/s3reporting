@@ -1,4 +1,5 @@
-# zoho_industry.py
+# Industry Sync
+`zoho_industry.py`
 
 **Category:** Daily automation
 **Schedule:** Weekdays at 02:30 UTC

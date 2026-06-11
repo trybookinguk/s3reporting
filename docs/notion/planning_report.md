@@ -1,4 +1,5 @@
-# eoy_planning_report.py
+# Planning Report
+`eoy_planning_report.py`
 
 **Category:** On-demand report
 **Schedule:** Run manually when needed

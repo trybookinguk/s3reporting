@@ -1,4 +1,5 @@
-# salesiq_monthly_report.py
+# Monthly SalesIQ Stats
+`salesiq_monthly_report.py`
 
 **Category:** On-demand report
 **Schedule:** Run manually when needed

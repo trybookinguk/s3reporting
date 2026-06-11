@@ -1,4 +1,5 @@
-# funds_remaining_reminder.py
+# Funds Remaining Reminders
+`funds_remaining_reminder.py`
 
 **Category:** CRM action
 **Schedule:** Run manually when needed

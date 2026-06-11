@@ -1,4 +1,5 @@
-# industry_analysis.py
+# Industry Analysis
+`industry_analysis.py`
 
 **Category:** On-demand report
 **Schedule:** Run manually when needed

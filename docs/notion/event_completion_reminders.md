@@ -1,4 +1,5 @@
-# event_completion_reminders.py
+# Event Completion Reminders
+`event_completion_reminders.py`
 
 **Category:** CRM action
 **Schedule:** Run manually when needed

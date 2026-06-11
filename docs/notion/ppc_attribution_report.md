@@ -1,4 +1,5 @@
-# ppc_reporting.py
+# PPC Attribution Report
+`ppc_reporting.py`
 
 **Category:** On-demand report
 **Schedule:** Run manually when needed

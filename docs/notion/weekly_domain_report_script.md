@@ -1,4 +1,5 @@
-# weekly_domain_report.py
+# Weekly Domain Report
+`weekly_domain_report.py`
 
 **Category:** Weekly report
 **Schedule:** Every Monday at 09:00 UTC

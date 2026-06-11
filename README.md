@@ -122,8 +122,6 @@ python3 restore_from_sharepoint.py --date YYYY-MM-DD
 
 **Tiers look wrong** — run `zoho_tiers.py --preview` first (read-only, makes no changes) to check the output before running the live `zoho_tiers.py`.
 
-Full handover notes are in `docs/HANDOVER_OWNER.md`.
-
 ---
 
 ## Credentials needed
@@ -136,7 +134,7 @@ Full handover notes are in `docs/HANDOVER_OWNER.md`.
 | Google Analytics 4 | PPC reporting and planning reports |
 | GetVero | Tagging users for automated CRM messages |
 
-All credentials are stored in `/root/s3reporting/.env` on the Pi. See `docs/HANDOVER_OWNER.md` for how to obtain or rotate them.
+All credentials are stored in `/root/s3reporting/.env` on the Pi.
 
 ---
 

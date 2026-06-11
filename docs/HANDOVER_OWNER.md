@@ -128,7 +128,31 @@ All vendor accounts sit under **one company account** (not personal logins).
 
 ---
 
-## 8. Deeper
+## 8. Loose ends on the Pi
+
+**Orphaned git stash (`mailshake_acquisition.py`).** During the June 2026 repo
+cleanup, `mailshake_acquisition.py` was removed from the codebase (the Mailshake
+acquisition pipeline was retired). The Pi had uncommitted local edits to that
+file at the time, so before pulling they were set aside in a git stash rather
+than discarded:
+
+```
+stash@{0}: On main: pre-pull: local mailshake_acquisition.py edits (file removed upstream)
+```
+
+It's the only entry in `git stash list` under `/root/s3reporting`. Since the
+file no longer exists in the repo, this stash is **orphaned** — it can't be
+cleanly re-applied and is kept only as a safety copy of that work. An engineer
+should decide its fate:
+
+- If the Mailshake work is genuinely finished/abandoned: `git stash drop stash@{0}`.
+- If anything in it is worth keeping: `git stash show -p stash@{0} > /root/mailshake_acquisition.salvaged.py` first, review, then drop.
+
+> 🔎 Inspect before dropping: `ssh root@<Pi> 'cd /root/s3reporting && git stash show -p stash@{0}'`
+
+---
+
+## 9. Deeper
 
 - **Pi / Dashboard Handover** — engineer's manual: topology, deploy, break-glass runbook.
 - `s3reporting/deploy/README.md` — pipeline scripts + flags.

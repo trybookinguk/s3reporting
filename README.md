@@ -64,7 +64,7 @@ These tag users in GetVero to trigger automated follow-up messages. **Always run
 
 ## How to run a script
 
-All scripts read credentials from `/root/s3reporting/.env` on the Pi, or from environment variables on a local machine.
+Scripts normally run on the Pi via cron, but any of them can be run by hand. They read their credentials from `/root/s3reporting/.env` on the Pi, or from environment variables on a local machine.
 
 ```bash
 # Standard run
@@ -79,7 +79,32 @@ export TEST_DATE=2026-05-01
 python3 script_name.py
 ```
 
-> Scripts that read personal or financial data should only be run on the Pi or another approved machine.
+### Running locally
+
+You can run these on your own machine for development or one-off analysis, as long as you have the credentials and dependencies. **Booking and account data is regulated** — only run data-reading scripts on an approved machine, and prefer the read-only / test paths (e.g. `zoho_tiers.py --preview`, `TEST_MODE=1`) over anything that writes to Zoho, SharePoint, GetVero, or sends email.
+
+1. **Get the credentials.** Copy the Pi's `.env` (from the password manager / a secure transfer — never commit it) into the repo root, or export the variables in your shell. See the credentials table below for what each one is for.
+
+2. **Install dependencies:**
+   ```bash
+   pip install --break-system-packages boto3 msal requests pandas pytz numpy scipy \
+       python-dateutil google-analytics-data matplotlib weasyprint
+   ```
+   (`weasyprint` is only needed for the commission report's PDFs; `google-analytics-data` only for PPC/planning.)
+
+3. **Load the credentials and run:**
+   ```bash
+   set -a && source .env && set +a     # load .env into the shell
+   export TEST_MODE=1                   # safety: redirect emails, skip live writes
+   python3 zoho_tiers.py --preview      # example: read-only tier preview
+   ```
+
+4. **To force fresh data** (bypass the local cache):
+   ```bash
+   NO_CACHE=1 python3 script_name.py
+   ```
+
+> If in doubt about whether a script writes anywhere, run it with `TEST_MODE=1` first and read its output — every emailing/CRM script honours it.
 
 ---
 

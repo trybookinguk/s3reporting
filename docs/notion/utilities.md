@@ -15,6 +15,8 @@ python3 zoho_tiers.py --preview
 
 **Output:** a `tier_preview_*.csv` in `reports/` + summary printed to console. (This was previously a separate script, `zoho_tiers_v2.py`, now folded into the main tier script as a flag.)
 
+> ⚠️ **Known limitation:** `--preview` loads the full booking history into memory and **runs out of memory on the 3.7 GB Pi** (it gets OOM-killed before writing output). It works on a machine with more RAM. To run it on the Pi it would need rewriting to stream from the SQLite warehouse the way the live `zoho_tiers.py` job does — until then, treat `--preview` as a dev-box-only tool. The live tier job is unaffected by this (it already streams from the warehouse).
+
 ---
 
 ## check_account_names.py — Account name lookup

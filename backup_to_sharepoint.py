@@ -73,6 +73,14 @@ CRITICAL_FILES = [
     f"{PREPARED_DIR}/box_office.db",
     f"{PREPARED_DIR}/database_builder.db",
     f"{PREPARED_DIR}/zoho_cache.db",
+    # User-edited overrides migrated off SharePoint (ppc/mailshake manual matches,
+    # exclusions, decisions, account_targets) + the mailshake pipeline output.
+    f"{PREPARED_DIR}/app_state.db",
+    # Tier history/snapshot state migrated off SharePoint (read-write by zoho_tiers).
+    f"{PREPARED_DIR}/tier_state.db",
+    # Mailgun validation cache — rebuildable but small, and re-validating costs
+    # Mailgun quota, so keep a copy.
+    f"{PREPARED_DIR}/mailgun_cache.db",
 ]
 
 # Rebuildable-from-S3 but slow to rebuild. Skipped with --no-warehouse.

@@ -74,7 +74,6 @@ All vendor accounts sit under **one company account** (not personal logins).
 | Zoho CRM | Tier/industry sync | OAuth refresh token — re-mint if its account is removed ⚠️ |
 | Azure (Entra) | Dashboard login + SharePoint | Client secret — **expires Mar 2028** ⚠️ |
 | Mailgun | Report emails | SMTP password |
-| Mailshake | Lead/outreach | API key |
 | GA4 | PPC data | Service-account JSON |
 | Tailscale | Pi admin access (SSH) | Tailnet membership |
 | Cloudflare | Dashboard access (Cloudflared) | Cloudflare account |
@@ -112,11 +111,9 @@ All vendor accounts sit under **one company account** (not personal logins).
 
 ## 6. Doc drift — trust the live machine
 
-- `s3reporting/deploy/README.md` once listed a 03:15 dashboard-JSON job — **removed**
-  (commit `8e8b20f`); the dashboard reads DuckDB directly now. Trust `deploy/pi-crontab`.
+- The dashboard reads DuckDB directly. Trust `deploy/pi-crontab` as the authoritative schedule.
 - A cache-warm token sits in plaintext in `deploy/pi-crontab` (localhost-only, low risk).
-- ~14 GitHub Actions workflows still exist and may run in parallel with the Pi.
-  > 🔎 GitHub repo → Actions tab → check which ran in the last month.
+- GitHub Actions workflows have been removed. The Pi cron is the only scheduler.
 
 ---
 
@@ -127,8 +124,7 @@ All vendor accounts sit under **one company account** (not personal logins).
 3. **Health:** dashboard URL loads (a Microsoft-login redirect = healthy);
    `ssh root@<Pi> 'tail -5 /root/logs/prepare-data.log'` shows success.
 4. **Diarise** the Azure secret expiry (§3).
-5. **Check Actions** (§6).
-6. **Decide §1** (who operates this) and record it.
+5. **Decide §1** (who operates this) and record it.
 
 ---
 
@@ -136,5 +132,6 @@ All vendor accounts sit under **one company account** (not personal logins).
 
 - **Pi / Dashboard Handover** — engineer's manual: topology, deploy, break-glass runbook.
 - `s3reporting/deploy/README.md` — pipeline scripts + flags.
-- `s3reporting/CLAUDE.md` — conventions (British spelling; booking data is regulated).
+- `s3reporting/README.md` — full architecture, cron schedule, environment variables, data sources.
+- `s3reporting/docs/scripts_and_reports_inventory.csv` — every script: what it does, when it runs, how to run it manually.
 - Repos: `trybookinguk/reporting-dashboard` (UI), `trybookinguk/s3reporting` (ETL).

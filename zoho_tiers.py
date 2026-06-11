@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Import from our modules
 from modules.utils.config import UK_TZ, TEST_MODE, TIER_OWNERS, REPORTS_DIR
-from modules.utils.data_loader import get_s3_client, load_multiple_booking_files, download_s3_file_cached, load_booking_data
+from modules.utils.data_loader import get_s3_client, load_multiple_booking_files, download_s3_file_cached
 from modules.booking_aggregator import BookingAggregator
 from modules.utils.config import CUTOFF_365, CUTOFF_730, EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS
 from modules.account_processor import process_accounts
@@ -997,141 +997,6 @@ def _replay_history(start_date: pd.Timestamp, end_date: pd.Timestamp,
         tier_history.save_history(graph_token, SHAREPOINT_DRIVE_ID, final_history)
 
 
-def preview():
-    """Read-only tier preview — compute tiers and print/CSV them, write nothing.
-
-    This is the lightweight "what would the tiers look like?" path (formerly the
-    standalone zoho_tiers_v2.py). It needs only AWS credentials: it loads S3
-    booking + account data, runs the same v2 composite-tier algorithm the live
-    job uses, and outputs a CSV plus a console summary. It does NOT touch Zoho,
-    SharePoint, email, the warehouse, or tier history — so it is safe to hand to
-    anyone for a sanity-check before the real `zoho_tiers.py` run.
-
-    Caching is disabled so the preview always reflects the latest S3 data.
-    """
-    os.environ['NO_CACHE'] = '1'
-    start_time = time.time()
-
-    # Only AWS credentials are needed — no Zoho/Azure machinery runs here.
-    validate_environment_variables(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'])
-
-    logger.info("Tier preview started at %s",
-                datetime.now(UK_TZ).strftime('%Y-%m-%d %H:%M:%S %Z'))
-    print(f"\n=== Tier Preview (read-only — no Zoho/SharePoint/email writes) ===")
-
-    # On the 1st the new month's S3 files aren't published yet, so read the
-    # previous day (matching the live job's report-date logic).
-    today = pd.Timestamp.now(UK_TZ).normalize()
-    report_date = today - pd.Timedelta(days=1) if today.day == 1 else today
-    prefix = report_date.strftime("%Y%m")
-    year = report_date.strftime("%Y")
-    month = report_date.strftime("%m")
-    print(f"Processing data for: {report_date.strftime('%Y-%m-%d')}")
-
-    try:
-        s3_client = get_s3_client()
-
-        # Account names (Id -> AccountName) for display only.
-        key_account = f"{year}/{month}/{prefix}-Accounts-TBUK.csv"
-        print(f"Loading Account report from: {key_account}")
-        account_df = download_s3_file_cached(s3_client, key_account)
-        account_name_lookup = {}
-        if 'Id' in account_df.columns and 'AccountName' in account_df.columns:
-            account_name_lookup = account_df.set_index('Id')['AccountName'].to_dict()
-            print(f"Loaded {len(account_name_lookup):,} account names")
-        else:
-            logger.warning("Account report missing Id or AccountName columns")
-
-        # Booking data: full history + current month, de-duplicated.
-        print("\nLoading booking data...")
-        booking_all_df = load_booking_data(s3_client, report_date, data_type='BookingDataAll')
-        booking_month_df = load_booking_data(s3_client, report_date, data_type='BookingData')
-        booking_data_df = pd.concat([booking_all_df, booking_month_df], ignore_index=True)
-        before = len(booking_data_df)
-        booking_data_df = booking_data_df.drop_duplicates(subset='BookingTransactionId')
-        print(f"Removed {before - len(booking_data_df):,} duplicate transactions")
-        del booking_all_df, booking_month_df
-
-        # Aggregate, streaming in chunks to stay memory-bounded.
-        print("\nAggregating booking metrics...")
-        aggregator = BookingAggregator(
-            cutoff_365=CUTOFF_365,
-            cutoff_730=CUTOFF_730,
-            event_freq_cutoff_current=EVENT_FREQ_CUTOFF_CURRENT,
-            event_freq_cutoff_previous=EVENT_FREQ_CUTOFF_PREVIOUS,
-        )
-
-        def df_to_chunks(df, chunk_size=100000):
-            for i in range(0, len(df), chunk_size):
-                yield df.iloc[i:i + chunk_size].copy()
-
-        account_metrics = aggregator.aggregate_bookings(df_to_chunks(booking_data_df))
-        del booking_data_df
-        print(f"Total unique accounts: {len(account_metrics):,}")
-    except Exception as e:
-        logger.error("Failed to load/process S3 data: %s", e)
-        print(f"ERROR: Failed to load/process S3 data: {e}")
-        import traceback
-        traceback.print_exc()
-        return
-
-    print("\nCalculating composite tiers...")
-    results = calculate_composite_tiers(account_metrics)
-    if results.empty:
-        print("No results produced — check data pipeline.")
-        return
-
-    results['Account_Name'] = results['AccountId'].astype(str)
-    results['Account_Display_Name'] = results['AccountId'].map(account_name_lookup).fillna('')
-    output_columns = [
-        'Account_Name', 'Account_Display_Name', 'Current_Tier', 'Previous_Tier',
-        'Tier_Movement', 'Composite_Score', 'Previous_Composite_Score',
-        'Revenue_Current', 'Revenue_Lifetime', 'Tickets_Current', 'Years_Loyalty',
-        'A_Percentile', 'B_Percentile', 'C_Percentile',
-    ]
-    results = results[[c for c in output_columns if c in results.columns]]
-
-    stamp = datetime.now(UK_TZ).strftime('%Y%m%d_%H%M%S')
-    csv_filename = os.path.join(REPORTS_DIR, f"tier_preview_{stamp}.csv")
-    os.makedirs(REPORTS_DIR, exist_ok=True)
-    results.to_csv(csv_filename, index=False)
-    print(f"\nSaved tier preview to: {csv_filename}")
-
-    # Console summary: tier distribution + movement.
-    total = len(results)
-    tier_counts = results['Current_Tier'].value_counts()
-    print("\nTier Distribution:")
-    for tier in ['Tier 1', 'Tier 2', 'Tier 3', 'Tier 4', 'Tier 5', 'Nil']:
-        count = tier_counts.get(tier, 0)
-        pct = (count / total * 100) if total > 0 else 0
-        print(f"  {tier}: {count:,} ({pct:.1f}%)")
-
-    movement_counts = results['Tier_Movement'].value_counts()
-    print("\nTier Movement:")
-    for label in ['Improved 2+ tiers', 'Improved 1 tier', 'No Change',
-                  'Dropped 1 tier', 'Dropped 2+ tiers']:
-        print(f"  {label}: {movement_counts.get(label, 0):,}")
-
-    # High-engagement free accounts (lots of tickets, no revenue) — a useful
-    # by-product of the preview for spotting upsell candidates.
-    MIN_FREE_TICKETS = 1000
-    free_accounts = results[
-        (results['Revenue_Current'] == 0) &
-        (results['Tickets_Current'] >= MIN_FREE_TICKETS)
-    ].sort_values(['Tickets_Current', 'Years_Loyalty'], ascending=[False, False])
-    if not free_accounts.empty:
-        free_csv = os.path.join(REPORTS_DIR, f"free_high_engagement_{stamp}.csv")
-        free_accounts[['Account_Name', 'Account_Display_Name',
-                       'Tickets_Current', 'Years_Loyalty']].to_csv(free_csv, index=False)
-        print(f"\nHigh-engagement free accounts ({MIN_FREE_TICKETS}+ tickets): "
-              f"{len(free_accounts)} — saved to {free_csv}")
-    else:
-        print(f"\nNo free accounts with {MIN_FREE_TICKETS}+ tickets found.")
-
-    elapsed = time.time() - start_time
-    print(f"\n=== Preview complete in {elapsed:.1f}s ({elapsed / 60:.1f} min) ===")
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Daily Zoho tier update + tier-movement pipeline."
@@ -1175,19 +1040,9 @@ if __name__ == "__main__":
              "warehouse. Holds the full frame in memory (OOMs a 4 GB Pi) — for "
              "validating the warehouse path against the old output on a dev box.",
     )
-    parser.add_argument(
-        "--preview",
-        action="store_true",
-        help="Read-only tier preview: compute tiers and write a CSV + summary, "
-             "but make NO changes to Zoho, SharePoint, email or the warehouse. "
-             "Needs only AWS credentials. Use this to sanity-check tier numbers "
-             "before a real run. (Replaces the old zoho_tiers_v2.py script.)",
-    )
     args = parser.parse_args()
 
-    if args.preview:
-        preview()
-    elif args.rebuild_history:
+    if args.rebuild_history:
         end = pd.Timestamp(args.history_to) if args.history_to else pd.Timestamp.now(UK_TZ).normalize()
         start = pd.Timestamp(args.history_from) if args.history_from else end - pd.DateOffset(years=12)
         _replay_history(start, end, dry_run=args.dry_run,

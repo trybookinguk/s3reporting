@@ -81,7 +81,7 @@ python3 script_name.py
 
 ### Running locally
 
-You can run these on your own machine for development or one-off analysis, as long as you have the credentials and dependencies. **Booking and account data is regulated** — only run data-reading scripts on an approved machine, and prefer the read-only / test paths (e.g. `zoho_tiers.py --preview`, `TEST_MODE=1`) over anything that writes to Zoho, SharePoint, GetVero, or sends email.
+You can run these on your own machine for development or one-off analysis, as long as you have the credentials and dependencies. **Booking and account data is regulated** — only run data-reading scripts on an approved machine, and prefer the test path (`TEST_MODE=1`) over anything that writes to Zoho, SharePoint, GetVero, or sends email.
 
 1. **Get the credentials.** Copy the Pi's `.env` (from the password manager / a secure transfer — never commit it) into the repo root, or export the variables in your shell. See the credentials table below for what each one is for.
 
@@ -96,7 +96,7 @@ You can run these on your own machine for development or one-off analysis, as lo
    ```bash
    set -a && source .env && set +a     # load .env into the shell
    export TEST_MODE=1                   # safety: redirect emails, skip live writes
-   python3 zoho_tiers.py --preview      # example: read-only tier preview
+   python3 industry_analysis.py        # example: a read-only report
    ```
 
 4. **To force fresh data** (bypass the local cache):
@@ -120,7 +120,7 @@ python3 restore_from_sharepoint.py --list        # see available backups
 python3 restore_from_sharepoint.py --date YYYY-MM-DD
 ```
 
-**Tiers look wrong** — run `zoho_tiers.py --preview` first (read-only, makes no changes) to check the output before running the live `zoho_tiers.py`.
+**Tiers look wrong** — check `/root/logs/zoho-tiers.log` for the most recent run. The tier algorithm and bands are documented on the Tier & Retention Update page.
 
 ---
 

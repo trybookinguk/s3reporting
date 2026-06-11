@@ -16,15 +16,11 @@ Recalculates which tier every account belongs to based on their revenue history,
 
 ## How to run manually
 
-To preview changes without updating Zoho (read-only — no writes anywhere), run:
-```bash
-python3 zoho_tiers.py --preview
-```
-
-To apply live:
 ```bash
 python3 zoho_tiers.py
 ```
+
+This updates Zoho live. To redirect emails to the test recipient while still running the full pipeline, set `TEST_MODE=1` first.
 
 ## Inputs
 

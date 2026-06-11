@@ -920,7 +920,7 @@ CREATE TABLE dst.users AS SELECT * FROM src.users;
 
 -- Indexes that match the SQLite hot paths. DuckDB's planner mostly doesn't
 -- need them at this scale (columnar scans are fast), but the AccountId index
--- helps point lookups like sales_commission_report.py's WHERE AccountId IN ().
+-- helps point lookups that filter on WHERE AccountId IN ().
 CREATE INDEX bookings_account ON dst.bookings (AccountId);
 CREATE INDEX bookings_event ON dst.bookings (EventId);
 CREATE INDEX accounts_id ON dst.accounts (Id);

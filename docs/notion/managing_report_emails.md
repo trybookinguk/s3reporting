@@ -68,12 +68,6 @@ Delete their email address and the comma next to it:
 |---|---|
 | `weekly_new_accounts` | Weekly New Accounts Report (Tuesday) |
 | `weekly_salesiq` | Weekly SalesIQ Report (Tuesday) |
-| `weekly_domain` | Weekly Domain Report (Monday) |
-| `monthly_performance_md` | Monthly Performance Report — MD version (full financials) |
-| `monthly_performance_staff` | Monthly Performance Report — staff version |
-| `monthly_commission_md` | Monthly Commission Report — MD copy |
-
-> **Note on the commission report:** each salesperson is emailed their *own* commission report using the address held in a separate file (`sales_commission_config.json`). The `monthly_commission_md` block above only controls who gets the **MD's overall copy**. To change a salesperson's own address, an engineer needs to update the commission config.
 
 ## If something goes wrong
 

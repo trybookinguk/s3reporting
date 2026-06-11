@@ -138,22 +138,6 @@ DISTRIBUTION_LISTS_FALLBACK = {
         "to": ["jules@trybooking.co.uk", "kathryn@trybooking.co.uk"],
         "cc": [],
     },
-    "weekly_domain": {
-        "to": ["louise@trybooking.co.uk"],
-        "cc": [],
-    },
-    "monthly_performance_md": {
-        "to": ["joan@trybooking.co.uk", "henry@trybooking.co.uk"],
-        "cc": [],
-    },
-    "monthly_performance_staff": {
-        "to": ["louise@trybooking.co.uk", "jules@trybooking.co.uk"],
-        "cc": [],
-    },
-    "monthly_commission_md": {
-        "to": ["joan@trybooking.co.uk"],
-        "cc": [],
-    },
 }
 
 # Cached after the first SharePoint fetch so a single run hits Graph once.

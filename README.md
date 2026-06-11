@@ -19,13 +19,8 @@ For a full list of every script, see **`docs/scripts_and_reports_inventory.csv`*
 - **03:30** — refreshes the dashboard with the updated tier and retention data
 
 ### Every week
-- **Monday 09:00** — email domain report saved to reports/
 - **Tuesday 08:00** — weekly SalesIQ chat summary emailed to the team
 - **Tuesday 08:05** — weekly new accounts report emailed to the team
-
-### Every month
-- **1st at 09:00** — monthly performance report emailed to the team
-- **2nd at 09:00** — sales commission report emailed to the team
 
 ---
 

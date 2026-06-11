@@ -7,12 +7,16 @@ transactions over the rolling year, written to a CSV. Card Present only — Cash
 is excluded.
 
 Definitions (consistent with the rest of the codebase):
-  - Box Office Card Present = PaymentType (uppercased, spaces stripped) contains
-    "CARDPRESENT" (any spacing variant). Cash is NOT included.
+  - Box Office Card Present = PaymentType starts with "CardPresent" (covers
+    CardPresent, CardPresentTTPi, CardPresentTTPa). Cash is NOT included.
   - Revenue   = sum of PaymentReceived (ticket value, excluding fees).
   - Fees      = sum of (BookingFee + CardFee + ProcessingFee + TicketFee),
     inc VAT — the total the organiser is charged.
   - Period    = last 365 days, Europe/London, relative to today.
+
+Reads from the local SQLite warehouse (built by prepare_data.py) and pushes the
+aggregation down into SQL — it never loads the full booking history into memory,
+so it runs comfortably on the Pi.
 
 Output: box_office_cardpresent_accounts.csv, ranked by fees (inc VAT) descending.
 
@@ -31,19 +35,10 @@ import pytz
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from modules.utils.data_loader import load_booking_data, filter_successful_transactions
+from modules import warehouse
 
 UK_TZ = pytz.timezone("Europe/London")
-FEE_COLS = ["BookingFee", "CardFee", "ProcessingFee", "TicketFee"]
 OUTPUT_CSV = "box_office_cardpresent_accounts.csv"
-
-
-def is_card_present(payment_type: pd.Series) -> pd.Series:
-    """True where PaymentType is a Card Present variant (excludes Cash)."""
-    # Cast to str first: PaymentType is often loaded as a categorical, and
-    # fillna("") on a categorical raises unless "" is already a category.
-    pt = payment_type.astype(str).fillna("").str.upper().str.replace(" ", "", regex=False)
-    return pt.str.contains("CARDPRESENT", na=False)
 
 
 def main() -> None:
@@ -53,72 +48,69 @@ def main() -> None:
         account_filter = sys.argv[1]
     account_filter = int(account_filter) if account_filter else None
 
-    # Load BookingDataAll (history to 1st of month) + BookingData (current month).
-    all_df = load_booking_data(data_type="BookingDataAll")
-    current_df = load_booking_data(data_type="BookingData")
-    df = pd.concat([all_df, current_df], ignore_index=True)
-    if "BookingTransactionId" in df.columns:
-        df = df.drop_duplicates(subset=["BookingTransactionId"])
-
-    df = filter_successful_transactions(df)
-
-    # Last 365 days, Europe/London.
-    df["TransactionDate"] = pd.to_datetime(df["TransactionDate"], errors="coerce", utc=True)
-    df = df[df["TransactionDate"].notna()]
-    df["txn_date"] = df["TransactionDate"].dt.tz_convert(UK_TZ).dt.date
     today = datetime.now(UK_TZ).date()
-    cutoff = (datetime.now(UK_TZ) - timedelta(days=365)).date()
-    df = df[df["txn_date"] >= cutoff]
+    # Cutoff as a UTC instant — TransactionDate is stored as ISO-8601 UTC, so a
+    # string comparison against a UTC ISO cutoff orders correctly.
+    cutoff_iso = (pd.Timestamp.now("UTC") - pd.Timedelta(days=365)).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff_date = (datetime.now(UK_TZ) - timedelta(days=365)).date()
 
-    # Card Present only.
-    bo = df[is_card_present(df["PaymentType"])].copy()
+    # Push the whole thing into one grouped SQL query: card-present + successful
+    # + within the window, aggregated per account. Only the small result comes
+    # back — no full-frame load, so this is memory-safe on the Pi.
+    where = (
+        "PaymentType LIKE 'CardPresent%' "
+        "AND Status = 'Successful' "
+        "AND TransactionDate >= ?"
+    )
     if account_filter is not None:
-        bo["AccountId"] = pd.to_numeric(bo["AccountId"], errors="coerce")
-        bo = bo[bo["AccountId"] == account_filter]
+        where += " AND AccountId = ?"
+        params = (cutoff_iso, account_filter)
+    else:
+        params = (cutoff_iso,)
 
-    if bo.empty:
+    select_sql = (
+        "AccountId, "
+        "MAX(AccountName) AS account_name, "
+        "ROUND(COALESCE(SUM(BookingFee),0)+COALESCE(SUM(CardFee),0)"
+        "+COALESCE(SUM(ProcessingFee),0)+COALESCE(SUM(TicketFee),0), 2) AS fees_inc_vat, "
+        "ROUND(COALESCE(SUM(PaymentReceived),0), 2) AS revenue, "
+        "COALESCE(SUM(TicketQuantity),0) AS tickets, "
+        "COUNT(*) AS transactions, "
+        "MAX(TransactionDate) AS last_txn"
+    )
+
+    conn = warehouse.connect()
+    try:
+        out = warehouse.read_bookings_grouped(
+            conn, select_sql, where=where, params=params, group_by="AccountId"
+        )
+    finally:
+        conn.close()
+
+    if out.empty:
         scope = f"account {account_filter}" if account_filter is not None else "any account"
         sys.exit(f"No Card Present transactions found for {scope} "
-                 f"between {cutoff.isoformat()} and {today.isoformat()}.")
+                 f"between {cutoff_date.isoformat()} and {today.isoformat()}.")
 
-    bo["AccountId"] = pd.to_numeric(bo["AccountId"], errors="coerce")
-    bo["PaymentReceived"] = pd.to_numeric(bo["PaymentReceived"], errors="coerce").fillna(0)
-    bo["TicketQuantity"] = pd.to_numeric(bo["TicketQuantity"], errors="coerce").fillna(0)
+    out["account_id"] = pd.to_numeric(out["AccountId"], errors="coerce").astype("Int64")
+    out["account_name"] = out["account_name"].fillna("")
+    out["tickets"] = pd.to_numeric(out["tickets"], errors="coerce").fillna(0).astype(int)
+    # last_txn comes back as a UTC ISO string; show the London date.
+    out["last_txn"] = (
+        pd.to_datetime(out["last_txn"], errors="coerce", utc=True)
+        .dt.tz_convert(UK_TZ).dt.date.astype(str)
+    )
 
-    fees_present = [c for c in FEE_COLS if c in bo.columns]
-    bo["_fees_inc_vat"] = bo[fees_present].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
-
-    # Most-recent non-null account name per account.
-    name_lookup = {}
-    if "AccountName" in bo.columns:
-        names = bo.dropna(subset=["AccountName"]).sort_values("TransactionDate")
-        name_lookup = names.groupby("AccountId")["AccountName"].last().to_dict()
-
-    grouped = bo.groupby("AccountId").agg(
-        fees_inc_vat=("_fees_inc_vat", "sum"),
-        revenue=("PaymentReceived", "sum"),
-        tickets=("TicketQuantity", "sum"),
-        transactions=("_fees_inc_vat", "count"),
-        last_txn=("TransactionDate", "max"),
-    ).reset_index()
-
-    grouped["account_name"] = grouped["AccountId"].map(name_lookup).fillna("")
-    grouped["tickets"] = grouped["tickets"].astype(int)
-    grouped["last_txn"] = grouped["last_txn"].dt.tz_convert(UK_TZ).dt.date.astype(str)
-    for col in ["fees_inc_vat", "revenue"]:
-        grouped[col] = grouped[col].round(2)
-
-    grouped = grouped.sort_values("fees_inc_vat", ascending=False)
-
-    out = grouped[[
-        "AccountId", "account_name", "fees_inc_vat", "revenue",
+    out = out.sort_values("fees_inc_vat", ascending=False)
+    out = out[[
+        "account_id", "account_name", "fees_inc_vat", "revenue",
         "tickets", "transactions", "last_txn",
-    ]].rename(columns={"AccountId": "account_id"})
+    ]]
 
     out.to_csv(OUTPUT_CSV, index=False)
 
     # Console summary.
-    print(f"\nBox Office (Card Present), {cutoff.isoformat()} to {today.isoformat()} (rolling 365 days)")
+    print(f"\nBox Office (Card Present), {cutoff_date.isoformat()} to {today.isoformat()} (rolling 365 days)")
     print(f"  Accounts: {len(out):,}")
     print(f"  Total fees (inc VAT): £{out['fees_inc_vat'].sum():,.2f}")
     print(f"  Total revenue:        £{out['revenue'].sum():,.2f}")

@@ -32,7 +32,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import pandas as pd
 
 from .tier_codes import INT_TO_TIER, TIER_TO_INT
-from .utils.sharepoint import download_file, upload
+from .tier_state import read_blob, write_blob
 
 log = logging.getLogger(__name__)
 
@@ -53,28 +53,24 @@ def _empty_history() -> Dict:
 
 
 def load_history(token: str, drive_id: str) -> Dict:
-    """Fetch tier_history.json. Returns an empty skeleton on 404."""
-    raw = download_file(token, drive_id, HISTORY_FILE)
-    if raw is None:
-        log.info("No tier_history.json — starting fresh.")
+    """Load tier history from the SQLite tier-state store. Returns an empty
+    skeleton if absent. (token/drive_id kept for signature compatibility with
+    the callers; no longer used now that this reads from SQLite, not SharePoint.)"""
+    data = read_blob("tier_history")
+    if data is None:
+        log.info("No tier_history in tier_state.db — starting fresh.")
         return _empty_history()
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        log.error("tier_history.json is not valid JSON (%s) — refusing to overwrite. "
-                  "Manual intervention required.", e)
-        raise
     log.info("Loaded tier history: %d accounts × %d days",
              len(data.get("accounts", [])), len(data.get("days", [])))
     return data
 
 
 def save_history(token: str, drive_id: str, history: Dict) -> bool:
-    """Serialise and upload the full history file (uses resumable upload for >4 MiB)."""
+    """Persist the full history blob to the SQLite tier-state store."""
     history["generated_at"] = datetime.now(timezone.utc).isoformat()
-    data = json.dumps(history, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    log.info("Uploading tier history: %.1f MiB", len(data) / (1024 * 1024))
-    return upload(token, drive_id, HISTORY_FILE, data)
+    log.info("Writing tier history: %d accounts × %d days",
+             len(history.get("accounts", [])), len(history.get("days", [])))
+    return write_blob("tier_history", history)
 
 
 def append_day(history: Dict, day: date, current_df: pd.DataFrame) -> Dict:

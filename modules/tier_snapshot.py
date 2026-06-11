@@ -21,7 +21,7 @@ from .utils.config import (
     MOVEMENT_COOLDOWN_DAYS,
     TIER_OWNERS,
 )
-from .utils.sharepoint import download_file, upload
+from .tier_state import read_blob, write_blob
 
 log = logging.getLogger(__name__)
 
@@ -32,15 +32,11 @@ _TIER_RANK = {tier: idx for idx, tier in enumerate(TIER_ORDER_BEST_TO_WORST)}
 
 
 def load_previous_snapshot(token: str, drive_id: str) -> Dict[str, Dict]:
-    """Load the previous run's snapshot. Returns empty dict if file is missing."""
-    raw = download_file(token, drive_id, SNAPSHOT_FILE)
-    if raw is None:
+    """Load the previous run's snapshot from the SQLite tier-state store. Returns
+    empty dict if absent. (token/drive_id kept for signature compatibility.)"""
+    data = read_blob("tier_snapshot")
+    if data is None:
         log.info("No previous tier snapshot found — treating as first run.")
-        return {}
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        log.warning("tier_snapshot.json is not valid JSON (%s) — treating as first run.", e)
         return {}
     tiers = data.get("tiers", {})
     log.info("Loaded previous tier snapshot: %d accounts, generated %s",
@@ -71,8 +67,7 @@ def save_snapshot(token: str, drive_id: str, current_df: pd.DataFrame) -> bool:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "tiers": tiers,
     }
-    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    return upload(token, drive_id, SNAPSHOT_FILE, data)
+    return write_blob("tier_snapshot", payload)
 
 
 def detect_changes(previous: Dict[str, Dict], current_df: pd.DataFrame) -> pd.DataFrame:

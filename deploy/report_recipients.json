@@ -6,5 +6,9 @@
   "weekly_salesiq": {
     "to": ["jules@trybooking.co.uk", "kathryn@trybooking.co.uk"],
     "cc": []
+  },
+  "monthly_commission_summary": {
+    "to": ["joan@trybooking.co.uk"],
+    "cc": []
   }
 }

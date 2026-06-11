@@ -1,0 +1,17 @@
+{
+  "_comment": "Commission RATES only. Salesperson email addresses are no longer set here — each report is sent to the person's Zoho login email automatically. Names must match the Zoho 'Claimed' user name.",
+  "default_rates": {
+    "flat_fee": 15.00,
+    "commission_rate": 0.10
+  },
+  "sales_people": {
+    "Nicola Hurst": {
+      "flat_fee": 15.00,
+      "commission_rate": 0.10
+    },
+    "Alex Ashley": {
+      "flat_fee": 15.00,
+      "commission_rate": 0.10
+    }
+  }
+}

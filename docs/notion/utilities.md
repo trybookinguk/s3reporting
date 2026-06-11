@@ -17,18 +17,6 @@ python3 zoho_tiers_v2.py
 
 ---
 
-## compare_tiers.py — Tier comparison
-
-Compares two sets of tier calculation results side by side to show what has changed. Run after `zoho_tiers_v2.py`.
-
-```bash
-python3 compare_tiers.py
-```
-
-**Output:** Comparison CSV
-
----
-
 ## check_account_names.py — Account name lookup
 
 Takes a list of account names and fuzzy-matches them against TryBooking data. Useful for identifying duplicates, looking up accounts by partial name, or cleaning up a list.
@@ -77,14 +65,4 @@ python3 test_vero_api.py
 
 ## restore_from_sharepoint.py — Disaster recovery
 
-Restores the Pi's databases and config from a SharePoint backup. Use this if the Pi fails or data is lost.
-
-```bash
-# See available backups first
-python3 restore_from_sharepoint.py --list
-
-# Restore from a specific date
-python3 restore_from_sharepoint.py --date 2026-06-10
-```
-
-Backups are created nightly by `backup_to_sharepoint.py` and stored in SharePoint under `Backups/pi/`.
+Restores the Pi's databases and config from a SharePoint backup if the Pi fails or data is lost. This is a full recovery procedure with a few important steps (including a credential bootstrap) — it has its own page: **[Disaster Recovery Restore](disaster_recovery_restore.md)**.

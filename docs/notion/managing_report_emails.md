@@ -68,6 +68,9 @@ Delete their email address and the comma next to it:
 |---|---|
 | `weekly_new_accounts` | Weekly New Accounts Report (Tuesday) |
 | `weekly_salesiq` | Weekly SalesIQ Report (Tuesday) |
+| `monthly_commission_summary` | Monthly Commission Report — overall summary copy |
+
+> **Note on the commission report:** each salesperson is emailed their *own* commission report at their **Zoho login email** (the address on their Zoho user account) — not via this file. The `monthly_commission_summary` block only controls who gets the **overall summary copy** (whoever manages commissions).
 
 ## If something goes wrong
 

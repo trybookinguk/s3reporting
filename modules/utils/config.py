@@ -138,6 +138,13 @@ DISTRIBUTION_LISTS_FALLBACK = {
         "to": ["jules@trybooking.co.uk", "kathryn@trybooking.co.uk"],
         "cc": [],
     },
+    # Monthly Commission Report — overall summary copy, sent to whoever manages
+    # commissions. Each salesperson is emailed their own report at their Zoho
+    # login email (not via this list).
+    "monthly_commission_summary": {
+        "to": ["joan@trybooking.co.uk"],
+        "cc": [],
+    },
 }
 
 # Cached after the first SharePoint fetch so a single run hits Graph once.

@@ -152,4 +152,6 @@ TryBooking exports these files daily to S3 bucket `produk-rdsextracts-4382553736
 
 File path format: `YYYY/MM/YYYYMM-reportname-TBUK.csv`
 
+That table is just the files the pipeline uses most — TryBooking exports ~16 report types in total. **`docs/s3_report_schemas.md` documents the full column-level schema of every S3 report.**
+
 > **Month-end note:** The current month's BookingData file stops updating when the month ends. The new month's files don't appear until the 2nd. Scripts running on the 1st will read the previous month's data — this is intentional.

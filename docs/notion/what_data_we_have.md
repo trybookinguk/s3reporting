@@ -15,6 +15,33 @@ A useful way to think about the data is **how reachable it is**:
 
 ---
 
+## What we have data on
+
+Across all the reports, the data covers:
+
+- **Accounts** — name, status, join date, **industry** and **sub-industry**, region/postcode, fee rates, tier, activity rating, last-active date.
+- **Users** — the people on each account: name, login email, role (incl. who the account owner is), last login.
+- **Bookings** — every ticket transaction: account, event, ticket quantity, revenue, the individual fees, payment method, transaction date, event date, buyer's country/IP.
+- **Events** — appear *within* bookings (event ID, name, date, postcode) — enough to analyse events, though there's no standalone "events" report.
+- **Money held & owed** — per-account balances, available vs pending, exposure against upcoming events, ledger movements, transfers out, and per-gateway totals.
+- **Payments & reconciliation** — card type, last-4 digits, provider, payout, arrival date.
+- **Donations** — donation transactions and campaign pages (little used in the UK).
+- **Scan app usage** — which accounts/events used the ticket-scanning app, and how much.
+
+## What we don't have easily
+
+Worth knowing the gaps, so nobody assumes data exists that doesn't:
+
+- **No event-attendee or check-in detail** — we know tickets *sold* and (from the scan app) totals scanned, but not per-attendee attendance.
+- **No marketing/engagement data** — no email opens, website visits, or campaign performance in these exports. (PPC attribution is pieced together separately via Google Analytics.)
+- **No per-buyer demographics** — buyers are largely anonymous (IP country, not age/gender/etc.).
+- **No CRM context** — sales notes, deal stages, support tickets, and the like live in Zoho, not in these files. The two have to be joined to get a full customer picture.
+- **No real-time data** — everything is the overnight export, so a day behind at best.
+- **Bank details are not usable** — present but hashed/encrypted in the export.
+- **Limited customer-contact data** — beyond the account owner's email, there's no broad contact list of attendees or prospects here.
+
+---
+
 ## What you can explore yourself (in a spreadsheet)
 
 ### Accounts — our customers

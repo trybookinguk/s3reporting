@@ -69,6 +69,17 @@ This is the first place to look for almost any "how many / what kind of customer
 
 ---
 
+## Going further — business intelligence tools
+
+Between "open it in a spreadsheet" and "write a script" sits a third option: a business intelligence (BI) tool that connects to the data and lets you build interactive dashboards and reports without code.
+
+- **Australia already uses Tableau** for this. If you want to mirror what they do, Tableau is the proven path and there's in-house experience to draw on.
+- **Power BI is worth considering for the UK.** We already run on Microsoft 365 (it's what powers our SharePoint sync and report emails), so Power BI may already be covered by existing licensing and would sign in with the same Microsoft accounts — which lowers the setup and cost hurdle. It connects comfortably to CSV/SharePoint sources and would let non-technical users slice the bookings and account data themselves rather than waiting on a script.
+
+This is a suggestion, not a decision — either tool would work. The main point: the current Pi-built dashboard isn't the only way to surface this data, and a BI tool could give the team self-serve reporting on top of the same exports.
+
+---
+
 ## The rest
 
 Exported and available if a specific question calls for them, but not part of day-to-day analysis:

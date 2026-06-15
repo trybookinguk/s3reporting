@@ -20,9 +20,14 @@ Idempotent: each run regenerates the full report from the latest monthly
 snapshots. Both load_users() and load_accounts() fall back to the previous
 month's file on the 1st (the new month's file isn't published until the 2nd).
 
+By default the CSV is also uploaded to SharePoint at
+"Platform Data/Users and Accounts/users_accounts.csv", overwriting the
+previous day's file in place (so the folder only ever holds the latest).
+
 Usage:
-    python3 users_accounts_report.py                 # write CSV to REPORTS_DIR
-    python3 users_accounts_report.py --out path.csv  # write to a specific path
+    python3 users_accounts_report.py                 # build CSV + upload to SharePoint
+    python3 users_accounts_report.py --out path.csv  # write CSV to a specific path
+    python3 users_accounts_report.py --no-upload     # build CSV only, skip SharePoint
 """
 
 import argparse
@@ -32,8 +37,15 @@ import sys
 
 import pandas as pd
 
-from modules.utils.config import REPORTS_DIR
+from modules.utils.config import REPORTS_DIR, SHAREPOINT_DRIVE_ID
 from modules.utils.data_loader import load_accounts, load_users
+from modules.utils.sharepoint import authenticate_graph, upload
+
+# SharePoint destination. Fixed filename inside a dedicated folder; each daily
+# upload overwrites the previous file in place, so the folder always holds
+# exactly the latest snapshot.
+SHAREPOINT_FOLDER = "Platform Data/Users and Accounts"
+SHAREPOINT_FILENAME = "users_accounts.csv"
 
 # === Logging ===
 
@@ -114,6 +126,37 @@ def build_report() -> pd.DataFrame:
     return report
 
 
+def upload_to_sharepoint(csv_bytes: bytes) -> bool:
+    """Upload the CSV to SharePoint, overwriting the previous day's file in place.
+
+    Returns True on success. Raises on missing config so a misconfigured cron
+    run fails loudly (the wrapper emails on non-zero exit) rather than silently
+    skipping the publish.
+    """
+    if not SHAREPOINT_DRIVE_ID:
+        raise RuntimeError(
+            "SHAREPOINT_DRIVE_ID not set — cannot upload (source the .env first)."
+        )
+    token = authenticate_graph()
+    if not token:
+        raise RuntimeError("Microsoft Graph authentication failed.")
+
+    ok = upload(
+        token,
+        SHAREPOINT_DRIVE_ID,
+        SHAREPOINT_FILENAME,
+        csv_bytes,
+        folder=SHAREPOINT_FOLDER,
+    )
+    if ok:
+        log.info(
+            "Uploaded to SharePoint: %s/%s (overwrote previous)",
+            SHAREPOINT_FOLDER,
+            SHAREPOINT_FILENAME,
+        )
+    return ok
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -121,14 +164,28 @@ def main() -> int:
         default=None,
         help="Output CSV path (default: REPORTS_DIR/users_accounts.csv)",
     )
+    parser.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="Build the CSV locally only; skip the SharePoint upload.",
+    )
     args = parser.parse_args()
 
     out_path = args.out or os.path.join(REPORTS_DIR, "users_accounts.csv")
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
     report = build_report()
-    report.to_csv(out_path, index=False)
+    csv_bytes = report.to_csv(index=False).encode("utf-8")
+
+    with open(out_path, "wb") as f:
+        f.write(csv_bytes)
     log.info("Wrote %d rows to %s", len(report), out_path)
+
+    if args.no_upload:
+        log.info("--no-upload set; skipping SharePoint publish.")
+    elif not upload_to_sharepoint(csv_bytes):
+        log.error("SharePoint upload failed.")
+        return 1
     return 0
 
 

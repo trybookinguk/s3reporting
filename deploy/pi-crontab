@@ -77,5 +77,14 @@ WARMURL=http://127.0.0.1:3000/api/warm?token=xU2tGU1zJUmZya1IH2GiNmKrBIre8p
 0 8 * * 2 $WRAP salesiq-weekly /root/logs/salesiq-weekly.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 salesiq_weekly.py'
 5 8 * * 2 $WRAP weekly-reporting /root/logs/weekly-reporting.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 weekly_reporting_unified.py'
 
+# 8. Monthly sales commission report (2nd of the month, 06:00 UTC). Runs on the
+#    2nd because the prior month's S3 BookingData file only finalises once the
+#    new month starts, and the 2nd guarantees the daily prepare-data (02:00) has
+#    ingested it. SCHEDULED_RUN=true makes the script report the PREVIOUS month.
+#    Emails each salesperson their own PDF (resolved from their Zoho login email)
+#    plus a CSV summary to the commission manager — needs the ZohoCRM.users.READ
+#    scope on the refresh token.
+0 6 2 * * $WRAP commission /root/logs/commission.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && SCHEDULED_RUN=true python3 sales_commission_report.py'
+
 # Log rotation: delete logs older than 30 days, weekly on Sunday at midnight
 0 0 * * 0 find /root/logs -name "*.log" -mtime +30 -delete

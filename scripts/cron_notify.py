@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from modules.utils.email_utils import send_html_email
 
-FAILURE_RECIPIENT = ["henry@trybooking.co.uk"]
+FAILURE_RECIPIENT = ["henry@trybooking.co.uk", "kathryn@trybooking.co.uk"]
 LOG_TAIL_LINES = 80
 
 

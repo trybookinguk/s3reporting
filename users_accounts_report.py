@@ -20,14 +20,16 @@ Idempotent: each run regenerates the full report from the latest monthly
 snapshots. Both load_users() and load_accounts() fall back to the previous
 month's file on the 1st (the new month's file isn't published until the 2nd).
 
-By default the CSV is also uploaded to SharePoint at
+The report is uploaded to SharePoint at
 "Platform Data/Users and Accounts/users_accounts.csv", overwriting the
 previous day's file in place (so the folder only ever holds the latest).
+By default it is NOT written to local disk — SharePoint is the single copy,
+so no regulated PII file lingers on the Pi.
 
 Usage:
-    python3 users_accounts_report.py                 # build CSV + upload to SharePoint
-    python3 users_accounts_report.py --out path.csv  # write CSV to a specific path
-    python3 users_accounts_report.py --no-upload     # build CSV only, skip SharePoint
+    python3 users_accounts_report.py                       # upload to SharePoint only
+    python3 users_accounts_report.py --out /tmp/ua.csv     # also write a local copy
+    python3 users_accounts_report.py --out /tmp/ua.csv --no-upload  # local-only dry run
 """
 
 import argparse
@@ -37,7 +39,7 @@ import sys
 
 import pandas as pd
 
-from modules.utils.config import REPORTS_DIR, SHAREPOINT_DRIVE_ID
+from modules.utils.config import SHAREPOINT_DRIVE_ID
 from modules.utils.data_loader import load_accounts, load_users
 from modules.utils.sharepoint import authenticate_graph, upload
 
@@ -162,24 +164,30 @@ def main() -> int:
     parser.add_argument(
         "--out",
         default=None,
-        help="Output CSV path (default: REPORTS_DIR/users_accounts.csv)",
+        help=(
+            "Also write the CSV to this local path (for dry runs/debug). "
+            "By default nothing is written to disk — the report is uploaded "
+            "to SharePoint only, so no regulated copy lingers on the Pi."
+        ),
     )
     parser.add_argument(
         "--no-upload",
         action="store_true",
-        help="Build the CSV locally only; skip the SharePoint upload.",
+        help="Skip the SharePoint upload (use with --out for a local-only dry run).",
     )
     args = parser.parse_args()
 
-    out_path = args.out or os.path.join(REPORTS_DIR, "users_accounts.csv")
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-
     report = build_report()
     csv_bytes = report.to_csv(index=False).encode("utf-8")
+    log.info("Built report: %d rows", len(report))
 
-    with open(out_path, "wb") as f:
-        f.write(csv_bytes)
-    log.info("Wrote %d rows to %s", len(report), out_path)
+    # Local write is opt-in via --out only. The scheduled job passes no --out,
+    # so SharePoint is the single copy and no PII CSV is left on the Pi's disk.
+    if args.out:
+        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+        with open(args.out, "wb") as f:
+            f.write(csv_bytes)
+        log.info("Wrote CSV to %s", args.out)
 
     if args.no_upload:
         log.info("--no-upload set; skipping SharePoint publish.")

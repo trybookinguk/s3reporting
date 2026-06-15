@@ -56,10 +56,10 @@ WARMURL=http://127.0.0.1:3000/api/warm?token=xU2tGU1zJUmZya1IH2GiNmKrBIre8p
 # 5b. Combined users + accounts spreadsheet (one row per active user, with
 #     their account's name/industry/sub-industry). Reads only the monthly
 #     Users + Accounts S3 snapshots, so timing isn't sensitive; runs daily
-#     after the 02:xx S3 jobs. Writes /root/s3reporting/reports/users_accounts.csv
-#     and uploads it (default, no flag) to SharePoint at
-#     "Platform Data/Users and Accounts/users_accounts.csv", overwriting the
-#     previous day's file in place.
+#     after the 02:xx S3 jobs. Upload-only: builds in memory and uploads to
+#     SharePoint at "Platform Data/Users and Accounts/users_accounts.csv",
+#     overwriting the previous day's file in place. No --out, so nothing is
+#     written to the Pi's disk (no regulated PII copy lingers locally).
 50 2 * * * $WRAP users-accounts /root/logs/users-accounts.log -- bash -c 'set -a && source /root/s3reporting/.env && set +a && cd /root/s3reporting && python3 users_accounts_report.py'
 
 # 6. Nightly backup of the irreplaceable Pi state to SharePoint: the two secret

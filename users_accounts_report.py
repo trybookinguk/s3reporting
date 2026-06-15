@@ -7,11 +7,12 @@ spreadsheet — one row per user, carrying that user's account-level
 details alongside their identity and role.
 
 Output columns:
+    Account ID         — Users.AccountId (= Accounts.Id)
     User ID            — Users.UserId
     Vero ID            — "uk_" + UserId
+    Email              — Users.Username (the user's login email)
     User Name          — Users.FirstName + " " + Users.LastName
     Account Role       — Users.RoleName (the user's role in the account)
-    Account ID         — Users.AccountId (= Accounts.Id)
     Account Name       — Accounts.AccountName
     Account Industry   — Accounts.Industry
     Account Sub Industry — Accounts.SubIndustry
@@ -58,13 +59,14 @@ logging.basicConfig(
 )
 log = logging.getLogger("users-accounts-report")
 
-# Final column order for the spreadsheet.
+# Final column order for the spreadsheet. Account ID leads.
 OUTPUT_COLUMNS = [
+    "Account ID",
     "User ID",
     "Vero ID",
+    "Email",
     "User Name",
     "Account Role",
-    "Account ID",
     "Account Name",
     "Account Industry",
     "Account Sub Industry",
@@ -90,6 +92,8 @@ def build_report() -> pd.DataFrame:
     u["_user_id"] = pd.to_numeric(users["UserId"], errors="coerce").astype("Int64")
     u["_account_id"] = pd.to_numeric(users["AccountId"], errors="coerce").astype("Int64")
     u["Account Role"] = users["RoleName"].astype("string").str.strip()
+    # Username is the user's login email.
+    u["Email"] = users["Username"].astype("string").str.strip()
 
     first = users["FirstName"].astype("string").fillna("").str.strip()
     last = users["LastName"].astype("string").fillna("").str.strip()

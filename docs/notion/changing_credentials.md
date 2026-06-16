@@ -34,15 +34,14 @@ To connect:
 
 Who can Tailscale-SSH into the Pi is controlled by the tailnet **SSH access
 rules** (Admin console → **Access Controls** → the `ssh` section) — NOT by
-anything on the Pi. The Pi is owned by `alex@`, so the default
-"users can SSH into their own devices" (`dst: autogroup:self`) rule only lets
-`alex@` in. To grant anyone else, add an explicit rule, e.g.:
+anything on the Pi. The Pi is tagged **`tag:server`**, so access is granted by
+an explicit rule targeting that tag:
 
 ```jsonc
 {
-  "action": "check",                         // browser re-auth; use "accept" to skip
-  "src":   ["autogroup:member"],             // or specific users e.g. "henry@trybooking.co.uk"
-  "dst":   ["alex@trybooking.co.uk"],        // alex@'s devices, incl. the Pi (until the Pi is tagged)
+  "action": "check",                  // browser re-auth; use "accept" to skip
+  "src":   ["autogroup:member"],      // or specific users e.g. "henry@trybooking.co.uk"
+  "dst":   ["tag:server"],            // the Pi (and any other tag:server node)
   "users": ["root"]
 }
 ```
@@ -51,9 +50,10 @@ anything on the Pi. The Pi is owned by `alex@`, so the default
   save the policy. No Pi access needed — it takes effect immediately.
 - **Remove a leaver:** drop them from `src` (and remove their device from the
   tailnet). Again, console-only.
-- **Future cleanup:** tag the Pi (`tag:pi`) and target `dst: ["tag:pi"]` instead
-  of the owner's email — cleaner, but applying the tag needs `tailscale up
-  --advertise-tags=tag:pi` ON the Pi, so do it once you're connected.
+- **Note:** because the Pi is tagged, it's owned by `tag:server`, not by a
+  person — so the default `dst: autogroup:self` ("SSH into your own devices")
+  rule does **not** apply to it. The explicit `tag:server` rule above is what
+  grants access; don't rely on the self rule for the Pi.
 
 > Direct key-based SSH (`ssh root@192.168.0.55` with an `~/.ssh` key) is no
 > longer the access path. If Tailscale SSH is ever misconfigured and locks

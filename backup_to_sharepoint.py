@@ -38,6 +38,14 @@ from pathlib import Path
 
 import requests
 
+import tempfile
+
+from modules.utils.backup_crypto import (
+    encrypt_stream,
+    resolve_passphrase,
+    BackupCryptoError,
+)
+
 # Reuse the auth, upload and retry helpers from the existing sync — importing is
 # side-effect-free (its main() is guarded by __name__ == "__main__").
 from s3_to_sharepoint import (
@@ -89,6 +97,12 @@ WAREHOUSE_FILES = [
     f"{PREPARED_DIR}/warehouse.db",
 ]
 
+# Every backed-up file is encrypted before upload, per the "all client data
+# encrypted at rest" commitment — secrets, state DBs, AND the warehouses (which
+# hold the booking data itself). Uploaded as "<name>.enc"; restore decrypts by
+# the .enc suffix + magic header. Encryption streams to a temp file so even the
+# multi-GB warehouse never lands in memory (see upload_one).
+
 # Where backups go in the SharePoint drive, and how many dated copies to keep.
 BACKUP_FOLDER = os.environ.get("BACKUP_FOLDER", "Backups/pi")
 BACKUP_KEEP = int(os.environ.get("BACKUP_KEEP", "7"))
@@ -108,21 +122,58 @@ def _backup_date():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def upload_one(token, drive_id, folder, src_path):
-    """Upload a single file, choosing small vs chunked by size. Returns bool."""
+def upload_one(token, drive_id, folder, src_path, passphrase):
+    """Encrypt a file and upload it as "<name>.enc". Returns True/False/None.
+
+    The file is stream-encrypted to a temp file on the same filesystem (bounded
+    memory — the 3.5 GB warehouse never sits in RAM), then uploaded via the
+    existing size-based path so the encrypted temp still goes chunked when large.
+    The temp file is always cleaned up.
+    """
     p = Path(src_path)
     if not p.exists():
         log.warning("Skipping (not found): %s", src_path)
         return None  # distinguish "missing" from "failed"
 
-    size = p.stat().st_size
-    key = p.name
-    log.info("Backing up %s (%s)...", key, _fmt_size(size))
+    if not passphrase:
+        # Never silently upload anything in the clear.
+        log.error("No passphrase available to encrypt %s; refusing to upload.", p.name)
+        return False
 
-    if size <= SMALL_FILE_LIMIT:
-        with open(p, "rb") as f:
-            return upload_small_file(token, drive_id, folder, key, f.read())
-    return upload_large_file(token, drive_id, folder, key, str(p), size)
+    key = p.name + ".enc"
+    log.info("Backing up %s (%s, encrypting -> %s)...", p.name, _fmt_size(p.stat().st_size), key)
+
+    # Temp file beside the source so it's on the same disk (atomic-ish, no /tmp
+    # tmpfs surprises) and gets cleaned up even on failure.
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix=".bkpenc-", dir=str(p.parent))
+    try:
+        with os.fdopen(tmp_fd, "wb") as dst, open(p, "rb") as src:
+            encrypt_stream(src, dst, passphrase)
+        enc_size = os.path.getsize(tmp_path)
+        if enc_size <= SMALL_FILE_LIMIT:
+            with open(tmp_path, "rb") as f:
+                return upload_small_file(token, drive_id, folder, key, f.read())
+        return upload_large_file(token, drive_id, folder, key, tmp_path, enc_size)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def delete_folder(token, drive_id, folder):
+    """Delete a backup subfolder (and its contents) if it exists. Used to fully
+    replace a same-day re-run rather than letting old files accumulate alongside
+    new ones — which previously left stale PLAINTEXT files next to the new .enc
+    ones in a re-used dated folder."""
+    url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{folder}"
+    resp = _request_with_retry(requests.delete, url, headers=graph_headers(token))
+    if resp.status_code in (204, 200):
+        log.info("Cleared existing folder %s before re-upload.", folder)
+    elif resp.status_code == 404:
+        pass  # nothing there — fine
+    else:
+        log.warning("Could not clear existing folder %s: %d", folder, resp.status_code)
 
 
 def list_backup_dates(token, drive_id):
@@ -172,15 +223,30 @@ def run(no_warehouse=False, dry_run=False):
         for src in targets:
             p = Path(src)
             state = _fmt_size(p.stat().st_size) if p.exists() else "MISSING"
-            log.info("[dry-run] would upload %s (%s) -> %s/", src, state, folder)
+            log.info("[dry-run] would encrypt + upload %s (%s) -> %s/%s.enc",
+                     src, state, folder, p.name)
         log.info("[dry-run] would then keep the %d most recent dated folders.", BACKUP_KEEP)
         return 0
 
+    # Resolve the encryption passphrase up front so a misconfiguration fails the
+    # whole run before anything is uploaded, rather than half-uploading and then
+    # erroring on the first sensitive file.
+    try:
+        passphrase = resolve_passphrase(prompt_if_missing=False)
+    except BackupCryptoError as e:
+        log.error("%s. Set %s in .env so the secret/state files can be encrypted.",
+                  e, "BACKUP_SECRET_PASSPHRASE")
+        return 1
+
     token = authenticate_graph()
+
+    # Replace any existing same-day folder so a re-run can't leave stale files
+    # (notably plaintext from an older code version) alongside the new uploads.
+    delete_folder(token, SHAREPOINT_DRIVE_ID, folder)
 
     failures, uploaded, missing = [], 0, []
     for src in targets:
-        result = upload_one(token, SHAREPOINT_DRIVE_ID, folder, src)
+        result = upload_one(token, SHAREPOINT_DRIVE_ID, folder, src, passphrase=passphrase)
         if result is True:
             uploaded += 1
         elif result is None:

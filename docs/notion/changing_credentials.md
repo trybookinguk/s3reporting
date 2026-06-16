@@ -12,23 +12,97 @@ usually has to be updated in **both** places.
 
 ## Reaching the Pi
 
-Everything below is done over SSH (key auth, no password). The Pi is
-`TrybookingPi`, root login.
+Access is via **Tailscale SSH** — we no longer connect with local SSH keys
+(`~/.ssh` keypairs / `authorized_keys`). Tailscale SSH authenticates by your
+**Tailscale identity**, not a key file, so there is nothing to copy onto the Pi
+or onto your laptop. The Pi is `TrybookingPi`, you log in as `root`.
 
-| From | Address |
-|---|---|
-| On the office LAN | `ssh root@192.168.0.55` |
-| Off-network (Tailscale) | `ssh root@trybookingpi.tail1fb257.ts.net` (or the tailnet IP `ssh root@100.79.35.128`) |
+To connect:
 
-- **Tailscale** is the VPN that makes the Pi reachable off the LAN. You need to
-  be a member of the **`trybooking.co.uk`** tailnet and have Tailscale running on
-  your machine; then the Pi resolves by its MagicDNS name above. Prefer the DNS
-  name over the `100.x` IP — the IP can change, the name won't.
-- Quick check: `ssh root@192.168.0.55 'echo connected'`.
-- SSH access is by public key — a new team member's key must be added to the
-  Pi's `/root/.ssh/authorized_keys`, and Tailscale access granted, before any of
-  this works. (Removing a leaver's access is the reverse: drop their key from
-  `authorized_keys` and remove their device from the tailnet.)
+1. Be signed in to the **`trybooking.co.uk`** tailnet with Tailscale running on
+   your machine.
+2. SSH to the Pi by its MagicDNS name — Tailscale intercepts it:
+
+   ```bash
+   ssh root@trybookingpi.tail1fb257.ts.net
+   ```
+
+   (The tailnet IP `100.79.35.128` also works, but prefer the name — the IP can
+   change.) You may be asked to re-authenticate in the browser ("check mode").
+
+### Granting / removing access (admin console only)
+
+Who can Tailscale-SSH into the Pi is controlled by the tailnet **SSH access
+rules** (Admin console → **Access Controls** → the `ssh` section) — NOT by
+anything on the Pi. The Pi is owned by `alex@`, so the default
+"users can SSH into their own devices" (`dst: autogroup:self`) rule only lets
+`alex@` in. To grant anyone else, add an explicit rule, e.g.:
+
+```jsonc
+{
+  "action": "check",                         // browser re-auth; use "accept" to skip
+  "src":   ["autogroup:member"],             // or specific users e.g. "henry@trybooking.co.uk"
+  "dst":   ["alex@trybooking.co.uk"],        // alex@'s devices, incl. the Pi (until the Pi is tagged)
+  "users": ["root"]
+}
+```
+
+- **Add a person:** add their user to `src` (or rely on `autogroup:member`),
+  save the policy. No Pi access needed — it takes effect immediately.
+- **Remove a leaver:** drop them from `src` (and remove their device from the
+  tailnet). Again, console-only.
+- **Future cleanup:** tag the Pi (`tag:pi`) and target `dst: ["tag:pi"]` instead
+  of the owner's email — cleaner, but applying the tag needs `tailscale up
+  --advertise-tags=tag:pi` ON the Pi, so do it once you're connected.
+
+> Direct key-based SSH (`ssh root@192.168.0.55` with an `~/.ssh` key) is no
+> longer the access path. If Tailscale SSH is ever misconfigured and locks
+> everyone out, recovery is via physical/console access to the Pi.
+
+## GitHub access
+
+Both repos are **private**, under the **`trybookinguk`** GitHub org:
+
+- `trybookinguk/s3reporting`
+- `trybookinguk/reporting-dashboard`
+
+Code changes follow: edit → commit → push → `git pull` on the Pi (the Pi runs
+git-tracked code; see the deploy steps in [PI Handover](PI_HANDOVER.md)). For
+that you need GitHub auth that can read/write the org repos.
+
+### Set up GitHub auth (on your workstation)
+
+Use the GitHub CLI — it manages the credential and wires up git:
+
+```bash
+gh auth login          # choose GitHub.com → HTTPS → authenticate in browser
+gh auth setup-git      # makes git use the gh credential for HTTPS pushes
+```
+
+Make sure the account you log in as is a **member of the `trybookinguk` org**
+with access to both repos (ask an org owner to add them).
+
+### "Repository not found" on push/pull
+
+This usually means git is using the **wrong GitHub account**, not that the repo
+is missing — GitHub returns 404 (not 403) for a private repo when the
+authenticated user can't see it. Check and switch:
+
+```bash
+gh auth status               # shows which account(s) are logged in + active
+gh auth switch               # switch the active account (e.g. to the trybookinguk-org one)
+```
+
+(During the June 2026 credential work a push failed exactly this way until
+`gh auth switch` selected the org-member account.)
+
+### On the Pi
+
+The Pi already has working git credentials for both repos under `/root`. A new
+operator normally doesn't touch GitHub auth on the Pi — they pull/push from
+their own workstation and the Pi just `git pull`s. If the Pi's git auth ever
+needs renewing, run `gh auth login` (or refresh the stored token) while
+connected to the Pi via Tailscale SSH.
 
 ## Where credentials live
 

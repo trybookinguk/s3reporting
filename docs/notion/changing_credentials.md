@@ -10,6 +10,26 @@ two services that run on the Raspberry Pi. There is no shared secret store and
 no `.env` in git — each service reads its own file on the Pi, so a credential
 usually has to be updated in **both** places.
 
+## Reaching the Pi
+
+Everything below is done over SSH (key auth, no password). The Pi is
+`TrybookingPi`, root login.
+
+| From | Address |
+|---|---|
+| On the office LAN | `ssh root@192.168.0.55` |
+| Off-network (Tailscale) | `ssh root@trybookingpi.tail1fb257.ts.net` (or the tailnet IP `ssh root@100.79.35.128`) |
+
+- **Tailscale** is the VPN that makes the Pi reachable off the LAN. You need to
+  be a member of the **`trybooking.co.uk`** tailnet and have Tailscale running on
+  your machine; then the Pi resolves by its MagicDNS name above. Prefer the DNS
+  name over the `100.x` IP — the IP can change, the name won't.
+- Quick check: `ssh root@192.168.0.55 'echo connected'`.
+- SSH access is by public key — a new team member's key must be added to the
+  Pi's `/root/.ssh/authorized_keys`, and Tailscale access granted, before any of
+  this works. (Removing a leaver's access is the reverse: drop their key from
+  `authorized_keys` and remove their device from the tailnet.)
+
 ## Where credentials live
 
 | Service | File on the Pi | Format | Reload needed? |

@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import sys
-import tempfile
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -181,12 +180,35 @@ def list_s3_objects(s3_client, bucket):
     return objects
 
 
-def download_s3_file(s3_client, bucket, key, dest_path):
-    """Download a file from S3 to a local path with retry logic."""
+def download_s3_bytes(s3_client, bucket, key):
+    """Download a (small) file from S3 fully into memory, with retry logic."""
     for attempt in range(MAX_RETRIES):
         try:
-            s3_client.download_file(bucket, key, dest_path)
-            return
+            obj = s3_client.get_object(Bucket=bucket, Key=key)
+            return obj["Body"].read()
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                wait = RETRY_BACKOFF * (2 ** attempt)
+                log.warning("Retry %d/%d for S3 download of %s (waiting %ds): %s",
+                            attempt + 1, MAX_RETRIES, key, wait, e)
+                time.sleep(wait)
+            else:
+                raise
+
+
+def get_s3_object_stream(s3_client, bucket, key):
+    """Open a streaming S3 object body, with retry logic for the initial request.
+
+    Used for large files so they can be piped straight into the SharePoint
+    upload session without ever being buffered to local disk - downloading
+    a multi-GB file to a temp file on a constrained device (e.g. the Pi)
+    can exhaust local disk space, which is what caused repeated
+    "No space left on device" failures.
+    """
+    for attempt in range(MAX_RETRIES):
+        try:
+            obj = s3_client.get_object(Bucket=bucket, Key=key)
+            return obj["Body"], obj["ContentLength"]
         except Exception as e:
             if attempt < MAX_RETRIES - 1:
                 wait = RETRY_BACKOFF * (2 ** attempt)
@@ -270,8 +292,14 @@ def upload_small_file(token, drive_id, folder, key, data):
     return False
 
 
-def upload_large_file(token, drive_id, folder, key, file_path, file_size):
-    """Upload a file > 4MB using a resumable upload session."""
+def upload_large_file(token, drive_id, folder, key, stream, file_size):
+    """Upload a file > 4MB using a resumable upload session.
+
+    `stream` is any file-like object supporting sequential .read(n) calls
+    (a local file handle or, more commonly here, a boto3 StreamingBody read
+    directly from S3) - chunks are read and uploaded in order, so no local
+    buffering of the whole file is required.
+    """
     path = f"{folder}/{key}" if folder else key
     url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{path}:/createUploadSession"
 
@@ -302,41 +330,40 @@ def upload_large_file(token, drive_id, folder, key, file_path, file_size):
 
     # Upload in chunks — log progress at INFO level for large files (>100 MB)
     is_large = file_size > 100 * 1024 * 1024
-    with open(file_path, "rb") as f:
-        offset = 0
-        chunk_num = 0
-        total_chunks = (file_size + UPLOAD_CHUNK_SIZE - 1) // UPLOAD_CHUNK_SIZE
-        chunk_start_time = time.time()
-        while offset < file_size:
-            chunk_end = min(offset + UPLOAD_CHUNK_SIZE, file_size) - 1
-            chunk_data = f.read(UPLOAD_CHUNK_SIZE)
-            chunk_length = len(chunk_data)
-            chunk_num += 1
+    offset = 0
+    chunk_num = 0
+    total_chunks = (file_size + UPLOAD_CHUNK_SIZE - 1) // UPLOAD_CHUNK_SIZE
+    chunk_start_time = time.time()
+    while offset < file_size:
+        chunk_end = min(offset + UPLOAD_CHUNK_SIZE, file_size) - 1
+        chunk_data = stream.read(UPLOAD_CHUNK_SIZE)
+        chunk_length = len(chunk_data)
+        chunk_num += 1
 
-            chunk_headers = {
-                "Content-Length": str(chunk_length),
-                "Content-Range": f"bytes {offset}-{chunk_end}/{file_size}",
-            }
+        chunk_headers = {
+            "Content-Length": str(chunk_length),
+            "Content-Range": f"bytes {offset}-{chunk_end}/{file_size}",
+        }
 
-            chunk_response = _request_with_retry(
-                requests.put, upload_url, headers=chunk_headers, data=chunk_data
-            )
+        chunk_response = _request_with_retry(
+            requests.put, upload_url, headers=chunk_headers, data=chunk_data
+        )
 
-            if chunk_response.status_code not in (200, 201, 202):
-                log.error("Chunk upload failed for %s (chunk %d/%d): %d - %s",
-                          key, chunk_num, total_chunks, chunk_response.status_code, chunk_response.text[:200])
-                return False
+        if chunk_response.status_code not in (200, 201, 202):
+            log.error("Chunk upload failed for %s (chunk %d/%d): %d - %s",
+                      key, chunk_num, total_chunks, chunk_response.status_code, chunk_response.text[:200])
+            return False
 
-            pct = int((chunk_end + 1) / file_size * 100)
-            if is_large and (chunk_num % 10 == 0 or pct == 100):
-                elapsed = time.time() - chunk_start_time
-                rate = (offset + chunk_length) / elapsed if elapsed > 0 else 0
-                log.info("  %s: %d%% (%s/%s, %s/s)",
-                         key, pct, _fmt_size(offset + chunk_length), _fmt_size(file_size), _fmt_size(rate))
-            else:
-                log.debug("  %s: chunk %d/%d (%d%%)", key, chunk_num, total_chunks, pct)
+        pct = int((chunk_end + 1) / file_size * 100)
+        if is_large and (chunk_num % 10 == 0 or pct == 100):
+            elapsed = time.time() - chunk_start_time
+            rate = (offset + chunk_length) / elapsed if elapsed > 0 else 0
+            log.info("  %s: %d%% (%s/%s, %s/s)",
+                     key, pct, _fmt_size(offset + chunk_length), _fmt_size(file_size), _fmt_size(rate))
+        else:
+            log.debug("  %s: chunk %d/%d (%d%%)", key, chunk_num, total_chunks, pct)
 
-            offset += chunk_length
+        offset += chunk_length
 
     return True
 
@@ -423,23 +450,29 @@ def sync(dry_run=False):
     deleted = 0
 
     def _upload_one(key, expected_size):
-        """Download from S3 and upload to SharePoint. Returns (key, success, file_size)."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp:
-            tmp_path = tmp.name
+        """Stream from S3 straight into a SharePoint upload. Returns (key, success, file_size).
 
+        Files are never buffered to local disk: small files are read fully
+        into memory (cheap, <= SMALL_FILE_LIMIT) and large files are piped
+        chunk-by-chunk from the S3 response body into the SharePoint upload
+        session. This avoids exhausting local disk space on constrained
+        devices (e.g. the Pi) when syncing large files like BookingDataAll.
+        """
         try:
             t0 = time.time()
-            download_s3_file(s3_client, S3_BUCKET, key, tmp_path)
-            file_size = os.path.getsize(tmp_path)
-            dl_time = time.time() - t0
+            if expected_size <= SMALL_FILE_LIMIT:
+                data = download_s3_bytes(s3_client, S3_BUCKET, key)
+                file_size = len(data)
+                dl_time = time.time() - t0
 
-            t1 = time.time()
-            if file_size <= SMALL_FILE_LIMIT:
-                with open(tmp_path, "rb") as f:
-                    data = f.read()
+                t1 = time.time()
                 success = upload_small_file(token, SHAREPOINT_DRIVE_ID, SHAREPOINT_FOLDER, key, data)
             else:
-                success = upload_large_file(token, SHAREPOINT_DRIVE_ID, SHAREPOINT_FOLDER, key, tmp_path, file_size)
+                stream, file_size = get_s3_object_stream(s3_client, S3_BUCKET, key)
+                dl_time = time.time() - t0
+
+                t1 = time.time()
+                success = upload_large_file(token, SHAREPOINT_DRIVE_ID, SHAREPOINT_FOLDER, key, stream, file_size)
             ul_time = time.time() - t1
 
             if success:
@@ -450,11 +483,6 @@ def sync(dry_run=False):
         except Exception as e:
             log.error("Failed %s: %s", key, e)
             return key, False, 0
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
 
     def _delete_one(key):
         """Delete a file from SharePoint. Returns (key, success)."""

@@ -103,10 +103,15 @@ def main():
         print(f"✗ AWS authentication failed: {e}")
         sys.exit(1)
 
-    # Confirm the credentials can actually reach the reporting bucket.
+    # Confirm the credentials can actually reach the reporting bucket. Uses
+    # list_objects_v2 (same call s3_to_sharepoint.py's list_s3_objects() makes)
+    # rather than head_bucket: HeadBucket requires s3:ListBucket scoped to the
+    # bucket ARN itself, which some IAM policies grant differently than
+    # s3:ListBucket/s3:GetObject scoped to objects - a 403 here doesn't
+    # necessarily mean the real sync jobs would fail too.
     s3_client = boto3.client("s3", **session_kwargs)
     try:
-        s3_client.head_bucket(Bucket=S3_BUCKET)
+        s3_client.list_objects_v2(Bucket=S3_BUCKET, MaxKeys=1)
         print(f"✓ S3 access confirmed for bucket: {S3_BUCKET}")
     except ClientError as e:
         code = e.response.get("Error", {}).get("Code", "Unknown")

@@ -13,6 +13,7 @@ Usage:
 """
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,20 +21,34 @@ S3_BUCKET = "produk-rdsextracts-438255373632"
 
 
 def load_env_file(path: Path):
-    """Minimal .env loader (KEY=VALUE per line, '#' comments, no export)."""
+    """Load .env by sourcing it in bash, matching how cron_wrapper.sh jobs do it
+    (`set -a && source .env && set +a`) - handles `export `, quoting, and
+    variable references that a naive KEY=VALUE line parser would miss."""
     if not path.exists():
         print(f"✗ .env file not found: {path}")
         sys.exit(1)
 
-    with open(path, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            os.environ.setdefault(key, value)
+    marker = "__ENV_AFTER_SOURCE__"
+    script = f"set -a && source {path} && set +a && echo {marker} && env -0"
+    result = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=False
+    )
+    if result.returncode != 0:
+        print(f"✗ Failed to source {path}: {result.stderr.decode(errors='replace')}")
+        sys.exit(1)
+
+    output = result.stdout.decode(errors="replace")
+    marker_pos = output.find(marker)
+    if marker_pos == -1:
+        print(f"✗ Could not parse environment after sourcing {path}")
+        sys.exit(1)
+    env_blob = output[marker_pos + len(marker):].lstrip("\n")
+
+    for entry in env_blob.split("\0"):
+        if "=" not in entry:
+            continue
+        key, _, value = entry.partition("=")
+        os.environ[key] = value
 
     print(f"✓ Loaded environment from {path}")
 

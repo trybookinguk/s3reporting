@@ -19,6 +19,13 @@ AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get(
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get(
     "AWS_SECRET_KEY"
 )
+# Optional session token — set only for temporary/MFA credentials (from
+# `aws sts get-session-token`). Long-lived IAM keys leave it unset. boto3
+# requires it alongside the temp key/secret, else it rejects them with
+# InvalidClientTokenId.
+AWS_SESSION_TOKEN = os.environ.get("AWS_SESSION_TOKEN") or os.environ.get(
+    "AWS_SECURITY_TOKEN"
+)
 
 # Zoho CRM Credentials
 ZOHO_CLIENT_ID = os.environ.get("ZOHO_CLIENT_ID")

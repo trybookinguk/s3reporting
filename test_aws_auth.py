@@ -66,6 +66,10 @@ def main():
 
     access_key = os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY")
     secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_KEY")
+    # Temporary/MFA session credentials (from `aws sts get-session-token` or the
+    # MFA widget) also carry a session token — without it, boto3 rejects the temp
+    # keys with InvalidClientTokenId. Optional: long-lived keys don't set it.
+    session_token = os.environ.get("AWS_SESSION_TOKEN") or os.environ.get("AWS_SECURITY_TOKEN")
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
 
     if not access_key or not secret_key:
@@ -73,6 +77,8 @@ def main():
         sys.exit(1)
 
     print(f"✓ Found access key: {access_key[:4]}...{access_key[-4:]}")
+    if session_token:
+        print("✓ Found session token (using temporary/MFA credentials)")
 
     try:
         import boto3
@@ -85,6 +91,8 @@ def main():
         "aws_access_key_id": access_key,
         "aws_secret_access_key": secret_key,
     }
+    if session_token:
+        session_kwargs["aws_session_token"] = session_token
     if region:
         session_kwargs["region_name"] = region
 

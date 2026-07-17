@@ -153,7 +153,10 @@ def upload_one(token, drive_id, folder, src_path, passphrase):
         if enc_size <= SMALL_FILE_LIMIT:
             with open(tmp_path, "rb") as f:
                 return upload_small_file(token, drive_id, folder, key, f.read())
-        return upload_large_file(token, drive_id, folder, key, tmp_path, enc_size)
+        # upload_large_file reads sequentially from a file-like object, so hand
+        # it an open handle to the encrypted temp file (not the path string).
+        with open(tmp_path, "rb") as f:
+            return upload_large_file(token, drive_id, folder, key, f, enc_size)
     finally:
         try:
             os.unlink(tmp_path)

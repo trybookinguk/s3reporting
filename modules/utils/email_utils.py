@@ -18,6 +18,11 @@ from .config import (
 GRAPH_SCOPE = ["https://graph.microsoft.com/.default"]
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
+# Auto-CC rule: any email whose To includes AUTO_CC_ON_HENRY is also CC'd to
+# AUTO_CC_RECIPIENT (Kathryn). Applied centrally in send_html_email.
+AUTO_CC_ON_HENRY = "henry@trybooking.co.uk"
+AUTO_CC_RECIPIENT = "kathryn@trybooking.co.uk"
+
 # Graph rejects sendMail payloads above ~4 MB. Use 3 MB as the inline ceiling
 # so headers + base64 overhead don't push the request past the limit.
 INLINE_ATTACHMENT_LIMIT = 3 * 1024 * 1024
@@ -158,6 +163,17 @@ def send_html_email(to, subject, html_content, cc=None, bcc=None, plain_text=Non
     to_recipients = _to_recipient_list(to)
     cc_recipients = _to_recipient_list(cc)
     bcc_recipients = _to_recipient_list(bcc)
+
+    # Any email addressed to Henry is also CC'd to Kathryn. Applied centrally
+    # here so it holds for every path (reports, tier movements, cron alerts).
+    # Skip if Kathryn is already a To or CC recipient, to avoid duplicates.
+    def _addrs(recips):
+        return {r["emailAddress"]["address"].lower() for r in recips}
+
+    if AUTO_CC_ON_HENRY.lower() in _addrs(to_recipients):
+        already = _addrs(to_recipients) | _addrs(cc_recipients)
+        if AUTO_CC_RECIPIENT.lower() not in already:
+            cc_recipients += _to_recipient_list(AUTO_CC_RECIPIENT)
 
     message = {
         "subject": f"{'[TEST] ' if TEST_MODE else ''}{subject}",

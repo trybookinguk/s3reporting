@@ -81,7 +81,7 @@ def email_upcoming_events_report(report_df, filename):
     logger.info(f"Preparing upcoming events email with {len(report_df)} accounts")
     
     # Prepare email body
-    body_plain = f"""Hi Alex,
+    body_plain = f"""FYI
 
 Please find attached the upcoming annual events report.
 
@@ -99,7 +99,7 @@ TryBooking Reporting System
     
     # HTML version of the body
     body_html = f"""<div style="font-family: Arial, sans-serif; font-size: 11pt;">
-<p>Hi Alex,</p>
+<p>FYI</p>
 <p>Please find attached the upcoming annual events report.</p>
 <p>This report identifies annual event organisers who typically create their events soon, 
 allowing proactive outreach approximately 1 month before they usually set up their event.</p>
@@ -217,7 +217,7 @@ def email_tier_updates_report(updates_df, csv_filename):
         very_high_table_html += "</table>"
     
     # Prepare email body
-    body_plain = f"""Hi Alex,
+    body_plain = f"""FYI
 
 Please find attached the tier updates report for {datetime.now(UK_TZ).strftime('%B %Y')}.
 
@@ -255,7 +255,7 @@ TryBooking Reporting System
     
     # HTML version
     body_html = f"""<div style="font-family: Arial, sans-serif; font-size: 11pt;">
-<p>Hi Alex,</p>
+<p>FYI</p>
 <p>Please find attached the tier updates report for {datetime.now(UK_TZ).strftime('%B %Y')}.</p>
 
 <h3>Summary</h3>

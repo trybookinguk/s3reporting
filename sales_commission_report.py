@@ -528,7 +528,12 @@ def generate_pdf_report(report_df, period_description, sales_person_name):
 
     # Sort by event completed date
     sorted_df = report_df.copy()
-    sorted_df['_sort_date'] = pd.to_datetime(sorted_df['event_completed_date'], errors='coerce')
+    # event_completed_date is a UK dd/mm/yyyy string; parse day-first so the
+    # sort is chronologically correct (without dayfirst, e.g. 03/06/2026 is
+    # misread as 6 March) and to silence pandas' ambiguous-format warning.
+    sorted_df['_sort_date'] = pd.to_datetime(
+        sorted_df['event_completed_date'], errors='coerce', dayfirst=True
+    )
     sorted_df = sorted_df.sort_values('_sort_date', ascending=True)
 
     # Build the detail rows

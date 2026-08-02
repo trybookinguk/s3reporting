@@ -82,7 +82,7 @@ def create_summary_html(summary: dict, timestamp: str) -> str:
         postcode_html = "<p><em>No postcode area data available</em></p>"
     
     html = f"""<div style="font-family: Arial, sans-serif; font-size: 11pt;">
-<p>Hi Alex,</p>
+<p>FYI</p>
 
 <p>Please find attached the regional segmentation reports generated on {timestamp}.</p>
 
@@ -114,7 +114,7 @@ TryBooking Reporting System</p>
 
 def create_summary_text(summary: dict, timestamp: str) -> str:
     """Create plain text summary for email."""
-    text = f"""Hi Alex,
+    text = f"""FYI
 
 Please find attached the regional segmentation reports generated on {timestamp}.
 

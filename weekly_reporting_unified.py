@@ -203,7 +203,7 @@ def create_external_email_content(stats, df_current):
     
     html_content = f"""
     <div style="font-family: Arial, sans-serif; font-size: 11pt;">
-      <p>Hi Gareth and Abi,</p>
+      <p>FYI</p>
       <p>Please find actual new account numbers below for the week commencing {stats['week_start'].strftime('%d %B %Y')}.</p>
       <p>Percentage change YoY compared to last year: {yoy_change:.0f}%<br>
          % of accounts who are ticket purchasers: {ticket_purchaser_pct:.0f}%<br>

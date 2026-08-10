@@ -8,9 +8,10 @@ describing the span from the account's last completed event to its last
 future (scheduled) event, and the ticketing activity in between.
 
 All ticket/sales figures count only bookings on the allowed gateway groups
-(RISK_GATEWAY_GROUPS: Stripe, UK Payment Gateway, and a NULL/'None' group);
-other gateways (e.g. direct-settle) are excluded so held-balance exposure isn't
-distorted. Override via the ACCOUNT_RISK_GATEWAY_GROUPS env var.
+(RISK_GATEWAY_GROUPS: Stripe, UK Payment Gateway, "Default (All)", plus a
+NULL/'None' group); other gateways (e.g. direct-settle) are excluded so
+held-balance exposure isn't distorted. Override via the
+ACCOUNT_RISK_GATEWAY_GROUPS env var.
 
 For each account (matched by account name), over Successful bookings, using
 two bookend dates relative to now():
@@ -124,7 +125,7 @@ def _parse_date(value: str):
 # env var (comma-separated) if needed.
 RISK_GATEWAY_GROUPS = tuple(
     g.strip() for g in os.environ.get(
-        "ACCOUNT_RISK_GATEWAY_GROUPS", "Stripe,UK Payment Gateway"
+        "ACCOUNT_RISK_GATEWAY_GROUPS", "Stripe,UK Payment Gateway,Default (All)"
     ).split(",") if g.strip()
 )
 

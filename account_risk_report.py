@@ -7,6 +7,11 @@ joins each account to the warehouse's events, and appends risk columns
 describing the span from the account's last completed event to its last
 future (scheduled) event, and the ticketing activity in between.
 
+All ticket/sales figures count only bookings on the allowed gateway groups
+(RISK_GATEWAY_GROUPS: Stripe, UK Payment Gateway, and a NULL/'None' group);
+other gateways (e.g. direct-settle) are excluded so held-balance exposure isn't
+distorted. Override via the ACCOUNT_RISK_GATEWAY_GROUPS env var.
+
 For each account (matched by account name), over Successful bookings, using
 two bookend dates relative to now():
   - past bookend   = the last event date in the PAST   (max EventDate < now)
@@ -113,13 +118,37 @@ def _parse_date(value: str):
             return None
 
 
+# Only bookings on these gateway groups feed the ticket/sales calculations
+# (others, e.g. direct-settle gateways, are excluded). A NULL/blank GatewayGroup
+# is treated as "None" and included. Override with the ACCOUNT_RISK_GATEWAY_GROUPS
+# env var (comma-separated) if needed.
+RISK_GATEWAY_GROUPS = tuple(
+    g.strip() for g in os.environ.get(
+        "ACCOUNT_RISK_GATEWAY_GROUPS", "Stripe,UK Payment Gateway"
+    ).split(",") if g.strip()
+)
+
+
+def _gateway_filter(prefix: str) -> str:
+    """SQL fragment restricting to RISK_GATEWAY_GROUPS (plus NULL/blank/'None').
+
+    `prefix` is the table alias prefix (e.g. 'b.' or '')."""
+    col = f"{prefix}GatewayGroup"
+    quoted = ", ".join("'" + g.replace("'", "''") + "'" for g in RISK_GATEWAY_GROUPS)
+    inlist = f"{col} IN ({quoted})" if quoted else "0"
+    return (f" AND ({inlist} OR {col} IS NULL OR {col} = 'None' "
+            f"OR TRIM(COALESCE({col}, '')) = '')")
+
+
 def _event_rollup_query(conn: sqlite3.Connection):
     """Return SQL + whether the join is by AccountName (True) or AccountId.
 
     Prefers bookings.AccountName; falls back to joining the accounts snapshot
-    when the bookings table has no AccountName column.
+    when the bookings table has no AccountName column. Restricts to the allowed
+    gateway groups when the bookings table has a GatewayGroup column.
     """
     cols = {row[1] for row in conn.execute("PRAGMA table_info(bookings)")}
+    has_gw = "GatewayGroup" in cols
     if "AccountName" in cols:
         sql = (
             "SELECT AccountName AS acct, EventId, EventDate, "
@@ -128,7 +157,8 @@ def _event_rollup_query(conn: sqlite3.Connection):
             "FROM bookings "
             "WHERE Status = 'Successful' AND EventDate IS NOT NULL "
             "  AND EventId IS NOT NULL AND AccountName IS NOT NULL "
-            "GROUP BY AccountName, EventId, EventDate"
+            + (_gateway_filter("") if has_gw else "") +
+            " GROUP BY AccountName, EventId, EventDate"
         )
         return sql, True
     # Fallback: aggregate by AccountId, caller maps id -> name via accounts.
@@ -139,7 +169,8 @@ def _event_rollup_query(conn: sqlite3.Connection):
         "FROM bookings b "
         "WHERE b.Status = 'Successful' AND b.EventDate IS NOT NULL "
         "  AND b.EventId IS NOT NULL AND b.AccountId IS NOT NULL "
-        "GROUP BY b.AccountId, b.EventId, b.EventDate"
+        + (_gateway_filter("b.") if has_gw else "") +
+        " GROUP BY b.AccountId, b.EventId, b.EventDate"
     )
     return sql, False
 

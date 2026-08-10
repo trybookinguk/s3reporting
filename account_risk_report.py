@@ -27,9 +27,10 @@ it computes:
 
 It also adds Account_ID (matched from the account name; 'Err' if no match),
 Exposure (Balance - Ticket Sales GBP Between Dates) shown ONLY when negative
-(blank when >= 0), and three aged-sales columns "30Days+"/"60Days+"/"90Days+"
-holding the ticket-sales (PaymentReceived) value tied to events older than
-30/60/90 days (age = now - EventDate; cumulative, so >30 includes >60/>90).
+(blank when >= 0), and three aged columns "30Days+"/"60Days+"/"90Days+". The
+aged columns take the amount NOT covered by upcoming sales (net = Total - Sales
+Between Dates) and allocate it across the 30/60/90-day bands in proportion to
+the age of the account's completed sales (cumulative, so >30 includes >60/>90).
 Rows are sorted high->low by 90Days+, then 60Days+, then 30Days+ (an aged
 report). Input files are named <YYYY-MM-DD>_AccountBalance.csv.
 
@@ -78,9 +79,10 @@ METRIC_COLUMNS = [
 # (blank when >= 0).
 EXPOSURE_COLUMN = "Exposure"
 
-# Aged sales: the ticket-sales value (PaymentReceived) tied to events older than
-# 30/60/90 days (age = now - EventDate). Cumulative by age (>30 includes >60/>90),
-# shown in 30 -> 60 -> 90 order. Produced by compute_account_metrics().
+# Aged columns: the amount not covered by upcoming sales (net = Total - Sales
+# Between Dates), allocated across the 30/60/90-day bands in proportion to the
+# age of the account's completed sales. Cumulative by age (>30 includes >60/>90),
+# shown in 30 -> 60 -> 90 order. Computed in build_report_csv().
 AGED_SALES_COLUMNS = ["30Days+", "60Days+", "90Days+"]
 
 # Account_ID is prepended as the first column; the metrics, Exposure and the aged
@@ -204,9 +206,11 @@ def compute_account_metrics(conn: sqlite3.Connection, now: date) -> dict:
             "Events Between Dates": len(in_window),
             "Tickets Sold Between Dates": int(round(sum(e[1] for e in in_window))),
             "Ticket Sales GBP Between Dates": round(sum(e[2] for e in in_window), 2),
-            "30Days+": _sales_older_than(30),
-            "60Days+": _sales_older_than(60),
-            "90Days+": _sales_older_than(90),
+            # Raw completed-sales aged >30/>60/>90 days — used only to weight the
+            # allocation of (Total - between) across the age bands (see build).
+            "_sales_gt_30": _sales_older_than(30),
+            "_sales_gt_60": _sales_older_than(60),
+            "_sales_gt_90": _sales_older_than(90),
         }
     return metrics
 
@@ -284,6 +288,7 @@ def build_report_csv(rows: list, metrics: dict, name_to_id: dict, now: date) -> 
     acct_col = col_index("account")
     acct_col = 0 if acct_col is None else acct_col
     balance_col = col_index("balance")
+    total_col = col_index("total")
 
     def _sort_num(v):
         return float(v) if v != "" else float("-inf")
@@ -303,20 +308,36 @@ def build_report_csv(rows: list, metrics: dict, name_to_id: dict, now: date) -> 
         acct_id = name_to_id.get(key, "Err")
         metric_vals = [(m[c] if m else "") for c in METRIC_COLUMNS]
 
+        balance = _parse_money(row[balance_col]) if (balance_col is not None and balance_col < len(row)) else None
+        total_val = _parse_money(row[total_col]) if (total_col is not None and total_col < len(row)) else None
+        if total_val is None:
+            total_val = balance
+        rev_between = float(m["Ticket Sales GBP Between Dates"]) if m else 0.0
+
         # Exposure = Balance - Ticket Sales GBP Between Dates, shown only when
         # negative (blank when >= 0).
-        balance = _parse_money(row[balance_col]) if (balance_col is not None and balance_col < len(row)) else None
-        rev_between = float(m["Ticket Sales GBP Between Dates"]) if m else 0.0
         if balance is None:
             exposure = ""
         else:
             exp = round(balance - rev_between, 2)
             exposure = exp if exp < 0 else ""
 
-        # Aged sales (30/60/90 days), blank when zero.
+        # Aged columns: the amount NOT covered by upcoming (between-dates) sales,
+        # i.e. net = Total - Sales Between Dates, allocated across the 30/60/90-day
+        # bands in proportion to the age of the account's completed sales. This
+        # ages the *remaining* balance, not the gross historical sales.
+        net = (total_val - rev_between) if total_val is not None else None
+        tcs = float(m["Total Completed Sales"]) if m else 0.0
+        if m and net is not None and net > 0 and tcs > 0:
+            a30 = round(net * float(m["_sales_gt_30"]) / tcs, 2)
+            a60 = round(net * float(m["_sales_gt_60"]) / tcs, 2)
+            a90 = round(net * float(m["_sales_gt_90"]) / tcs, 2)
+        else:
+            a30 = a60 = a90 = 0.0
+
         def _cell(v):
             return v if (v not in (None, "", 0, 0.0)) else ""
-        aged = [_cell(m[c]) if m else "" for c in AGED_SALES_COLUMNS]  # order: 30,60,90
+        aged = [_cell(a30), _cell(a60), _cell(a90)]  # order: 30,60,90
 
         # Account_ID first; then original row, metrics, Exposure, aged sales.
         out_row = [acct_id] + row + metric_vals + [exposure] + aged

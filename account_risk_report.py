@@ -28,20 +28,26 @@ past or no future events) the window collapses to the single date that exists
 and the missing bookend column is left blank. Accounts with no events at all
 get blank/zero values.
 
-Output: <date>_AccountRiskReport.csv (date taken from the input filename).
+Output: by default the report (<date>_AccountRiskReport.csv) is emailed as an
+attachment to henry@trybooking.co.uk (which auto-CCs Kathryn). Use --no-email
+to write the CSV to disk instead, or --output to also save a local copy.
 
 Usage:
-    python3 account_risk_report.py <path-to>_AccountBalance.csv
-    python3 account_risk_report.py in.csv --db /path/warehouse.db --output out.csv
+    python3 account_risk_report.py <path-to>_AccountBalance.csv           # email it
+    python3 account_risk_report.py in.csv --email someone@trybooking.co.uk
+    python3 account_risk_report.py in.csv --no-email --output out.csv     # write file only
 """
 import argparse
 import csv
+import io
 import os
 import re
 import sqlite3
 import sys
 from collections import defaultdict
 from datetime import date, datetime
+
+DEFAULT_EMAIL = "henry@trybooking.co.uk"
 
 # New columns appended to each row, in order.
 NEW_COLUMNS = [
@@ -175,8 +181,12 @@ def _find_header_index(rows: list) -> int:
     raise ValueError("Could not find the 'Account,...' header row in the input CSV.")
 
 
-def augment_csv(input_path: str, output_path: str, metrics: dict) -> tuple:
-    """Append the risk columns to each account row. Returns (matched, total)."""
+def build_report_csv(input_path: str, metrics: dict) -> tuple:
+    """Append the risk columns to each account row.
+
+    Returns (csv_text, matched, total). The text can be written to disk or
+    attached to an email; nothing is written here.
+    """
     with open(input_path, "r", encoding="utf-8-sig", newline="") as f:
         rows = list(csv.reader(f))
 
@@ -208,34 +218,38 @@ def augment_csv(input_path: str, output_path: str, metrics: dict) -> tuple:
         vals = m or blank
         out_rows.append(row + [vals[c] for c in NEW_COLUMNS])
 
-    with open(output_path, "w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f)
-        for b in banner:
-            w.writerow(b)
-        w.writerow(header + NEW_COLUMNS)
-        w.writerows(out_rows)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    for b in banner:
+        w.writerow(b)
+    w.writerow(header + NEW_COLUMNS)
+    w.writerows(out_rows)
+    return buf.getvalue(), matched, total
 
-    return matched, total
 
-
-def _derive_output_path(input_path: str, output_arg) -> str:
-    """Return the output path, deriving the date prefix from the input filename."""
+def _report_ymd(input_path: str) -> str:
+    """Extract the YYYYMMDD date prefix from a <date>_AccountBalance.csv filename."""
     base = os.path.basename(input_path)
     m = re.search(r"(\d{8})_AccountBalance\.csv$", base)
     if not m:
         raise ValueError(
             f"Input filename '{base}' does not match <YYYYMMDD>_AccountBalance.csv"
         )
-    ymd = m.group(1)
-    return output_arg or os.path.join(os.getcwd(), f"{ymd}_AccountRiskReport.csv")
+    return m.group(1)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the Account Risk Report from an Account Balance CSV.")
     parser.add_argument("input_csv", help="Path to <date>_AccountBalance.csv")
     parser.add_argument("--db", help="Path to the SQLite warehouse (default: warehouse.default_db_path()).")
-    parser.add_argument("--output", help="Output CSV path (default: <date>_AccountRiskReport.csv in cwd).")
     parser.add_argument("--as-of", help="Treat this date as 'now' (YYYY-MM-DD). Default: today.")
+    parser.add_argument("--email", default=DEFAULT_EMAIL,
+                        help=f"Recipient for the report (default: {DEFAULT_EMAIL}).")
+    parser.add_argument("--no-email", action="store_true",
+                        help="Skip emailing; write the CSV to --output instead.")
+    parser.add_argument("--output",
+                        help="Also write the CSV to this path (default when --no-email: "
+                             "<date>_AccountRiskReport.csv in cwd).")
     args = parser.parse_args()
 
     if not os.path.exists(args.input_csv):
@@ -243,10 +257,11 @@ def main() -> int:
         return 1
 
     try:
-        output_path = _derive_output_path(args.input_csv, args.output)
+        ymd = _report_ymd(args.input_csv)
     except ValueError as e:
         print(f"Error: {e}")
         return 1
+    report_filename = f"{ymd}_AccountRiskReport.csv"
 
     if args.as_of:
         try:
@@ -277,9 +292,38 @@ def main() -> int:
         conn.close()
     print(f"Computed risk metrics for {len(metrics):,} accounts with events.")
 
-    matched, total = augment_csv(args.input_csv, output_path, metrics)
+    csv_text, matched, total = build_report_csv(args.input_csv, metrics)
     print(f"Matched {matched:,}/{total:,} account rows to warehouse events.")
-    print(f"Wrote {output_path}")
+
+    # Write to disk if explicitly requested, or when emailing is disabled.
+    if args.output or args.no_email:
+        output_path = args.output or os.path.join(os.getcwd(), report_filename)
+        with open(output_path, "w", encoding="utf-8", newline="") as f:
+            f.write(csv_text)
+        print(f"Wrote {output_path}")
+
+    if not args.no_email:
+        try:
+            from modules.utils.email_utils import send_html_email
+        except Exception as e:
+            print(f"Error: cannot import email helper ({e}); use --no-email to write a file instead.")
+            return 1
+        subject = f"Account Risk Report {ymd[:4]}-{ymd[4:6]}-{ymd[6:]}"
+        body = (
+            f"<p>FYI - the Account Risk Report is attached ({report_filename}).</p>"
+            f"<p>As of {now.isoformat()}: {matched:,} of {total:,} accounts matched to "
+            f"warehouse events. Each account row carries its last completed event date, "
+            f"last future event date, and the events / tickets / ticket-sales (£) in "
+            f"the window between them.</p>"
+        )
+        attachment = (report_filename, csv_text.encode("utf-8"), "text", "csv")
+        try:
+            send_html_email(to=args.email, subject=subject, html_content=body,
+                            attachments=[attachment])
+        except Exception as e:
+            print(f"Error sending email: {e}")
+            return 1
+        print(f"Emailed {report_filename} to {args.email}")
     return 0
 
 

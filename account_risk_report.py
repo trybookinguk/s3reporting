@@ -24,11 +24,13 @@ it computes:
                                      (the "carrying ticket sales balance")
 
 It also adds Account_ID (matched from the account name; 'Err' if no match),
-Exposure (Balance - Ticket Sales GBP Between Dates), and three age-bucketed
-exposure columns keyed by days since the last completed event (age = now -
-past bookend): "Exposure 90Days+" (age>=90), "Exposure 60Days+" (60..89),
-"Exposure 30Days" (30..59). Rows are sorted high->low by 90Days+, then 60Days+,
-then 30Days. Input files are named <YYYY-MM-DD>_AccountBalance.csv.
+Exposure (Balance - Ticket Sales GBP Between Dates), and three CUMULATIVE
+age-bucketed exposure columns keyed by days since the last completed event
+(age = now - past bookend): "Exposure 90Days+" (age>=90), "Exposure 60Days+"
+(age>=60), "Exposure 30Days+" (age>=30). Buckets are cumulative, so an older
+account carries its exposure in every threshold it exceeds. Rows are sorted
+high->low by 90Days+, then 60Days+, then 30Days+ (an aged report). Input files
+are named <YYYY-MM-DD>_AccountBalance.csv.
 
 The window is inclusive of both bookend dates. If a bookend is missing (no
 past or no future events) the window collapses to the single date that exists
@@ -69,10 +71,12 @@ METRIC_COLUMNS = [
     "Ticket Sales GBP Between Dates",
 ]
 
-# Exposure = Balance - Ticket Sales GBP Between Dates, then bucketed by how many
-# days have elapsed since the last completed event (age = now - past bookend):
-#   >= 90 -> "Exposure 90Days+"; 60..89 -> "Exposure 60Days+"; 30..59 -> "Exposure 30Days".
-EXPOSURE_COLUMNS = ["Exposure", "Exposure 90Days+", "Exposure 60Days+", "Exposure 30Days"]
+# Exposure = Balance - Ticket Sales GBP Between Dates, then reported in CUMULATIVE
+# age buckets by days since the last completed event (age = now - past bookend):
+#   "Exposure 90Days+" = age>=90, "Exposure 60Days+" = age>=60, "Exposure 30Days+" = age>=30.
+# Buckets are cumulative (an aged report), so an older account carries its exposure
+# in every threshold it exceeds.
+EXPOSURE_COLUMNS = ["Exposure", "Exposure 90Days+", "Exposure 60Days+", "Exposure 30Days+"]
 
 # Full set appended to each row, in output order: Account_ID, the metrics, exposure.
 APPENDED_COLUMNS = ["Account_ID"] + METRIC_COLUMNS + EXPOSURE_COLUMNS
@@ -291,9 +295,11 @@ def build_report_csv(rows: list, metrics: dict, name_to_id: dict, now: date) -> 
             exposure = round(balance - rev_between, 2)
             past = _parse_date(m["Past Completed Event Date"]) if (m and m["Past Completed Event Date"]) else None
             age = (now - past).days if past else None
+            # Cumulative age buckets: an account >=90 days old carries its exposure
+            # in all of 90/60/30; >=60 in 60/30; >=30 in 30 only.
             e90 = exposure if (age is not None and age >= 90) else ""
-            e60 = exposure if (age is not None and 60 <= age < 90) else ""
-            e30 = exposure if (age is not None and 30 <= age < 60) else ""
+            e60 = exposure if (age is not None and age >= 60) else ""
+            e30 = exposure if (age is not None and age >= 30) else ""
 
         out_row = row + [acct_id] + metric_vals + [exposure, e90, e60, e30]
         built.append(((_sort_num(e90), _sort_num(e60), _sort_num(e30)), out_row))

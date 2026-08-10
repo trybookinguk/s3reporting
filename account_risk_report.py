@@ -23,6 +23,13 @@ it computes:
   - Ticket Sales GBP Between Dates : sum of PaymentReceived in that window
                                      (the "carrying ticket sales balance")
 
+It also adds Account_ID (matched from the account name; 'Err' if no match),
+Exposure (Balance - Ticket Sales GBP Between Dates), and three age-bucketed
+exposure columns keyed by days since the last completed event (age = now -
+past bookend): "Exposure 90Days+" (age>=90), "Exposure 60Days+" (60..89),
+"Exposure 30Days" (30..59). Rows are sorted high->low by 90Days+, then 60Days+,
+then 30Days. Input files are named <YYYY-MM-DD>_AccountBalance.csv.
+
 The window is inclusive of both bookend dates. If a bookend is missing (no
 past or no future events) the window collapses to the single date that exists
 and the missing bookend column is left blank. Accounts with no events at all
@@ -52,8 +59,8 @@ from datetime import date, datetime
 
 DEFAULT_EMAIL = "henry@trybooking.co.uk"
 
-# New columns appended to each row, in order.
-NEW_COLUMNS = [
+# Metric columns produced by compute_account_metrics(), in order.
+METRIC_COLUMNS = [
     "Past Completed Event Date",
     "Total Completed Events",
     "Future Latest Event Date",
@@ -61,6 +68,14 @@ NEW_COLUMNS = [
     "Tickets Sold Between Dates",
     "Ticket Sales GBP Between Dates",
 ]
+
+# Exposure = Balance - Ticket Sales GBP Between Dates, then bucketed by how many
+# days have elapsed since the last completed event (age = now - past bookend):
+#   >= 90 -> "Exposure 90Days+"; 60..89 -> "Exposure 60Days+"; 30..59 -> "Exposure 30Days".
+EXPOSURE_COLUMNS = ["Exposure", "Exposure 90Days+", "Exposure 60Days+", "Exposure 30Days"]
+
+# Full set appended to each row, in output order: Account_ID, the metrics, exposure.
+APPENDED_COLUMNS = ["Account_ID"] + METRIC_COLUMNS + EXPOSURE_COLUMNS
 
 
 def _norm(name: str) -> str:
@@ -176,6 +191,37 @@ def compute_account_metrics(conn: sqlite3.Connection, now: date) -> dict:
     return metrics
 
 
+def load_name_to_id(conn: sqlite3.Connection) -> dict:
+    """Return {normalised_account_name: AccountId}, preferring the accounts
+    snapshot, falling back to booking rows for names not in that snapshot."""
+    m = {}
+    for sql in (
+        "SELECT AccountName, Id FROM accounts",
+        "SELECT AccountName, MIN(AccountId) FROM bookings "
+        "WHERE AccountName IS NOT NULL AND AccountId IS NOT NULL GROUP BY AccountName",
+    ):
+        try:
+            for name, _id in conn.execute(sql):
+                if name and _id is not None:
+                    m.setdefault(_norm(name), _id)
+        except sqlite3.OperationalError:
+            continue
+    return m
+
+
+def _parse_money(value) -> float:
+    """Parse a currency-ish cell ('85,181.98', '£1330.00', '0.00') to float, or None."""
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "").replace("£", "")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def _find_header_index(rows: list) -> int:
     """Index of the header row (the one whose first cell is 'Account')."""
     for i, row in enumerate(rows):
@@ -194,61 +240,98 @@ def _rows_from_bytes(data: bytes) -> list:
     return _rows_from_text(data.decode("utf-8-sig"))
 
 
-def build_report_csv(rows: list, metrics: dict) -> tuple:
-    """Append the risk columns to each account row.
+def build_report_csv(rows: list, metrics: dict, name_to_id: dict, now: date) -> tuple:
+    """Append the risk columns to each account row and sort by exposure age.
 
-    `rows` is the parsed Account Balance CSV (list of lists). Returns
-    (csv_text, matched, total). The text can be uploaded, written, or emailed;
-    nothing is written here.
+    `rows` is the parsed Account Balance CSV (list of lists). Adds Account_ID
+    (matched by name; 'Err' if none), the event metrics, Exposure (Balance -
+    Ticket Sales GBP Between Dates) and the age-bucketed exposure columns, then
+    sorts rows high->low by Exposure 90Days+, 60Days+, 30Days.
+
+    Returns (csv_text, matched, total). Nothing is written here.
     """
     header_idx = _find_header_index(rows)
     banner = rows[:header_idx]
     header = rows[header_idx]
     data_rows = rows[header_idx + 1:]
 
-    # Locate the account-name column (defensive; it's normally column 0).
-    try:
-        acct_col = next(
-            i for i, h in enumerate(header) if h.strip().casefold() == "account"
-        )
-    except StopIteration:
-        acct_col = 0
+    def col_index(label):
+        for i, h in enumerate(header):
+            if h.strip().casefold() == label:
+                return i
+        return None
 
-    blank = {c: "" for c in NEW_COLUMNS}
+    acct_col = col_index("account")
+    acct_col = 0 if acct_col is None else acct_col
+    balance_col = col_index("balance")
+
+    def _sort_num(v):
+        return float(v) if v != "" else float("-inf")
+
     matched = total = 0
-    out_rows = []
+    built = []  # (sort_key_tuple, output_row)
     for row in data_rows:
         if not row or all(not c.strip() for c in row):
-            out_rows.append(row)  # preserve blank separator rows verbatim
-            continue
+            continue  # drop blank separator rows (sorting reorders anyway)
         total += 1
-        acct_name = row[acct_col] if acct_col < len(row) else ""
-        m = metrics.get(_norm(acct_name))
+        name = row[acct_col] if acct_col < len(row) else ""
+        key = _norm(name)
+        m = metrics.get(key)
         if m:
             matched += 1
-        vals = m or blank
-        out_rows.append(row + [vals[c] for c in NEW_COLUMNS])
+
+        acct_id = name_to_id.get(key, "Err")
+        metric_vals = [(m[c] if m else "") for c in METRIC_COLUMNS]
+
+        balance = _parse_money(row[balance_col]) if (balance_col is not None and balance_col < len(row)) else None
+        rev_between = float(m["Ticket Sales GBP Between Dates"]) if m else 0.0
+        if balance is None:
+            exposure = e90 = e60 = e30 = ""
+        else:
+            exposure = round(balance - rev_between, 2)
+            past = _parse_date(m["Past Completed Event Date"]) if (m and m["Past Completed Event Date"]) else None
+            age = (now - past).days if past else None
+            e90 = exposure if (age is not None and age >= 90) else ""
+            e60 = exposure if (age is not None and 60 <= age < 90) else ""
+            e30 = exposure if (age is not None and 30 <= age < 60) else ""
+
+        out_row = row + [acct_id] + metric_vals + [exposure, e90, e60, e30]
+        built.append(((_sort_num(e90), _sort_num(e60), _sort_num(e30)), out_row))
+
+    # Sort high -> low by 90Days+, then 60Days+, then 30Days.
+    built.sort(key=lambda t: t[0], reverse=True)
 
     buf = io.StringIO()
     w = csv.writer(buf)
     for b in banner:
         w.writerow(b)
-    w.writerow(header + NEW_COLUMNS)
-    w.writerows(out_rows)
+    w.writerow(header + APPENDED_COLUMNS)
+    w.writerows(r for _, r in built)
     return buf.getvalue(), matched, total
 
 
-def _ymd_from_name(name: str):
-    """Return the YYYYMMDD prefix of a <date>_AccountBalance.csv name, or None."""
-    m = re.match(r"(\d{8})_AccountBalance\.csv$", os.path.basename(name))
+def _date_str_from_name(name: str):
+    """Return the YYYY-MM-DD prefix of a <date>_AccountBalance.csv name, or None."""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})_AccountBalance\.csv$", os.path.basename(name), re.I)
     return m.group(1) if m else None
 
 
+def _is_balance_file(name: str) -> bool:
+    """True if a filename looks like an Account Balance CSV (separator-agnostic)."""
+    base = os.path.basename(name).lower()
+    return base.endswith(".csv") and "accountbalance" in re.sub(r"[ _\-]", "", base)
+
+
 def _latest_balance_filename(names: list):
-    """Pick the newest <date>_AccountBalance.csv from a list of filenames."""
-    dated = [(_ymd_from_name(n), n) for n in names]
-    dated = [(ymd, n) for ymd, n in dated if ymd]
-    return max(dated)[1] if dated else None
+    """Pick the newest Account Balance CSV (by YYYY-MM-DD date) from a name list."""
+    cands = [n for n in names if _is_balance_file(n)]
+    if not cands:
+        return None
+    dated = [(_date_str_from_name(n), n) for n in cands]
+    with_dates = [(d, n) for d, n in dated if d]
+    if with_dates:
+        return max(with_dates)[1]  # ISO date strings sort chronologically
+    return sorted(cands)[-1]
 
 
 def main() -> int:
@@ -315,10 +398,7 @@ def main() -> int:
         if not os.path.exists(args.local_input):
             print(f"Error: local input not found: {args.local_input}")
             return 1
-        ymd = _ymd_from_name(args.local_input)
-        if not ymd:
-            print(f"Error: '{args.local_input}' is not a <YYYYMMDD>_AccountBalance.csv file.")
-            return 1
+        date_str = _date_str_from_name(args.local_input) or now.isoformat()
         with open(args.local_input, "rb") as f:
             balance_bytes = f.read()
         print(f"Read balance CSV from local file {args.local_input}")
@@ -329,27 +409,32 @@ def main() -> int:
             names = sharepoint.list_files(token, drive_id, args.folder)
             balance_name = _latest_balance_filename(names)
             if not balance_name:
-                print(f"Error: no <date>_AccountBalance.csv found in SharePoint '{args.folder}'.")
+                print(f"Error: no Account Balance CSV found in SharePoint '{args.folder}'.")
+                print("  Files present in that folder:")
+                for n in sorted(names):
+                    print(f"    - {n}")
                 return 1
-        ymd = _ymd_from_name(balance_name)
+        date_str = _date_str_from_name(balance_name) or now.isoformat()
         balance_bytes = sharepoint.download_file(token, drive_id, balance_name, args.folder)
         if balance_bytes is None:
             print(f"Error: '{balance_name}' not found in SharePoint '{args.folder}'.")
             return 1
         print(f"Downloaded {balance_name} from SharePoint '{args.folder}'.")
 
-    report_filename = f"{ymd}_AccountRiskReport.csv"
+    report_filename = f"{date_str}_AccountRiskReport.csv"
 
     # --- Compute + build -----------------------------------------------------
     print(f"Reading events from {db_path} (now = {now.isoformat()}; past = EventDate < now, Successful)...")
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         metrics = compute_account_metrics(conn, now)
+        name_to_id = load_name_to_id(conn)
     finally:
         conn.close()
-    print(f"Computed risk metrics for {len(metrics):,} accounts with events.")
+    print(f"Computed risk metrics for {len(metrics):,} accounts; {len(name_to_id):,} name->id mappings.")
 
-    csv_text, matched, total = build_report_csv(_rows_from_bytes(balance_bytes), metrics)
+    csv_text, matched, total = build_report_csv(
+        _rows_from_bytes(balance_bytes), metrics, name_to_id, now)
     print(f"Matched {matched:,}/{total:,} account rows to warehouse events.")
 
     if args.output:
@@ -373,7 +458,7 @@ def main() -> int:
         except Exception as e:
             print(f"Error: cannot import email helper ({e}); use --no-email to skip.")
             return 1
-        subject = f"Account Risk Report {ymd[:4]}-{ymd[4:6]}-{ymd[6:]}"
+        subject = f"Account Risk Report {date_str}"
         link_html = (f'<a href="{web_url}">{report_filename}</a>' if web_url
                      else f"{report_filename} (in SharePoint '{args.folder}')")
         body = (

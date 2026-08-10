@@ -28,14 +28,17 @@ past or no future events) the window collapses to the single date that exists
 and the missing bookend column is left blank. Accounts with no events at all
 get blank/zero values.
 
-Output: by default the report (<date>_AccountRiskReport.csv) is emailed as an
-attachment to henry@trybooking.co.uk (which auto-CCs Kathryn). Use --no-email
-to write the CSV to disk instead, or --output to also save a local copy.
+Input/Output: by default the Account Balance CSV is read from SharePoint (the
+"Platform Data" folder of the Platform Data drive), the risk report is written
+back to that same folder as <date>_AccountRiskReport.csv, and a LINK to it is
+emailed to henry@trybooking.co.uk (which auto-CCs Kathryn). Flags allow reading
+a local input file, skipping the email, or also saving a local copy.
 
 Usage:
-    python3 account_risk_report.py <path-to>_AccountBalance.csv           # email it
-    python3 account_risk_report.py in.csv --email someone@trybooking.co.uk
-    python3 account_risk_report.py in.csv --no-email --output out.csv     # write file only
+    python3 account_risk_report.py                      # newest balance CSV on SharePoint
+    python3 account_risk_report.py --date 20260810      # a specific date's file
+    python3 account_risk_report.py --folder "Platform Data"   # override the SP folder
+    python3 account_risk_report.py --local-input in.csv --no-email --output out.csv
 """
 import argparse
 import csv
@@ -181,15 +184,23 @@ def _find_header_index(rows: list) -> int:
     raise ValueError("Could not find the 'Account,...' header row in the input CSV.")
 
 
-def build_report_csv(input_path: str, metrics: dict) -> tuple:
+def _rows_from_text(text: str) -> list:
+    """Parse CSV text (Account Balance export, possibly BOM-prefixed) into rows."""
+    return list(csv.reader(io.StringIO(text)))
+
+
+def _rows_from_bytes(data: bytes) -> list:
+    """Parse CSV bytes (utf-8, tolerating a BOM) into rows."""
+    return _rows_from_text(data.decode("utf-8-sig"))
+
+
+def build_report_csv(rows: list, metrics: dict) -> tuple:
     """Append the risk columns to each account row.
 
-    Returns (csv_text, matched, total). The text can be written to disk or
-    attached to an email; nothing is written here.
+    `rows` is the parsed Account Balance CSV (list of lists). Returns
+    (csv_text, matched, total). The text can be uploaded, written, or emailed;
+    nothing is written here.
     """
-    with open(input_path, "r", encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.reader(f))
-
     header_idx = _find_header_index(rows)
     banner = rows[:header_idx]
     header = rows[header_idx]
@@ -227,41 +238,35 @@ def build_report_csv(input_path: str, metrics: dict) -> tuple:
     return buf.getvalue(), matched, total
 
 
-def _report_ymd(input_path: str) -> str:
-    """Extract the YYYYMMDD date prefix from a <date>_AccountBalance.csv filename."""
-    base = os.path.basename(input_path)
-    m = re.search(r"(\d{8})_AccountBalance\.csv$", base)
-    if not m:
-        raise ValueError(
-            f"Input filename '{base}' does not match <YYYYMMDD>_AccountBalance.csv"
-        )
-    return m.group(1)
+def _ymd_from_name(name: str):
+    """Return the YYYYMMDD prefix of a <date>_AccountBalance.csv name, or None."""
+    m = re.match(r"(\d{8})_AccountBalance\.csv$", os.path.basename(name))
+    return m.group(1) if m else None
+
+
+def _latest_balance_filename(names: list):
+    """Pick the newest <date>_AccountBalance.csv from a list of filenames."""
+    dated = [(_ymd_from_name(n), n) for n in names]
+    dated = [(ymd, n) for ymd, n in dated if ymd]
+    return max(dated)[1] if dated else None
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build the Account Risk Report from an Account Balance CSV.")
-    parser.add_argument("input_csv", help="Path to <date>_AccountBalance.csv")
+    parser = argparse.ArgumentParser(description="Build the Account Risk Report from an Account Balance CSV on SharePoint.")
+    parser.add_argument("--folder", default="Platform Data",
+                        help="SharePoint folder (in the Platform Data drive) to read the "
+                             "balance CSV from and write the report to. Default: 'Platform Data'.")
+    parser.add_argument("--date", help="Balance file date YYYYMMDD (default: newest on SharePoint).")
+    parser.add_argument("--local-input", help="Read the balance CSV from this local path instead of SharePoint.")
     parser.add_argument("--db", help="Path to the SQLite warehouse (default: warehouse.default_db_path()).")
     parser.add_argument("--as-of", help="Treat this date as 'now' (YYYY-MM-DD). Default: today.")
     parser.add_argument("--email", default=DEFAULT_EMAIL,
-                        help=f"Recipient for the report (default: {DEFAULT_EMAIL}).")
-    parser.add_argument("--no-email", action="store_true",
-                        help="Skip emailing; write the CSV to --output instead.")
-    parser.add_argument("--output",
-                        help="Also write the CSV to this path (default when --no-email: "
-                             "<date>_AccountRiskReport.csv in cwd).")
+                        help=f"Recipient for the report link (default: {DEFAULT_EMAIL}).")
+    parser.add_argument("--no-email", action="store_true", help="Skip sending the email.")
+    parser.add_argument("--no-upload", action="store_true",
+                        help="Skip uploading to SharePoint (requires --output).")
+    parser.add_argument("--output", help="Also write the report CSV to this local path.")
     args = parser.parse_args()
-
-    if not os.path.exists(args.input_csv):
-        print(f"Error: input file not found: {args.input_csv}")
-        return 1
-
-    try:
-        ymd = _report_ymd(args.input_csv)
-    except ValueError as e:
-        print(f"Error: {e}")
-        return 1
-    report_filename = f"{ymd}_AccountRiskReport.csv"
 
     if args.as_of:
         try:
@@ -272,6 +277,7 @@ def main() -> int:
     else:
         now = date.today()
 
+    # Resolve the warehouse.
     db_path = args.db
     if not db_path:
         try:
@@ -284,6 +290,56 @@ def main() -> int:
         print(f"Error: warehouse database not found: {db_path}")
         return 1
 
+    # SharePoint credentials/drive (needed unless purely local + no upload).
+    need_sharepoint = (not args.local_input) or (not args.no_upload)
+    token = drive_id = None
+    if need_sharepoint:
+        try:
+            from modules.utils import sharepoint
+            from modules.utils.config import SHAREPOINT_DRIVE_ID
+        except Exception as e:
+            print(f"Error: cannot import SharePoint helper ({e}).")
+            return 1
+        if not SHAREPOINT_DRIVE_ID:
+            print("Error: SHAREPOINT_DRIVE_ID not set in the environment.")
+            return 1
+        drive_id = SHAREPOINT_DRIVE_ID
+        token = sharepoint.authenticate_graph()
+        if not token:
+            print("Error: could not authenticate to Microsoft Graph.")
+            return 1
+
+    # --- Obtain the Account Balance CSV -------------------------------------
+    if args.local_input:
+        if not os.path.exists(args.local_input):
+            print(f"Error: local input not found: {args.local_input}")
+            return 1
+        ymd = _ymd_from_name(args.local_input)
+        if not ymd:
+            print(f"Error: '{args.local_input}' is not a <YYYYMMDD>_AccountBalance.csv file.")
+            return 1
+        with open(args.local_input, "rb") as f:
+            balance_bytes = f.read()
+        print(f"Read balance CSV from local file {args.local_input}")
+    else:
+        if args.date:
+            balance_name = f"{args.date}_AccountBalance.csv"
+        else:
+            names = sharepoint.list_files(token, drive_id, args.folder)
+            balance_name = _latest_balance_filename(names)
+            if not balance_name:
+                print(f"Error: no <date>_AccountBalance.csv found in SharePoint '{args.folder}'.")
+                return 1
+        ymd = _ymd_from_name(balance_name)
+        balance_bytes = sharepoint.download_file(token, drive_id, balance_name, args.folder)
+        if balance_bytes is None:
+            print(f"Error: '{balance_name}' not found in SharePoint '{args.folder}'.")
+            return 1
+        print(f"Downloaded {balance_name} from SharePoint '{args.folder}'.")
+
+    report_filename = f"{ymd}_AccountRiskReport.csv"
+
+    # --- Compute + build -----------------------------------------------------
     print(f"Reading events from {db_path} (now = {now.isoformat()}; past = EventDate < now, Successful)...")
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
@@ -292,38 +348,46 @@ def main() -> int:
         conn.close()
     print(f"Computed risk metrics for {len(metrics):,} accounts with events.")
 
-    csv_text, matched, total = build_report_csv(args.input_csv, metrics)
+    csv_text, matched, total = build_report_csv(_rows_from_bytes(balance_bytes), metrics)
     print(f"Matched {matched:,}/{total:,} account rows to warehouse events.")
 
-    # Write to disk if explicitly requested, or when emailing is disabled.
-    if args.output or args.no_email:
-        output_path = args.output or os.path.join(os.getcwd(), report_filename)
-        with open(output_path, "w", encoding="utf-8", newline="") as f:
+    if args.output:
+        with open(args.output, "w", encoding="utf-8", newline="") as f:
             f.write(csv_text)
-        print(f"Wrote {output_path}")
+        print(f"Wrote {args.output}")
+
+    # --- Upload to SharePoint + email the link -------------------------------
+    web_url = None
+    if not args.no_upload:
+        ok = sharepoint.upload(token, drive_id, report_filename, csv_text.encode("utf-8"), args.folder)
+        if not ok:
+            print(f"Error: failed to upload {report_filename} to SharePoint.")
+            return 1
+        print(f"Uploaded {report_filename} to SharePoint '{args.folder}'.")
+        web_url = sharepoint.get_web_url(token, drive_id, report_filename, args.folder)
 
     if not args.no_email:
         try:
             from modules.utils.email_utils import send_html_email
         except Exception as e:
-            print(f"Error: cannot import email helper ({e}); use --no-email to write a file instead.")
+            print(f"Error: cannot import email helper ({e}); use --no-email to skip.")
             return 1
         subject = f"Account Risk Report {ymd[:4]}-{ymd[4:6]}-{ymd[6:]}"
+        link_html = (f'<a href="{web_url}">{report_filename}</a>' if web_url
+                     else f"{report_filename} (in SharePoint '{args.folder}')")
         body = (
-            f"<p>FYI - the Account Risk Report is attached ({report_filename}).</p>"
+            f"<p>FYI - the Account Risk Report is ready: {link_html}</p>"
             f"<p>As of {now.isoformat()}: {matched:,} of {total:,} accounts matched to "
             f"warehouse events. Each account row carries its last completed event date, "
-            f"last future event date, and the events / tickets / ticket-sales (£) in "
-            f"the window between them.</p>"
+            f"last future event date, and the events / tickets / ticket-sales (£) in the "
+            f"window between them.</p>"
         )
-        attachment = (report_filename, csv_text.encode("utf-8"), "text", "csv")
         try:
-            send_html_email(to=args.email, subject=subject, html_content=body,
-                            attachments=[attachment])
+            send_html_email(to=args.email, subject=subject, html_content=body)
         except Exception as e:
             print(f"Error sending email: {e}")
             return 1
-        print(f"Emailed {report_filename} to {args.email}")
+        print(f"Emailed report link to {args.email}")
     return 0
 
 

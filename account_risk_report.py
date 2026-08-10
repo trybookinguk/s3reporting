@@ -3,26 +3,30 @@
 Account Risk Report.
 
 Reads an "Admin Account Balance" export (filename <date>_AccountBalance.csv),
-joins each account to the warehouse's completed events, and appends risk
-columns describing the account's two most-recent completed events and the
-activity between them.
+joins each account to the warehouse's events, and appends risk columns
+describing the span from the account's last completed event to its last
+future (scheduled) event, and the ticketing activity in between.
 
-For each account (matched by account name) it computes, over COMPLETED events
-(EventDate before the report/file date, from Successful bookings only):
+For each account (matched by account name), over Successful bookings, using
+two bookend dates relative to now():
+  - past bookend   = the last event date in the PAST   (max EventDate < now)
+  - future bookend = the last event date in the FUTURE  (max EventDate >= now)
 
-  - Past Completed Event Date        : the most recent completed event date
-  - Total Completed Events           : count of distinct completed events
-  - Next Latest Completed Event Date : the second most recent completed date
-  - Events Between Dates             : distinct events in the inclusive window
-                                       [next-latest date .. latest date]
-  - Tickets Sold Between Dates       : sum of TicketQuantity in that window
-  - Ticket Sales GBP Between Dates   : sum of PaymentReceived in that window
-                                       (the "carrying ticket sales balance")
+it computes:
 
-The window is inclusive of both endpoint dates. If an account has only one
-distinct completed event date, the window degenerates to that single date and
-"Next Latest Completed Event Date" is left blank. Accounts with no completed
-events get blank/zero values.
+  - Past Completed Event Date      : the past bookend (last completed event)
+  - Total Completed Events         : distinct events with EventDate < now
+  - Future Latest Event Date       : the future bookend (last scheduled event)
+  - Events Between Dates           : distinct events in the inclusive window
+                                     between the two bookends (may be many)
+  - Tickets Sold Between Dates     : sum of TicketQuantity in that window
+  - Ticket Sales GBP Between Dates : sum of PaymentReceived in that window
+                                     (the "carrying ticket sales balance")
+
+The window is inclusive of both bookend dates. If a bookend is missing (no
+past or no future events) the window collapses to the single date that exists
+and the missing bookend column is left blank. Accounts with no events at all
+get blank/zero values.
 
 Output: <date>_AccountRiskReport.csv (date taken from the input filename).
 
@@ -43,7 +47,7 @@ from datetime import date, datetime
 NEW_COLUMNS = [
     "Past Completed Event Date",
     "Total Completed Events",
-    "Next Latest Completed Event Date",
+    "Future Latest Event Date",
     "Events Between Dates",
     "Tickets Sold Between Dates",
     "Ticket Sales GBP Between Dates",
@@ -87,7 +91,6 @@ def _event_rollup_query(conn: sqlite3.Connection):
             "FROM bookings "
             "WHERE Status = 'Successful' AND EventDate IS NOT NULL "
             "  AND EventId IS NOT NULL AND AccountName IS NOT NULL "
-            "  AND DATE(EventDate) < DATE(?) "
             "GROUP BY AccountName, EventId, EventDate"
         )
         return sql, True
@@ -99,14 +102,18 @@ def _event_rollup_query(conn: sqlite3.Connection):
         "FROM bookings b "
         "WHERE b.Status = 'Successful' AND b.EventDate IS NOT NULL "
         "  AND b.EventId IS NOT NULL AND b.AccountId IS NOT NULL "
-        "  AND DATE(b.EventDate) < DATE(?) "
         "GROUP BY b.AccountId, b.EventId, b.EventDate"
     )
     return sql, False
 
 
-def compute_account_metrics(conn: sqlite3.Connection, cutoff: date) -> dict:
-    """Return {normalised_account_name: metrics_dict} for completed events."""
+def compute_account_metrics(conn: sqlite3.Connection, now: date) -> dict:
+    """Return {normalised_account_name: metrics_dict}.
+
+    Bookends per account (relative to `now`): the last PAST event date
+    (EventDate < now) and the last FUTURE event date (EventDate >= now). The
+    inclusive window between them may span many events.
+    """
     sql, by_name = _event_rollup_query(conn)
 
     # events_by_acct[key] = list of (event_date, tickets, revenue), one per event
@@ -118,7 +125,7 @@ def compute_account_metrics(conn: sqlite3.Connection, cutoff: date) -> dict:
             if _id is not None:
                 id_to_name[_id] = name
 
-    for acct, _event_id, event_date_raw, tickets, revenue in conn.execute(sql, (cutoff.isoformat(),)):
+    for acct, _event_id, event_date_raw, tickets, revenue in conn.execute(sql):
         d = _parse_date(event_date_raw)
         if d is None:
             continue
@@ -133,18 +140,26 @@ def compute_account_metrics(conn: sqlite3.Connection, cutoff: date) -> dict:
 
     metrics = {}
     for key, events in events_by_acct.items():
-        # Distinct completed event dates, newest first.
-        distinct_dates = sorted({e[0] for e in events}, reverse=True)
-        latest = distinct_dates[0]
-        next_latest = distinct_dates[1] if len(distinct_dates) > 1 else None
+        past_dates = [e[0] for e in events if e[0] < now]
+        future_dates = [e[0] for e in events if e[0] >= now]
+        past_bookend = max(past_dates) if past_dates else None
+        future_bookend = max(future_dates) if future_dates else None
 
-        window_start = next_latest if next_latest is not None else latest
-        in_window = [e for e in events if window_start <= e[0] <= latest]
+        # Inclusive window between the two bookends. If a bookend is missing,
+        # the window collapses to whichever single bookend exists.
+        bookends = [d for d in (past_bookend, future_bookend) if d is not None]
+        lo, hi = min(bookends), max(bookends)
+        in_window = [e for e in events if lo <= e[0] <= hi]
+
+        # Count distinct completed events (EventDate < now). past_dates counts
+        # event-date rows; use distinct-by-date is not right (multiple events
+        # can share a date), so count rows — one row per (event, date).
+        total_completed = len(past_dates)
 
         metrics[key] = {
-            "Past Completed Event Date": latest.isoformat(),
-            "Total Completed Events": len(events),
-            "Next Latest Completed Event Date": next_latest.isoformat() if next_latest else "",
+            "Past Completed Event Date": past_bookend.isoformat() if past_bookend else "",
+            "Total Completed Events": total_completed,
+            "Future Latest Event Date": future_bookend.isoformat() if future_bookend else "",
             "Events Between Dates": len(in_window),
             "Tickets Sold Between Dates": int(round(sum(e[1] for e in in_window))),
             "Ticket Sales GBP Between Dates": round(sum(e[2] for e in in_window), 2),
@@ -203,8 +218,8 @@ def augment_csv(input_path: str, output_path: str, metrics: dict) -> tuple:
     return matched, total
 
 
-def _derive_output_path(input_path: str, output_arg) -> tuple:
-    """Return (output_path, cutoff_date) derived from the input filename date."""
+def _derive_output_path(input_path: str, output_arg) -> str:
+    """Return the output path, deriving the date prefix from the input filename."""
     base = os.path.basename(input_path)
     m = re.search(r"(\d{8})_AccountBalance\.csv$", base)
     if not m:
@@ -212,9 +227,7 @@ def _derive_output_path(input_path: str, output_arg) -> tuple:
             f"Input filename '{base}' does not match <YYYYMMDD>_AccountBalance.csv"
         )
     ymd = m.group(1)
-    cutoff = datetime.strptime(ymd, "%Y%m%d").date()
-    output_path = output_arg or os.path.join(os.getcwd(), f"{ymd}_AccountRiskReport.csv")
-    return output_path, cutoff
+    return output_arg or os.path.join(os.getcwd(), f"{ymd}_AccountRiskReport.csv")
 
 
 def main() -> int:
@@ -222,6 +235,7 @@ def main() -> int:
     parser.add_argument("input_csv", help="Path to <date>_AccountBalance.csv")
     parser.add_argument("--db", help="Path to the SQLite warehouse (default: warehouse.default_db_path()).")
     parser.add_argument("--output", help="Output CSV path (default: <date>_AccountRiskReport.csv in cwd).")
+    parser.add_argument("--as-of", help="Treat this date as 'now' (YYYY-MM-DD). Default: today.")
     args = parser.parse_args()
 
     if not os.path.exists(args.input_csv):
@@ -229,10 +243,19 @@ def main() -> int:
         return 1
 
     try:
-        output_path, cutoff = _derive_output_path(args.input_csv, args.output)
+        output_path = _derive_output_path(args.input_csv, args.output)
     except ValueError as e:
         print(f"Error: {e}")
         return 1
+
+    if args.as_of:
+        try:
+            now = datetime.strptime(args.as_of, "%Y-%m-%d").date()
+        except ValueError:
+            print(f"Error: --as-of must be YYYY-MM-DD (got '{args.as_of}').")
+            return 1
+    else:
+        now = date.today()
 
     db_path = args.db
     if not db_path:
@@ -246,13 +269,13 @@ def main() -> int:
         print(f"Error: warehouse database not found: {db_path}")
         return 1
 
-    print(f"Reading events from {db_path} (completed = EventDate < {cutoff.isoformat()}, Successful)...")
+    print(f"Reading events from {db_path} (now = {now.isoformat()}; past = EventDate < now, Successful)...")
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
-        metrics = compute_account_metrics(conn, cutoff)
+        metrics = compute_account_metrics(conn, now)
     finally:
         conn.close()
-    print(f"Computed risk metrics for {len(metrics):,} accounts with completed events.")
+    print(f"Computed risk metrics for {len(metrics):,} accounts with events.")
 
     matched, total = augment_csv(args.input_csv, output_path, metrics)
     print(f"Matched {matched:,}/{total:,} account rows to warehouse events.")

@@ -185,3 +185,36 @@ def upload(token: str, drive_id: str, filename: str, data: bytes,
     if len(data) <= SMALL_UPLOAD_LIMIT_BYTES:
         return upload_small(token, drive_id, filename, data, folder)
     return upload_large(token, drive_id, filename, data, folder)
+
+
+def list_files(token: str, drive_id: str, folder: str = SHAREPOINT_FOLDER) -> list:
+    """Return the names of the items directly in a SharePoint folder (paged)."""
+    path = folder
+    url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{path}:/children?$select=name&$top=200"
+    names = []
+    while url:
+        resp = _request_with_retry(
+            requests.get, url, headers={"Authorization": f"Bearer {token}"}, timeout=60
+        )
+        if resp.status_code != 200:
+            log.warning("Listing %s failed: %d - %s", folder, resp.status_code, resp.text[:200])
+            resp.raise_for_status()
+            break
+        body = resp.json()
+        names.extend(item["name"] for item in body.get("value", []) if "name" in item)
+        url = body.get("@odata.nextLink")
+    return names
+
+
+def get_web_url(token: str, drive_id: str, filename: str,
+                folder: str = SHAREPOINT_FOLDER) -> Optional[str]:
+    """Return the SharePoint webUrl for a file (opens it in the browser), or None."""
+    path = f"{folder}/{filename}" if folder else filename
+    url = f"{GRAPH_BASE}/drives/{drive_id}/root:/{path}?$select=webUrl"
+    resp = _request_with_retry(
+        requests.get, url, headers={"Authorization": f"Bearer {token}"}, timeout=60
+    )
+    if resp.status_code == 200:
+        return resp.json().get("webUrl")
+    log.warning("webUrl fetch for %s failed: %d - %s", filename, resp.status_code, resp.text[:200])
+    return None

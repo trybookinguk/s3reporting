@@ -6,6 +6,7 @@ authentication, small-file uploads, large-file resumable uploads, downloads.
 Used by both the dashboard pipeline and the tier reporting pipeline.
 """
 
+import base64
 import logging
 import time
 from typing import Optional
@@ -204,6 +205,40 @@ def list_files(token: str, drive_id: str, folder: str = SHAREPOINT_FOLDER) -> li
         names.extend(item["name"] for item in body.get("value", []) if "name" in item)
         url = body.get("@odata.nextLink")
     return names
+
+
+def _encode_share_url(share_url: str) -> str:
+    """Encode a sharing URL for Graph's /shares endpoint (u! + base64url, unpadded)."""
+    b64 = base64.urlsafe_b64encode(share_url.encode("utf-8")).decode("ascii").rstrip("=")
+    return "u!" + b64
+
+
+def resolve_share_url(token: str, share_url: str) -> Optional[dict]:
+    """Resolve a SharePoint sharing URL to the drive + folder it lives in.
+
+    Returns {'drive_id', 'folder', 'name', 'web_url'} or None. `folder` is the
+    parent folder path relative to the drive root (''=root), suitable for the
+    other helpers here.
+    """
+    url = (f"{GRAPH_BASE}/shares/{_encode_share_url(share_url)}/driveItem"
+           "?$select=id,name,webUrl,parentReference")
+    resp = _request_with_retry(
+        requests.get, url, headers={"Authorization": f"Bearer {token}"}, timeout=60
+    )
+    if resp.status_code != 200:
+        log.warning("Resolving share URL failed: %d - %s", resp.status_code, resp.text[:200])
+        return None
+    item = resp.json()
+    parent = item.get("parentReference", {}) or {}
+    path = parent.get("path", "") or ""
+    # path looks like '/drives/<id>/root:/Sub/Folder' (or '.../root:' at root).
+    folder = path.split("root:", 1)[1].lstrip("/") if "root:" in path else ""
+    return {
+        "drive_id": parent.get("driveId"),
+        "folder": folder,
+        "name": item.get("name"),
+        "web_url": item.get("webUrl"),
+    }
 
 
 def get_web_url(token: str, drive_id: str, filename: str,

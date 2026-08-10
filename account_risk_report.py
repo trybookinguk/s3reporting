@@ -16,9 +16,11 @@ it computes:
 
   - Past Completed Event Date      : the past bookend (last completed event)
   - Total Completed Events         : distinct events with EventDate < now
+  - Total Completed Tickets Sold   : sum of TicketQuantity over completed events
+  - Total Completed Sales          : sum of PaymentReceived over completed events
   - Future Latest Event Date       : the future bookend (last scheduled event)
-  - Events Between Dates           : distinct events in the inclusive window
-                                     between the two bookends (may be many)
+  - Events Between Dates           : events in the window from the last completed
+                                     to the last future event (0 if no future event)
   - Tickets Sold Between Dates     : sum of TicketQuantity in that window
   - Ticket Sales GBP Between Dates : sum of PaymentReceived in that window
                                      (the "carrying ticket sales balance")
@@ -65,6 +67,8 @@ DEFAULT_EMAIL = "henry@trybooking.co.uk"
 METRIC_COLUMNS = [
     "Past Completed Event Date",
     "Total Completed Events",
+    "Total Completed Tickets Sold",
+    "Total Completed Sales",
     "Future Latest Event Date",
     "Events Between Dates",
     "Tickets Sold Between Dates",
@@ -78,8 +82,9 @@ METRIC_COLUMNS = [
 # in every threshold it exceeds.
 EXPOSURE_COLUMNS = ["Exposure", "Exposure 90Days+", "Exposure 60Days+", "Exposure 30Days+"]
 
-# Full set appended to each row, in output order: Account_ID, the metrics, exposure.
-APPENDED_COLUMNS = ["Account_ID"] + METRIC_COLUMNS + EXPOSURE_COLUMNS
+# Account_ID is prepended as the first column; the metrics + exposure are appended.
+OUTPUT_PREFIX_COLUMN = "Account_ID"
+APPENDED_COLUMNS = METRIC_COLUMNS + EXPOSURE_COLUMNS
 
 
 def _norm(name: str) -> str:
@@ -168,25 +173,27 @@ def compute_account_metrics(conn: sqlite3.Connection, now: date) -> dict:
 
     metrics = {}
     for key, events in events_by_acct.items():
-        past_dates = [e[0] for e in events if e[0] < now]
-        future_dates = [e[0] for e in events if e[0] >= now]
-        past_bookend = max(past_dates) if past_dates else None
-        future_bookend = max(future_dates) if future_dates else None
+        completed = [e for e in events if e[0] < now]     # past (completed) events
+        future = [e for e in events if e[0] >= now]        # upcoming events
+        past_bookend = max((e[0] for e in completed), default=None)
+        future_bookend = max((e[0] for e in future), default=None)
 
-        # Inclusive window between the two bookends. If a bookend is missing,
-        # the window collapses to whichever single bookend exists.
-        bookends = [d for d in (past_bookend, future_bookend) if d is not None]
-        lo, hi = min(bookends), max(bookends)
-        in_window = [e for e in events if lo <= e[0] <= hi]
-
-        # Count distinct completed events (EventDate < now). past_dates counts
-        # event-date rows; use distinct-by-date is not right (multiple events
-        # can share a date), so count rows — one row per (event, date).
-        total_completed = len(past_dates)
+        # The "between" window carries forward from the last completed event to
+        # the last future event, and only exists when there IS a future event.
+        # With no future event nothing is carried forward, so the window is empty
+        # (Events/Tickets/Sales Between = 0) rather than collapsing onto the last
+        # completed event and reporting a spurious 1.
+        if future_bookend is not None:
+            lo = past_bookend if past_bookend is not None else min(e[0] for e in future)
+            in_window = [e for e in events if lo <= e[0] <= future_bookend]
+        else:
+            in_window = []
 
         metrics[key] = {
             "Past Completed Event Date": past_bookend.isoformat() if past_bookend else "",
-            "Total Completed Events": total_completed,
+            "Total Completed Events": len(completed),
+            "Total Completed Tickets Sold": int(round(sum(e[1] for e in completed))),
+            "Total Completed Sales": round(sum(e[2] for e in completed), 2),
             "Future Latest Event Date": future_bookend.isoformat() if future_bookend else "",
             "Events Between Dates": len(in_window),
             "Tickets Sold Between Dates": int(round(sum(e[1] for e in in_window))),
@@ -301,17 +308,18 @@ def build_report_csv(rows: list, metrics: dict, name_to_id: dict, now: date) -> 
             e60 = exposure if (age is not None and age >= 60) else ""
             e30 = exposure if (age is not None and age >= 30) else ""
 
-        out_row = row + [acct_id] + metric_vals + [exposure, e90, e60, e30]
+        # Account_ID is the first column; then the original row, metrics, exposure.
+        out_row = [acct_id] + row + metric_vals + [exposure, e90, e60, e30]
         built.append(((_sort_num(e90), _sort_num(e60), _sort_num(e30)), out_row))
 
-    # Sort high -> low by 90Days+, then 60Days+, then 30Days.
+    # Sort high -> low by 90Days+, then 60Days+, then 30Days+.
     built.sort(key=lambda t: t[0], reverse=True)
 
     buf = io.StringIO()
     w = csv.writer(buf)
     for b in banner:
         w.writerow(b)
-    w.writerow(header + APPENDED_COLUMNS)
+    w.writerow([OUTPUT_PREFIX_COLUMN] + header + APPENDED_COLUMNS)
     w.writerows(r for _, r in built)
     return buf.getvalue(), matched, total
 

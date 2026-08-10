@@ -28,16 +28,16 @@ past or no future events) the window collapses to the single date that exists
 and the missing bookend column is left blank. Accounts with no events at all
 get blank/zero values.
 
-Input/Output: by default the Account Balance CSV is read from SharePoint (the
-"Platform Data" folder of the Platform Data drive), the risk report is written
-back to that same folder as <date>_AccountRiskReport.csv, and a LINK to it is
-emailed to henry@trybooking.co.uk (which auto-CCs Kathryn). Flags allow reading
-a local input file, skipping the email, or also saving a local copy.
+Input/Output: by default the Account Balance CSV is read from the SharePoint
+"Platform Data/Users and Accounts" folder, the risk report is written back to
+that same folder as <date>_AccountRiskReport.csv, and a LINK to it is emailed
+to henry@trybooking.co.uk (which auto-CCs Kathryn). Flags allow reading a local
+input file, skipping the email, or also saving a local copy.
 
 Usage:
     python3 account_risk_report.py                      # newest balance CSV on SharePoint
     python3 account_risk_report.py --date 20260810      # a specific date's file
-    python3 account_risk_report.py --folder "Platform Data"   # override the SP folder
+    python3 account_risk_report.py --folder "Platform Data/Some Folder"   # override
     python3 account_risk_report.py --local-input in.csv --no-email --output out.csv
 """
 import argparse
@@ -253,17 +253,10 @@ def _latest_balance_filename(names: list):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the Account Risk Report from an Account Balance CSV on SharePoint.")
-    parser.add_argument("--share-url",
-                        help="A SharePoint sharing URL to any file in the target folder "
-                             "(e.g. the balance CSV). Resolves the exact drive + folder to "
-                             "use, overriding --drive-id/--folder. Its driveId + folder are "
-                             "printed so they can be set via ACCOUNT_BALANCE_DRIVE_ID / "
-                             "ACCOUNT_BALANCE_FOLDER for future hands-off runs.")
-    parser.add_argument("--drive-id", default=os.environ.get("ACCOUNT_BALANCE_DRIVE_ID"),
-                        help="SharePoint drive id (default: ACCOUNT_BALANCE_DRIVE_ID, else SHAREPOINT_DRIVE_ID).")
-    parser.add_argument("--folder", default=os.environ.get("ACCOUNT_BALANCE_FOLDER", "Platform Data"),
-                        help="SharePoint folder to read the balance CSV from and write the "
-                             "report to (default: ACCOUNT_BALANCE_FOLDER, else 'Platform Data').")
+    parser.add_argument("--folder", default="Platform Data/Users and Accounts",
+                        help="SharePoint folder (in the Platform Data drive) to read the "
+                             "balance CSV from and write the report to. "
+                             "Default: 'Platform Data/Users and Accounts'.")
     parser.add_argument("--date", help="Balance file date YYYYMMDD (default: newest on SharePoint).")
     parser.add_argument("--local-input", help="Read the balance CSV from this local path instead of SharePoint.")
     parser.add_argument("--db", help="Path to the SQLite warehouse (default: warehouse.default_db_path()).")
@@ -300,9 +293,7 @@ def main() -> int:
 
     # SharePoint credentials/drive (needed unless purely local + no upload).
     need_sharepoint = (not args.local_input) or (not args.no_upload)
-    token = None
-    drive_id = args.drive_id
-    folder = args.folder
+    token = drive_id = None
     if need_sharepoint:
         try:
             from modules.utils import sharepoint
@@ -310,27 +301,13 @@ def main() -> int:
         except Exception as e:
             print(f"Error: cannot import SharePoint helper ({e}).")
             return 1
+        if not SHAREPOINT_DRIVE_ID:
+            print("Error: SHAREPOINT_DRIVE_ID not set in the environment.")
+            return 1
+        drive_id = SHAREPOINT_DRIVE_ID
         token = sharepoint.authenticate_graph()
         if not token:
             print("Error: could not authenticate to Microsoft Graph.")
-            return 1
-
-        # A share URL pins the exact drive + folder (settles which site/library
-        # the file actually lives in), overriding the drive-id/folder guesses.
-        if args.share_url:
-            info = sharepoint.resolve_share_url(token, args.share_url)
-            if not info or not info.get("drive_id"):
-                print("Error: could not resolve --share-url to a drive/folder.")
-                return 1
-            drive_id, folder = info["drive_id"], info["folder"]
-            print(f"Resolved share URL -> drive_id={drive_id} folder='{folder}'")
-            print("  (set ACCOUNT_BALANCE_DRIVE_ID / ACCOUNT_BALANCE_FOLDER in .env "
-                  "to reuse without --share-url)")
-        else:
-            drive_id = drive_id or SHAREPOINT_DRIVE_ID
-        if not drive_id:
-            print("Error: no SharePoint drive id (set ACCOUNT_BALANCE_DRIVE_ID, "
-                  "SHAREPOINT_DRIVE_ID, or pass --drive-id / --share-url).")
             return 1
 
     # --- Obtain the Account Balance CSV -------------------------------------
@@ -349,17 +326,17 @@ def main() -> int:
         if args.date:
             balance_name = f"{args.date}_AccountBalance.csv"
         else:
-            names = sharepoint.list_files(token, drive_id, folder)
+            names = sharepoint.list_files(token, drive_id, args.folder)
             balance_name = _latest_balance_filename(names)
             if not balance_name:
-                print(f"Error: no <date>_AccountBalance.csv found in SharePoint '{folder}'.")
+                print(f"Error: no <date>_AccountBalance.csv found in SharePoint '{args.folder}'.")
                 return 1
         ymd = _ymd_from_name(balance_name)
-        balance_bytes = sharepoint.download_file(token, drive_id, balance_name, folder)
+        balance_bytes = sharepoint.download_file(token, drive_id, balance_name, args.folder)
         if balance_bytes is None:
-            print(f"Error: '{balance_name}' not found in SharePoint '{folder}'.")
+            print(f"Error: '{balance_name}' not found in SharePoint '{args.folder}'.")
             return 1
-        print(f"Downloaded {balance_name} from SharePoint '{folder}'.")
+        print(f"Downloaded {balance_name} from SharePoint '{args.folder}'.")
 
     report_filename = f"{ymd}_AccountRiskReport.csv"
 
@@ -383,12 +360,12 @@ def main() -> int:
     # --- Upload to SharePoint + email the link -------------------------------
     web_url = None
     if not args.no_upload:
-        ok = sharepoint.upload(token, drive_id, report_filename, csv_text.encode("utf-8"), folder)
+        ok = sharepoint.upload(token, drive_id, report_filename, csv_text.encode("utf-8"), args.folder)
         if not ok:
             print(f"Error: failed to upload {report_filename} to SharePoint.")
             return 1
-        print(f"Uploaded {report_filename} to SharePoint '{folder}'.")
-        web_url = sharepoint.get_web_url(token, drive_id, report_filename, folder)
+        print(f"Uploaded {report_filename} to SharePoint '{args.folder}'.")
+        web_url = sharepoint.get_web_url(token, drive_id, report_filename, args.folder)
 
     if not args.no_email:
         try:
@@ -398,7 +375,7 @@ def main() -> int:
             return 1
         subject = f"Account Risk Report {ymd[:4]}-{ymd[4:6]}-{ymd[6:]}"
         link_html = (f'<a href="{web_url}">{report_filename}</a>' if web_url
-                     else f"{report_filename} (in SharePoint '{folder}')")
+                     else f"{report_filename} (in SharePoint '{args.folder}')")
         body = (
             f"<p>FYI - the Account Risk Report is ready: {link_html}</p>"
             f"<p>As of {now.isoformat()}: {matched:,} of {total:,} accounts matched to "

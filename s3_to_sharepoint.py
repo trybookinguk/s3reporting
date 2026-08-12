@@ -40,8 +40,6 @@ log = logging.getLogger("s3-sharepoint-sync")
 # without importing it (which pulls in pytz, pandas, etc.)
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_KEY")
-# Optional — set only for temporary/MFA credentials (aws sts get-session-token).
-AWS_SESSION_TOKEN = os.environ.get("AWS_SESSION_TOKEN") or os.environ.get("AWS_SECURITY_TOKEN")
 S3_BUCKET = "produk-rdsextracts-438255373632"
 
 # Azure / Microsoft Graph
@@ -138,15 +136,12 @@ def get_s3_client():
         log.error("AWS credentials not set. Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY")
         sys.exit(1)
 
-    client_kwargs = {
-        "aws_access_key_id": AWS_ACCESS_KEY_ID,
-        "aws_secret_access_key": AWS_SECRET_ACCESS_KEY,
-        "config": Config(max_pool_connections=MAX_WORKERS),
-    }
-    # Only pass the session token when set (temporary/MFA credentials).
-    if AWS_SESSION_TOKEN:
-        client_kwargs["aws_session_token"] = AWS_SESSION_TOKEN
-    return boto3.client("s3", **client_kwargs)
+    return boto3.client(
+        "s3",
+        aws_access_key_id=AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        config=Config(max_pool_connections=MAX_WORKERS),
+    )
 
 
 def list_s3_objects(s3_client, bucket):

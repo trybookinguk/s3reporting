@@ -32,7 +32,7 @@ import pytz
 
 # Import configurations
 from .config import (
-    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, S3_BUCKET, UK_TZ,
+    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET, UK_TZ,
     CUTOFF_365, CUTOFF_730, EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS
 )
 from .date_utils import get_file_date_info, get_latest_data_date
@@ -365,16 +365,12 @@ class UnifiedDataLoader:
         os.makedirs(self.data_dir, exist_ok=True)
     
     def _get_s3_client(self):
-        """Get S3 client with credentials."""
-        client_kwargs = {
-            'aws_access_key_id': AWS_ACCESS_KEY_ID,
-            'aws_secret_access_key': AWS_SECRET_ACCESS_KEY,
-        }
-        # Only pass the session token when set (temporary/MFA credentials);
-        # long-lived keys leave it None and must not send it.
-        if AWS_SESSION_TOKEN:
-            client_kwargs['aws_session_token'] = AWS_SESSION_TOKEN
-        return boto3.client('s3', **client_kwargs)
+        """Get S3 client with the IAM service-user credentials from .env."""
+        return boto3.client(
+            's3',
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        )
     
     # ========== Caching Functions ==========
     

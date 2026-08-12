@@ -57,8 +57,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--env-file",
-        default="/s3reporting/.env",
-        help="Path to the .env file (default: /s3reporting/.env)",
+        default="/root/s3reporting/.env",
+        help="Path to the .env file (default: /root/s3reporting/.env)",
     )
     args = parser.parse_args()
 

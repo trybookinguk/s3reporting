@@ -108,6 +108,30 @@ crontab /root/s3reporting/deploy/pi-crontab    # re-arm the schedule
 # restart the dashboard under pm2 from /root/reporting-dashboard
 ```
 
+## Adding / replacing the data disk
+
+The pipeline's heavy, high-churn data lives under **`/root/s3reporting/.cache/`** — the S3 cache pickles directly under it, and every `.db` warehouse under `.cache/prepared/` (`warehouse.db`, `warehouse_duck.db`, `retention_state.db`, `box_office.db`, `database_builder.db`, `zoho_cache.db`). Paths come from `S3_CACHE_DIR` / `DATA_DIR` in `.env`. Putting this on a dedicated disk spares the SD card and isolates a disk failure from the code + secrets.
+
+Use the helper script to mount a disk there persistently (it refuses the SD card / root disk, preserves any existing `.cache` data, and adds a `nofail` fstab entry by UUID so a future disk failure won't block boot):
+
+```bash
+# check which device is the new disk first
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL
+
+# brand-new disk (partitions + formats — ERASES it; re-type device to confirm)
+sudo FORMAT=1 /root/s3reporting/deploy/mount_cache_disk.sh /dev/sda
+
+# disk that already has a filesystem
+sudo /root/s3reporting/deploy/mount_cache_disk.sh /dev/sda
+```
+
+After a **disk failure**, the warehouses died with the old disk — once the new disk is mounted, repopulate `.cache/prepared/` from the nightly backup:
+```bash
+cd /root/s3reporting && python3 restore_from_sharepoint.py
+```
+
+See `deploy/mount_cache_disk.sh` for options (`MOUNTPOINT`, `LABEL`, `OWNER`).
+
 ## Can't reach the Pi at all?
 
 Normal access **is** Tailscale, so if Tailscale is the thing that's down you can't SSH by MagicDNS. Recovery paths, in order:

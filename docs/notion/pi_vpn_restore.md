@@ -89,8 +89,12 @@ If the reset also wiped the working directory (the git code, `.env`, and `.cache
 ```bash
 git clone https://github.com/trybookinguk/s3reporting.git /root/s3reporting
 cd /root/s3reporting
-pip install --break-system-packages msal requests
+pip install --break-system-packages msal requests pytz pandas boto3 python-dateutil cryptography
 ```
+> `restore_from_sharepoint.py` imports `modules.utils`, which pulls in the whole
+> utils stack — `msal requests` alone fails with `ModuleNotFoundError: No module
+> named 'pytz'` (then pandas/boto3/cryptography). Install the wider set above, or
+> the full `deploy/README.md` list plus `cryptography`.
 
 **2. Restore secrets + warehouses from SharePoint.** Have the **four Azure values** *and* the **backup passphrase** (`BACKUP_SECRET_PASSPHRASE`) ready from the password manager — the files are stored encrypted:
 ```bash

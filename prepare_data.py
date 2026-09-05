@@ -830,6 +830,29 @@ CREATE TABLE dst.retention_agg (
 );
 """
 
+# ppc_attribution and users come back with native types (the Python ingest
+# writes them via pandas-typed to_sql), so a plain SELECT * is sufficient.
+_DUCKDB_PPC_ATTRIBUTION = """
+CREATE TABLE dst.ppc_attribution AS SELECT * FROM src.ppc_attribution;
+"""
+
+# Empty fallback used when src.ppc_attribution does not yet exist — the GA4
+# ingest (modules/ga4_ingest.py) creates and fills it, but on a fresh Pi (or
+# any warehouse where GA4 has never run) the table is absent, and a missing
+# table inside the single duckdb CLI run would otherwise abort the whole
+# materialise. Columns/types mirror ga4_ingest._ensure_table.
+_DUCKDB_PPC_ATTRIBUTION_EMPTY = """
+CREATE TABLE dst.ppc_attribution (
+    conversion_date VARCHAR,
+    event_id BIGINT,
+    campaign VARCHAR,
+    source VARCHAR,
+    medium VARCHAR,
+    sessions INTEGER,
+    users INTEGER
+);
+"""
+
 
 def _materialise_duckdb() -> None:
     """Build a fresh DuckDB file from the SQLite warehouse.
@@ -875,25 +898,41 @@ def _materialise_duckdb() -> None:
     # SQLite directly and pick the copy-across vs empty-shell fragment — a
     # missing table inside the single duckdb CLI run would otherwise abort the
     # whole materialise.
+    #
+    # ppc_attribution is written by the GA4 ingest (modules/ga4_ingest.py),
+    # which is on-demand and may never have run on a fresh Pi — same problem,
+    # same fix. Probe both here so a single missing source table can't abort
+    # the whole materialise.
     import sqlite3
+
+    def _table_exists(conn, name):
+        return conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone() is not None
+
     retention_sql = _DUCKDB_RETENTION_AGG_EMPTY
+    ppc_sql = _DUCKDB_PPC_ATTRIBUTION_EMPTY
     try:
         _probe = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
         try:
-            exists = _probe.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='retention_priority'"
-            ).fetchone()
-            if exists:
+            if _table_exists(_probe, "retention_priority"):
                 retention_sql = _DUCKDB_RETENTION_AGG
             else:
                 log.info(
                     "retention_priority table not present yet (zoho_tiers hasn't "
                     "run) — materialising an empty retention_agg."
                 )
+            if _table_exists(_probe, "ppc_attribution"):
+                ppc_sql = _DUCKDB_PPC_ATTRIBUTION
+            else:
+                log.info(
+                    "ppc_attribution table not present yet (GA4 ingest hasn't "
+                    "run) — materialising an empty ppc_attribution."
+                )
         finally:
             _probe.close()
     except Exception as e:
-        log.warning("Could not probe retention_priority table (%s) — empty agg.", e)
+        log.warning("Could not probe optional source tables (%s) — empty aggs.", e)
 
     target = _duckdb_path()
     # NamedTemporaryFile in the same directory so the rename is atomic on the
@@ -913,9 +952,10 @@ ATTACH '{tmp_path}' AS dst;
 CREATE TABLE dst.bookings AS SELECT {_DUCKDB_BOOKINGS_COLS} FROM src.bookings;
 CREATE TABLE dst.accounts AS SELECT {_DUCKDB_ACCOUNTS_COLS} FROM src.accounts;
 
--- ppc_attribution and users come back with native types (the Python ingest
--- writes them via pandas-typed to_sql), so a plain SELECT * is sufficient.
-CREATE TABLE dst.ppc_attribution AS SELECT * FROM src.ppc_attribution;
+-- ppc_attribution is copied (or created empty) per the probe above; users
+-- comes back with native types (the Python ingest writes it via pandas-typed
+-- to_sql), so a plain SELECT * is sufficient.
+{ppc_sql}
 CREATE TABLE dst.users AS SELECT * FROM src.users;
 
 -- Indexes that match the SQLite hot paths. DuckDB's planner mostly doesn't

@@ -1,0 +1,23 @@
+# Synology Container Manager / Docker Compose for the s3reporting pipeline.
+#
+# Layout on the NAS (adjust the shared-folder name if yours differs):
+#   /volume1/docker/s3reporting          <- this repo (git clone), bind-mounted at /app
+#   /volume1/docker/s3reporting-data     <- persistent cache/warehouse/reports, at /data
+#   /volume1/docker/s3reporting/.env     <- secrets (chmod 600), sets /data paths
+#
+# The container stays up (sleep infinity); the daily jobs are triggered by DSM
+# Task Scheduler via `docker exec` (see deploy/synology/README.md).
+services:
+  s3reporting:
+    build: .
+    image: s3reporting:latest
+    container_name: s3reporting
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/London
+    env_file:
+      - /volume1/docker/s3reporting/.env
+    volumes:
+      - /volume1/docker/s3reporting:/app          # the repo (git-tracked code)
+      - /volume1/docker/s3reporting-data:/data     # persistent cache + warehouses + reports
+    working_dir: /app

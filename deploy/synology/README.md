@@ -88,6 +88,49 @@ To update the code later: `sudo git -C /volume1/docker/s3reporting pull`, then
 re-run `deploy_synology.sh` only if the `Dockerfile`/deps changed (code changes
 are picked up live via the bind mount).
 
+## Low-RAM models (2 GB, e.g. DS218+)
+
+The DS218+ (Celeron J3355) is x86-64 and runs Docker fine, but ships with
+**2 GB RAM** — below what this pipeline comfortably needs. `prepare_data.py`
+builds the warehouse in pandas (≈3.5 GB on disk; the initial `BookingDataAll`
+seed is memory-hungry), and after DSM's own overhead only ~1–1.3 GB is free, so
+the first full run will likely be **OOM-killed** at 2 GB.
+
+**Best fix — upgrade the RAM.** The DS218+ has one SODIMM slot and officially
+takes 2 GB (soldered) + a 4 GB module = **6 GB**. A cheap DDR3L SODIMM removes
+the problem entirely; do this before relying on the NAS for the nightly job.
+
+**Stopgap — add swap ("virtual RAM").** DSM auto-creates a small swap partition;
+there's no GUI to grow it, but you can add a swapfile over SSH. Swap on a NAS is
+slow (heavy disk I/O, some drive wear), so treat it as a trial, not a
+steady state — the one-time seed may limp through; daily deltas afterwards are
+light.
+```bash
+sudo dd if=/dev/zero of=/volume1/swapfile bs=1M count=4096   # 4 GB
+sudo chmod 600 /volume1/swapfile
+sudo mkswap /volume1/swapfile
+sudo swapon /volume1/swapfile
+free -h                                                       # confirm swap is active
+```
+Swap does **not** persist across reboot on its own — add **Control Panel → Task
+Scheduler → Triggered Task → Boot-up** (run as `root`):
+```bash
+swapon /volume1/swapfile
+```
+Do **not** set a container memory limit in `docker-compose.yml`, so it can use
+RAM + swap.
+
+**Trial before committing to the NAS:** add the swapfile, then run just the heavy
+step and watch memory in a second SSH session:
+```bash
+sudo docker exec s3reporting bash -lc 'python3 prepare_data.py; echo rc=$?'
+# other session:
+watch -n2 free -h
+dmesg | grep -i oom          # after: was it OOM-killed?
+```
+If it OOMs, add RAM. On 2 GB without more RAM, the 4 GB Raspberry Pi is the
+better host; the NAS is a good home once it's at 6 GB.
+
 ## Notes / caveats
 - **DuckDB version**: the `Dockerfile` pins `DUCKDB_VERSION`. If the dashboard
   later reads this warehouse, match it to the dashboard's `@duckdb/node-api`.

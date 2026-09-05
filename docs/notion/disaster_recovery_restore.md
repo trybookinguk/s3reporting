@@ -47,8 +47,13 @@ cd /root/s3reporting
 
 **2. Install the Python dependencies** (see `deploy/README.md` for the full list):
 ```bash
-pip install --break-system-packages msal requests
+pip install --break-system-packages msal requests pytz pandas boto3 python-dateutil cryptography
 ```
+> `restore_from_sharepoint.py` imports `modules.utils.backup_crypto`, which triggers
+> `modules/utils/__init__.py` and pulls in the whole utils stack — so `msal requests`
+> alone is **not** enough (you'll get `ModuleNotFoundError: No module named 'pytz'`,
+> then pandas/boto3/cryptography). The line above is the minimum for restore; if in
+> doubt, install the full `deploy/README.md` list plus `cryptography`.
 
 **3. See what backups are available:**
 ```bash

@@ -31,7 +31,13 @@ try:
 except ImportError:
     sys.exit("ERROR: requests not installed — pip install --break-system-packages requests")
 
-DC = "com"  # data centre for this tenant (US). Matches modules/utils/zoho_api.py.
+# Data centre — override with ZOHO_DC env or --dc (com|eu|in|com.au|jp).
+# Must match the api-console.zoho.<dc> where you generate the grant code.
+DC = os.environ.get("ZOHO_DC", "com").strip().lstrip(".") or "com"
+if "--dc" in sys.argv:
+    i = sys.argv.index("--dc")
+    if i + 1 < len(sys.argv):
+        DC = sys.argv[i + 1].strip().lstrip(".")
 ACCOUNTS = f"https://accounts.zoho.{DC}"
 CRM_API = f"https://www.zohoapis.{DC}"
 SALESIQ_API = f"https://salesiq.zoho.{DC}"

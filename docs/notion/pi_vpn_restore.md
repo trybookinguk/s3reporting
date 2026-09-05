@@ -144,14 +144,64 @@ Normal access **is** Tailscale, so if Tailscale is the thing that's down you can
 2. Local LAN SSH — `ssh root@192.168.0.55` (same network only)
 3. **Console access** — keyboard + monitor on the Pi. On a full re-image this is the only way in; reinstall Tailscale (`curl -fsSL https://tailscale.com/install.sh | sh`), then `tailscale up --ssh --hostname=TrybookingPi` and re-apply the `tag:server` tag + `ssh` ACL rule in the admin console.
 
+## Bringing the nightly pipeline back (DuckDB materialise)
+
+After the S3 pull + SQLite warehouse rebuild, `prepare_data.py` **materialises a DuckDB file** (`.cache/prepared/warehouse_duck.db`) that the dashboard reads. Two things bite on a freshly-rebuilt Pi and make it exit non-zero with *"the dashboard warehouse is STALE"*:
+
+**1. The `duckdb` CLI binary is missing.** It's a separate install (not a pip package), so a rebuilt Pi won't have it, and the run fails with *"duckdb binary not found"*. Install the CLI (Raspberry Pi = ARM64):
+```bash
+uname -m                                   # expect aarch64 (64-bit OS); armv7l has no official build
+curl https://install.duckdb.org | sh       # lands in ~/.duckdb/cli/latest/duckdb
+sudo ln -sf /root/.duckdb/cli/latest/duckdb /usr/local/bin/duckdb   # put it on PATH
+```
+Then pin it in `.env` so **cron** finds it too (cron's PATH is minimal — this is why the materialise can silently freeze):
+```bash
+echo 'DUCKDB_BIN=/root/.duckdb/cli/latest/duckdb' >> /root/s3reporting/.env
+duckdb -c "INSTALL sqlite; LOAD sqlite; SELECT 'ok';"   # the materialise needs the sqlite extension (fetched once, needs network)
+```
+> Version note: the dashboard reads the file with `@duckdb/node-api`. DuckDB's file format is version-sensitive — if the dashboard later can't open `warehouse_duck.db`, match the CLI version to the dashboard's `@duckdb/node-api` (in `reporting-dashboard/package.json`).
+
+**2. A missing GA4 table used to abort the whole materialise.** On a warehouse where the GA4 ingest has never run, `ppc_attribution` doesn't exist. As of the fix in `prepare_data.py`, the materialise **probes for it** (like it does for `retention_priority`) and builds an empty shell if absent — so it no longer aborts, and no-ops once GA4 data exists. If you're on an older checkout that predates this, either `git pull origin main` or create the table manually:
+```bash
+python3 - <<'PY'
+import sqlite3
+c = sqlite3.connect("/root/s3reporting/.cache/prepared/warehouse.db")
+c.execute("""CREATE TABLE IF NOT EXISTS ppc_attribution (
+  conversion_date TEXT NOT NULL, event_id INTEGER NOT NULL, campaign TEXT NOT NULL,
+  source TEXT NOT NULL, medium TEXT NOT NULL, sessions INTEGER NOT NULL, users INTEGER NOT NULL,
+  PRIMARY KEY (conversion_date, event_id, campaign, source, medium))""")
+c.commit(); c.close(); print("ppc_attribution ensured")
+PY
+```
+
+Re-run just the materialise (fast — no S3 re-pull):
+```bash
+cd /root/s3reporting && set -a && source .env && set +a
+python3 prepare_data.py --materialise-only
+```
+
+## Running the pipeline by hand
+
+`deploy/run_daily.sh` runs the whole daily sequence in cron order as one command — useful to catch up after a rebuild or a missed night:
+```bash
+cd /root/s3reporting
+./deploy/run_daily.sh --test     # safe preview: TEST_MODE=1 + --dry-run, no Zoho writes / emails
+./deploy/run_daily.sh            # live run (writes to Zoho, emails the team, runs the backup)
+./deploy/run_daily.sh --no-backup
+```
+`prepare_data.py` runs first and must succeed (everything reuses its cache); the rest run in order, and the script prints a pass/fail summary and exits non-zero if any step failed. Always do a `--test` pass first after a rebuild.
+
 ## Prevention checklist
 
 - [ ] `/etc/sysctl.d/99-tailscale.conf` exists with both forwarding lines (survives reboots — the fix above creates it).
 - [ ] Exit node is **approved** in the admin console (approval persists; re-advertising after a re-register does not auto-approve).
 - [ ] The four Azure values **and** `BACKUP_SECRET_PASSPHRASE` are in the company password manager — without them the SharePoint backup is unreachable.
+- [ ] `duckdb` CLI installed and `DUCKDB_BIN` set in `.env` (else the nightly DuckDB materialise silently fails and the dashboard goes stale).
 
 ## Good to know
 
 - "Offers exit node" in `tailscale status` means *advertised*, not *approved* — the console tick is separate.
 - A reset commonly hits **three** things at once: forwarding (Fix 1), exit-node state (Fix 2), and the working directory (Fix 4). Work them in that order.
+- The `duckdb` materialise runs a CLI binary, not a Python lib — installing DuckDB via pip does **not** satisfy it; you need the CLI on PATH or `DUCKDB_BIN`.
+- A rebuild often needs the pipeline pieces in this order: duckdb CLI, then a materialise (empty `ppc_attribution`/`retention_priority` are fine), then the secrets (`test_secrets.py`), then `deploy/run_daily.sh --test`.
 - This page is connectivity only. For data recovery see [Disaster Recovery Restore](disaster_recovery_restore.md); for git auth see [Re-authenticating the Pi to GitHub](pi_github_reauth.md).

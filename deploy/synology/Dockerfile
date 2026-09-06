@@ -13,9 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV TZ=Europe/London
 
 # DuckDB CLI — the materialise shells out to this binary (not the pip package).
-# amd64 build for Intel Synology. Pin a version for reproducibility / to match
-# the dashboard's @duckdb/node-api reader; bump deliberately.
-ARG DUCKDB_VERSION=1.1.3
+# amd64 build for Intel Synology. Pinned to match the dashboard's DuckDB reader
+# (reporting-dashboard @duckdb/node-api 1.5.3-r.2): DuckDB storage is
+# backward- but not reliably forward-compatible, so the writer must equal the
+# reader's engine version. Bump this in lockstep with @duckdb/node-api.
+ARG DUCKDB_VERSION=1.5.3
 RUN curl -fsSL -o /tmp/duckdb.zip \
         "https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" \
     && unzip /tmp/duckdb.zip -d /usr/local/bin && rm /tmp/duckdb.zip \

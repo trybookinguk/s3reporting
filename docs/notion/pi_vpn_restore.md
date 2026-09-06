@@ -205,6 +205,59 @@ cd /root/s3reporting
 ```
 `prepare_data.py` runs first and must succeed (everything reuses its cache); the rest run in order, and the script prints a pass/fail summary and exits non-zero if any step failed. Always do a `--test` pass first after a rebuild.
 
+## Rebuilding credentials (Zoho, SharePoint IDs)
+
+If the backup passphrase is lost, `env.enc` can't be decrypted and each secret must be rebuilt from its source (see `docs/notion/disaster_recovery_restore.md`). Two are fiddly enough to have helpers/notes:
+
+- **Zoho refresh token + portal/org id** — `deploy/zoho_setup.py` mints a refresh token via the headless **Self Client** grant-code flow and looks up `ZOHO_PORTAL_NAME` / `ZOHO_ORG_ID`. Key gotchas: the `ZOHO_CLIENT_ID`/`SECRET` in `.env` must be the **same Self Client** that generates the code (the refresh token is bound to it); this tenant uses the **`.com`** data centre (an `invalid_code` error usually means a wrong DC or an expired/reused code — codes are single-use, ~10 min).
+- **SharePoint `SHAREPOINT_SITE_ID` / `SHAREPOINT_DRIVE_ID`** — these are Microsoft **Graph** values, not in the Entra portal. The tenant's SharePoint host is **`trybookingcouk.sharepoint.com`**, site **`PlatformData`**, and the backups live in the default **Documents** ("Shared Documents") drive under `Backups/pi/`. With an app token:
+  ```bash
+  curl -s -H "Authorization: Bearer $TOKEN" \
+    "https://graph.microsoft.com/v1.0/sites/trybookingcouk.sharepoint.com:/sites/PlatformData:/drives?\$select=id,name,webUrl" | python3 -m json.tool
+  ```
+  The `Documents` drive's `id` is `SHAREPOINT_DRIVE_ID`; the site's `id` (from `…/sites/PlatformData?$select=id`) is `SHAREPOINT_SITE_ID`.
+
+## Restoring email sending (Exchange application access policy)
+
+Reports email via Microsoft Graph `sendMail` as `AZURE_SENDER_MAILBOX`. If sends fail with **`403 ErrorAccessDenied … [RAOP] : Blocked by tenant configured AppOnly AccessPolicy settings`**, the token and `Mail.Send` permission are fine — the block is Exchange's **Application Access Policy** (the app is restricted to specific mailboxes). This is the mechanism that locks the app to the shared sender mailbox.
+
+After any Azure app change (or a mismatch between `AZURE_SENDER_MAILBOX` and the policy's group), fix it in **Exchange Online PowerShell** — use **Azure Cloud Shell** (browser PowerShell, no install) if you have no local PowerShell:
+```powershell
+Connect-ExchangeOnline
+# every policy touching the app — look for MORE THAN ONE for the same AppId (they conflict!):
+Get-ApplicationAccessPolicy | Format-List Identity,AppId,AccessRight,ScopeName,Description
+# does the app get access to the SENDER mailbox?
+Test-ApplicationAccessPolicy -Identity <AZURE_SENDER_MAILBOX> -AppId <AZURE_CLIENT_ID>
+```
+Rules learned the hard way:
+- There must be **exactly one** `RestrictAccess` policy per AppId. **Two policies for the same app conflict** (intersection) and block sending even though `Test-ApplicationAccessPolicy` reports `Granted`. Remove the redundant one with `Remove-ApplicationAccessPolicy -Identity "<full identity>"`.
+- `AZURE_SENDER_MAILBOX` **must be a member** of the policy's scope group. The original sender is a mailbox in the pre-existing `ReportingAppRestrictedSenders` group — set `.env` to that, or add your address to the group.
+- Changes take **up to ~30 min** to propagate; `Granted` from `Test-…` is immediate but enforcement lags.
+- This tenant uses **classic Application Access Policies**, not RBAC-for-Applications.
+
+Test a send directly (bypasses TEST_MODE redirection):
+```bash
+cd /root/s3reporting && set -a && source .env && set +a
+python3 -c "from modules.utils.email_utils import send_html_email; send_html_email('henry@trybooking.co.uk','Pi email test','<p>test</p>'); print('accepted')"
+```
+To **re-send reports whose emails failed** (e.g. a night the policy was broken): `python3 zoho_tiers.py --dry-run` sends the real emails but skips SharePoint state re-writes (preview first with `TEST_MODE=1 python3 zoho_tiers.py --dry-run`).
+
+## Verify the recovery
+
+Work top-down until each is clean:
+```bash
+cd /root/s3reporting && set -a && source .env && set +a
+python3 deploy/check_deps.py                 # deps + duckdb CLI
+python3 test_secrets.py                      # AWS/Azure/SharePoint/Zoho/backup
+./deploy/run_daily.sh --test                 # whole pipeline, no live writes/emails
+# scan the logs for anything real (ignores benign "Failed: 0" etc.):
+for f in /root/logs/*.log; do printf "%-28s %s\n" "$(basename "$f")" "$(grep -ciE 'error|exception|traceback' "$f")"; done
+# logs are append-only, so pre-fix errors linger — check only the latest run of a job:
+awk 'BEGIN{RS="=== Completed at"} {last=$0} END{print last}' /root/logs/zoho-tiers.log \
+  | grep -iE "error|exception|traceback|denied|no module" || echo "latest run: no errors"
+```
+Then confirm the dashboard shows a current **"Data as of"** date (Caddy on `:80` reverse-proxies the SvelteKit app on `:3000`; historical `EADDRINUSE :80` lines are recovery-restart noise, not a fault).
+
 ## Prevention checklist
 
 - [ ] `/etc/sysctl.d/99-tailscale.conf` exists with both forwarding lines (survives reboots — the fix above creates it).
@@ -212,6 +265,9 @@ cd /root/s3reporting
 - [ ] The four Azure values **and** `BACKUP_SECRET_PASSPHRASE` are in the company password manager — without them the SharePoint backup is unreachable.
 - [ ] `duckdb` CLI installed and `DUCKDB_BIN` set in `.env` (else the nightly DuckDB materialise silently fails and the dashboard goes stale).
 - [ ] `python3 deploy/check_deps.py` is green (all required Python deps + the duckdb CLI present) — a missing per-job package (e.g. matplotlib, weasyprint) only surfaces when that job runs.
+- [ ] Exactly **one** Exchange Application Access Policy per Azure AppId, and `AZURE_SENDER_MAILBOX` is a member of its scope group (else `sendMail` 403s with `[RAOP]`).
+- [ ] DuckDB CLI version matches the dashboard's `@duckdb/node-api` (currently **1.5.3**) so the materialised file is readable.
+- [ ] `python3 test_secrets.py` all green, and `BACKUP_SECRET_PASSPHRASE` is in the password manager.
 
 ## Good to know
 
@@ -219,4 +275,7 @@ cd /root/s3reporting
 - A reset commonly hits **three** things at once: forwarding (Fix 1), exit-node state (Fix 2), and the working directory (Fix 4). Work them in that order.
 - The `duckdb` materialise runs a CLI binary, not a Python lib — installing DuckDB via pip does **not** satisfy it; you need the CLI on PATH or `DUCKDB_BIN`.
 - A rebuild often needs the pipeline pieces in this order: duckdb CLI, then a materialise (empty `ppc_attribution`/`retention_priority` are fine), then the secrets (`test_secrets.py`), then `deploy/run_daily.sh --test`.
-- This page is connectivity only. For data recovery see [Disaster Recovery Restore](disaster_recovery_restore.md); for git auth see [Re-authenticating the Pi to GitHub](pi_github_reauth.md).
+- A full rebuild touches, in rough order: connectivity (Fixes 1–3) → directory + `.env` (Fix 4) → dependencies (`check_deps.py`) → duckdb + materialise → credentials (`test_secrets.py`, Zoho/SharePoint rebuild) → email access policy → `run_daily.sh --test` → verify logs. Each has a section above.
+- Email 403 `[RAOP]` after an Azure app change is an **Exchange** problem (application access policy), not a Pi/code one — fix it in Exchange Online PowerShell / Cloud Shell.
+- Logs under `/root/logs/` are append-only; pre-fix error lines persist in the current file until the 30-day cleanup deletes whole old files. Scope error scans to the latest run.
+- This page is connectivity only for the *network* parts. For data recovery see [Disaster Recovery Restore](disaster_recovery_restore.md); for git auth see [Re-authenticating the Pi to GitHub](pi_github_reauth.md).

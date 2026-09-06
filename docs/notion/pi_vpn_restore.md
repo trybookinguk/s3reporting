@@ -258,6 +258,20 @@ awk 'BEGIN{RS="=== Completed at"} {last=$0} END{print last}' /root/logs/zoho-tie
 ```
 Then confirm the dashboard shows a current **"Data as of"** date (Caddy on `:80` reverse-proxies the SvelteKit app on `:3000`; historical `EADDRINUSE :80` lines are recovery-restart noise, not a fault).
 
+## Monitoring (so you find out before the team does)
+
+Two layers, both via the existing email path:
+- **Per-job failure alerts** — `scripts/cron_wrapper.sh` runs every cron job and calls `scripts/cron_notify.py` to email a report the moment a job exits non-zero.
+- **Nightly health summary** — `scripts/health_check.py` (cron at 05:00) emails a daily status of deps + duckdb CLI, warehouse freshness, disk space, and each job's latest run. It's a **dead-man's switch**: no email at all means the Pi or cron is down. It also catches silent issues (a stale warehouse, an exit-0 run with errors inside).
+
+Both need email working (the Exchange access policy above). Test the health check without waiting for cron:
+```bash
+cd /root/s3reporting && set -a && source .env && set +a
+python3 scripts/health_check.py --stdout          # print, no email
+python3 scripts/health_check.py                    # send the summary now
+```
+Recipient defaults to henry@ + kathryn@; override with `HEALTHCHECK_RECIPIENT` in `.env`.
+
 ## Prevention checklist
 
 - [ ] `/etc/sysctl.d/99-tailscale.conf` exists with both forwarding lines (survives reboots — the fix above creates it).

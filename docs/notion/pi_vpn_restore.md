@@ -144,6 +144,20 @@ Normal access **is** Tailscale, so if Tailscale is the thing that's down you can
 2. Local LAN SSH — `ssh root@192.168.0.55` (same network only)
 3. **Console access** — keyboard + monitor on the Pi. On a full re-image this is the only way in; reinstall Tailscale (`curl -fsSL https://tailscale.com/install.sh | sh`), then `tailscale up --ssh --hostname=TrybookingPi` and re-apply the `tag:server` tag + `ssh` ACL rule in the admin console.
 
+## Check dependencies first
+
+A rebuild often misses packages that only one job imports — they fail silently until that job runs (matplotlib broke the 02:45 tier-movement emails; the DuckDB CLI broke the materialise). Check them all up front:
+```bash
+cd /root/s3reporting
+python3 deploy/check_deps.py          # add --all to treat optional (GA4/pricing) as required
+```
+It does a **real import** of every runtime dependency (so it catches "installed but broken", e.g. weasyprint missing its system libs), verifies the **DuckDB CLI** binary, prints the exact `pip install` line for anything missing, and exits non-zero if a required dep is absent. Install what it reports, then re-run until it's green. Required set (used by scheduled jobs): boto3, pandas, numpy, pytz, python-dateutil, requests, msal, cryptography, matplotlib, weasyprint (+ the duckdb CLI). Optional (manual reports): google-analytics-data, PyYAML.
+
+```bash
+# typical fix in one line (weasyprint also needs the pango/cairo apt libs — see deploy/README):
+pip install --break-system-packages boto3 pandas numpy pytz python-dateutil requests msal cryptography matplotlib weasyprint
+```
+
 ## Bringing the nightly pipeline back (DuckDB materialise)
 
 After the S3 pull + SQLite warehouse rebuild, `prepare_data.py` **materialises a DuckDB file** (`.cache/prepared/warehouse_duck.db`) that the dashboard reads. Two things bite on a freshly-rebuilt Pi and make it exit non-zero with *"the dashboard warehouse is STALE"*:
@@ -197,6 +211,7 @@ cd /root/s3reporting
 - [ ] Exit node is **approved** in the admin console (approval persists; re-advertising after a re-register does not auto-approve).
 - [ ] The four Azure values **and** `BACKUP_SECRET_PASSPHRASE` are in the company password manager — without them the SharePoint backup is unreachable.
 - [ ] `duckdb` CLI installed and `DUCKDB_BIN` set in `.env` (else the nightly DuckDB materialise silently fails and the dashboard goes stale).
+- [ ] `python3 deploy/check_deps.py` is green (all required Python deps + the duckdb CLI present) — a missing per-job package (e.g. matplotlib, weasyprint) only surfaces when that job runs.
 
 ## Good to know
 

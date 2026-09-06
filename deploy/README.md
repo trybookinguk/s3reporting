@@ -71,6 +71,14 @@ python3 upload_recipients.py
 required for the PPC/GA4 section of the dashboard; `matplotlib` is required by
 the tier-movement email charts.
 
+After installing, verify every runtime dependency (Python packages + the DuckDB
+CLI) in one shot — this catches per-job packages that otherwise only fail when
+that job runs:
+
+```bash
+python3 deploy/check_deps.py        # exits non-zero if a required dep is missing
+```
+
 ## .env additions
 
 On top of the existing secrets, add:

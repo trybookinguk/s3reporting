@@ -262,7 +262,7 @@ Then confirm the dashboard shows a current **"Data as of"** date (Caddy on `:80`
 
 Two layers, both via the existing email path:
 - **Per-job failure alerts** — `scripts/cron_wrapper.sh` runs every cron job and calls `scripts/cron_notify.py` to email a report the moment a job exits non-zero.
-- **Nightly health summary** — `scripts/health_check.py` (cron at 05:00) emails a daily status of deps + duckdb CLI, warehouse freshness, disk space, and each job's latest run. It's a **dead-man's switch**: no email at all means the Pi or cron is down. It also catches silent issues (a stale warehouse, an exit-0 run with errors inside).
+- **Nightly health summary** — `scripts/health_check.py` (cron at 05:00) emails a daily status of the **Tailscale & cloudflared services**, deps + duckdb CLI, warehouse freshness, disk space, and each job's latest run (weekend-aware: Mon–Fri jobs don't WARN on Sat/Sun). It's a **dead-man's switch**: no email at all means the Pi or cron is down. It also catches silent issues (a stale warehouse, a down VPN/tunnel, an exit-0 run with errors inside).
 
 Both need email working (the Exchange access policy above). Test the health check without waiting for cron:
 ```bash
@@ -292,4 +292,4 @@ Recipient defaults to henry@ + kathryn@; override with `HEALTHCHECK_RECIPIENT` i
 - A full rebuild touches, in rough order: connectivity (Fixes 1–3) → directory + `.env` (Fix 4) → dependencies (`check_deps.py`) → duckdb + materialise → credentials (`test_secrets.py`, Zoho/SharePoint rebuild) → email access policy → `run_daily.sh --test` → verify logs. Each has a section above.
 - Email 403 `[RAOP]` after an Azure app change is an **Exchange** problem (application access policy), not a Pi/code one — fix it in Exchange Online PowerShell / Cloud Shell.
 - Logs under `/root/logs/` are append-only; pre-fix error lines persist in the current file until the 30-day cleanup deletes whole old files. Scope error scans to the latest run.
-- This page is connectivity only for the *network* parts. For data recovery see [Disaster Recovery Restore](disaster_recovery_restore.md); for git auth see [Re-authenticating the Pi to GitHub](pi_github_reauth.md).
+- This page is connectivity only for the *network* parts. For the standing Tailscale/cloudflared setup, dependencies and config files see [Pi Network Services](pi_network_services.md); for data recovery see [Disaster Recovery Restore](disaster_recovery_restore.md); for git auth see [Re-authenticating the Pi to GitHub](pi_github_reauth.md).

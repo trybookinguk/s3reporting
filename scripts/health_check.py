@@ -38,16 +38,18 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 LOG_DIR = Path(os.environ.get("LOG_DIR", "/root/logs"))
 
-# job-name (as passed to cron_wrapper) -> (log filename, max age hours or None).
-# Age is only checked for daily jobs; Mon–Fri jobs are informational (no fail on
-# weekends). None = report age but never fail on it.
+# (job-name, log filename, max age hours or None, weekday_only).
+# max_age: only checked for daily jobs (the cron dead-man's signal).
+# weekday_only: Mon–Fri jobs — on Sat/Sun a "not run" state is expected, so it
+# is reported OK rather than WARN (they last ran Friday; daily jobs still cover
+# the "cron is dead" case every day incl. weekends).
 JOBS = [
-    ("prepare-data",      "prepare-data.log",      26),
-    ("s3-sharepoint",     "s3-sharepoint.log",     None),
-    ("zoho-industry",     "zoho-industry.log",     None),
-    ("zoho-tiers",        "zoho-tiers.log",        None),
-    ("users-accounts",    "users-accounts.log",    26),
-    ("backup-sharepoint", "backup-sharepoint.log", 26),
+    ("prepare-data",      "prepare-data.log",      26,   False),
+    ("s3-sharepoint",     "s3-sharepoint.log",     None, True),
+    ("zoho-industry",     "zoho-industry.log",     None, True),
+    ("zoho-tiers",        "zoho-tiers.log",        None, True),
+    ("users-accounts",    "users-accounts.log",    26,   False),
+    ("backup-sharepoint", "backup-sharepoint.log", 26,   False),
 ]
 
 _MARK = re.compile(r"=====\s+(\S+)\s+(started|finished)\s+at\s+(\S+)(?:\s+\(exit\s+(\d+)\))?")
@@ -69,11 +71,14 @@ def _parse_ts(s):
         return None
 
 
-def check_job(job, logname, max_age_h):
+def check_job(job, logname, max_age_h, weekday_only=False):
     """Return (status, detail) for a job's most recent run."""
+    is_weekend = _now().weekday() >= 5  # Sat=5, Sun=6 (UTC)
+    idle_ok = weekday_only and is_weekend  # Mon–Fri job legitimately idle now
+
     log = LOG_DIR / logname
     if not log.exists():
-        return WARN, "no log file yet"
+        return (OK if idle_ok else WARN), ("weekday job — idle at weekend" if idle_ok else "no log file yet")
     lines = log.read_text(errors="replace").splitlines()
 
     # find the last "started" marker for this job
@@ -84,7 +89,7 @@ def check_job(job, logname, max_age_h):
             start_idx = i
             break
     if start_idx is None:
-        return WARN, "no run markers found"
+        return (OK if idle_ok else WARN), ("weekday job — idle at weekend" if idle_ok else "no run markers found (not run via cron yet)")
 
     # find the matching "finished" after it (if any)
     exit_code, fin_ts = None, None
@@ -141,6 +146,44 @@ def check_disk():
     return OK, detail
 
 
+def check_service(unit):
+    """systemctl is-active <unit> -> (status, detail)."""
+    try:
+        r = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=15)
+    except FileNotFoundError:
+        return WARN, "systemctl not available"
+    except Exception as e:
+        return WARN, f"could not query {unit}: {e}"
+    state = (r.stdout or r.stderr).strip()
+    if state == "active":
+        return OK, f"{unit} active"
+    if state in ("inactive", "failed", "activating", "deactivating"):
+        return FAIL, f"{unit} is {state}"
+    return WARN, f"{unit}: {state or 'not-found (installed?)'}"
+
+
+def check_tailscale():
+    """Daemon up AND actually connected; note exit-node advertising."""
+    status, detail = check_service("tailscaled")
+    if status != OK:
+        return status, detail
+    tail = shutil.which("tailscale") or "/usr/bin/tailscale"
+    try:
+        r = subprocess.run([tail, "status"], capture_output=True, text=True, timeout=15)
+    except Exception as e:
+        return WARN, f"tailscaled active but `tailscale status` failed: {e}"
+    if r.returncode != 0:
+        return FAIL, f"tailscaled active but NOT connected: {(r.stdout or r.stderr).strip()[:100]}"
+    if "offers exit node" not in r.stdout:
+        return WARN, "connected but NOT offering exit node (clients lose internet routing)"
+    return OK, "connected; offers exit node"
+
+
+def check_cloudflared():
+    """cloudflared tunnel service up (external access to the dashboard)."""
+    return check_service("cloudflared")
+
+
 def check_deps():
     script = REPO / "deploy" / "check_deps.py"
     if not script.exists():
@@ -186,11 +229,13 @@ def main():
     args = ap.parse_args()
 
     results = []
+    results.append(("tailscale (VPN/SSH)", *check_tailscale()))
+    results.append(("cloudflared (tunnel)", *check_cloudflared()))
     results.append(("dependencies", *check_deps()))
     results.append(("warehouse (duckdb)", *check_warehouse()))
     results.append(("disk space", *check_disk()))
-    for job, logname, max_age in JOBS:
-        results.append((job, *check_job(job, logname, max_age)))
+    for job, logname, max_age, weekday_only in JOBS:
+        results.append((job, *check_job(job, logname, max_age, weekday_only)))
 
     worst, body = build(results)
 

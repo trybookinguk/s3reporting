@@ -64,52 +64,38 @@ tailscale status --json | grep -i backendstate    # "Running"
 ## Cloudflare Tunnel (cloudflared)
 
 ### Capability
-Exposes the internal dashboard (served locally by Caddy on `:80` → SvelteKit app on `:3000`) to a **public Cloudflare hostname over TLS**, without opening any inbound ports on the router/firewall. Access can be gated by **Cloudflare Access** policies in the Zero Trust dashboard.
+Exposes the internal dashboard (served locally by **Caddy** — which terminates HTTPS using the certs in `/root/certs/` — in front of the SvelteKit app on `:3000`) to a **public Cloudflare hostname over TLS**, without opening any inbound ports on the router/firewall. Access can be gated by **Cloudflare Access** policies in the Zero Trust dashboard.
+
+### This Pi runs a **dashboard-managed (token) tunnel**
+Confirmed from `systemctl cat cloudflared`:
+```
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token eyJ…
+```
+That means: **there is no local `config.yml` and no `/root/.cloudflared/` credentials — and that's correct.** The tunnel's ingress rules and public hostname(s) live entirely in the **Cloudflare Zero Trust dashboard** (Networks → Tunnels → *your tunnel* → **Public Hostname**). The **connector token** embedded in the systemd unit is the only local secret. Do **not** commit that token to git.
 
 ### Dependencies
-- The `cloudflared` binary/package (runs as the `cloudflared` systemd service).
-- A Cloudflare account with the domain, and a **named tunnel** created in **Zero Trust → Networks → Tunnels**.
-- Outbound HTTPS/QUIC (443) allowed from the Pi — the tunnel dials *out* to Cloudflare, so no inbound rules needed.
+- `cloudflared` (installed here from `/root/cloudflared-linux-arm64.deb`; currently v2026.5.1), running as the `cloudflared` systemd service.
+- A Cloudflare account with the domain + the tunnel already created in **Zero Trust → Networks → Tunnels**.
+- Outbound HTTPS/QUIC (443) from the Pi — the tunnel dials *out*, so no inbound firewall rules.
 
-### Config / credential files
-| Path | What it is |
+### Config / credential locations (token mode)
+| Location | What it is |
 |---|---|
-| `/etc/cloudflared/config.yml` | tunnel config: `tunnel:` UUID, `credentials-file:`, and `ingress:` rules |
-| `/root/.cloudflared/<TUNNEL-UUID>.json` | **tunnel credentials** (the secret that authenticates this connector) |
-| `/root/.cloudflared/cert.pem` | origin cert from `cloudflared tunnel login` (needed to create/manage tunnels) |
-| systemd unit `cloudflared.service` | the connector (`cloudflared service install`) |
+| `/etc/systemd/system/cloudflared.service` | the connector; `ExecStart … --token <TOKEN>` is the credential |
+| Cloudflare **Zero Trust dashboard** | the actual config: public hostname → `service` (the local dashboard), ingress rules, Access policies. **Not on the Pi.** |
+| `/etc/cloudflared/` | empty in token mode (no config.yml — expected) |
+| `/root/certs/trybooking.internal.pem` + `…-key.pem` | **Caddy's** internal TLS cert/key (HTTPS to the dashboard), *not* cloudflared. Keep `600`; back up alongside secrets. |
 
-A typical `config.yml` (ingress points at the local dashboard front end):
-```yaml
-tunnel: <TUNNEL-UUID>
-credentials-file: /root/.cloudflared/<TUNNEL-UUID>.json
-
-ingress:
-  - hostname: <dashboard-public-hostname>
-    service: http://localhost:80        # Caddy front end (or http://localhost:3000 direct)
-  - service: http_status:404            # catch-all (required last rule)
-```
-> The real UUID, hostname and credentials live on the Pi and in the Cloudflare Zero Trust dashboard — they are **not** in git. Retrieve/recreate them from the dashboard on a rebuild.
-
-### Install / recovery
-**If the tunnel already exists** (rebuild, credentials lost) — reconnect it from the dashboard:
+### Install / recovery (token mode)
+On a rebuild, reconnect the existing tunnel with its token — get it from **Zero Trust → Networks → Tunnels → *your tunnel* → Configure → Install connector** (choose Debian/arm64; the command shown embeds the token). Or read the current one from `systemctl cat cloudflared` before wiping.
 ```bash
-# install cloudflared (see developers.cloudflare.com for the current ARM64 package), then either:
-#  A) token connector (simplest): Zero Trust -> Tunnels -> your tunnel -> Configure -> copy the token
-sudo cloudflared service install <CONNECTOR-TOKEN>
-#  B) config-file mode: restore /etc/cloudflared/config.yml + the <UUID>.json credentials, then
-sudo cloudflared service install
+sudo dpkg -i /root/cloudflared-linux-arm64.deb          # or re-download the .deb
+sudo cloudflared service install <CONNECTOR-TOKEN>       # writes the systemd unit with the token
 sudo systemctl enable --now cloudflared
 ```
-**If recreating from scratch:**
-```bash
-cloudflared tunnel login                      # writes cert.pem
-cloudflared tunnel create trybooking-dash     # writes <UUID>.json, prints the UUID
-# write /etc/cloudflared/config.yml (see above), then route DNS:
-cloudflared tunnel route dns trybooking-dash <dashboard-public-hostname>
-sudo cloudflared service install
-sudo systemctl enable --now cloudflared
-```
+No `cloudflared tunnel login`, `cert.pem`, or `config.yml` is needed for a token connector — the tunnel definition already exists in the dashboard. If the public hostname ever stops resolving to the dashboard, fix the **Public Hostname** mapping in the dashboard (→ `http://localhost:80`, the Caddy front end), not on the Pi.
+
+> Also restore `/root/certs/trybooking.internal*.pem` (Caddy's HTTPS cert) on a rebuild, or Caddy can't serve the dashboard for the tunnel to reach.
 
 ### Verify
 ```bash
@@ -127,6 +113,6 @@ cloudflared tunnel list                          # the tunnel shows healthy conn
 
 ## Good to know
 - **Two different jobs**: Tailscale = private admin + exit-node routing; cloudflared = public dashboard. A failure in one doesn't affect the other.
-- Tailscale node identity (`tailscaled.state`) and the cloudflared credentials (`<UUID>.json`, `cert.pem`) are the pieces that let a rebuild reconnect *without* re-auth — but they're on the SD card, not in git, so a wiped card means re-authing both from their dashboards.
+- The pieces that let a rebuild reconnect: Tailscale's node identity (`/var/lib/tailscale/tailscaled.state`) and cloudflared's **connector token** (in the systemd unit; re-obtainable from the Zero Trust dashboard). Neither is in git — a wiped SD card means re-authing Tailscale in the browser and re-installing the cloudflared token from the dashboard. Also restore `/root/certs/trybooking.internal*.pem` (Caddy's HTTPS cert).
 - The nightly `health_check.py` alerts if either service is down; `tailscale status` not "offering exit node" is flagged as a WARN (clients would lose internet routing).
 - After any reset, re-check IP forwarding (`/etc/sysctl.d/99-tailscale.conf`) and the exit-node **approval** — the two things a reset most often knocks out (see pi_vpn_restore.md, Fixes 1–2).

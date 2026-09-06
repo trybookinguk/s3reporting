@@ -33,6 +33,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+# Make `modules...` importable regardless of cwd (Python puts scripts/ on the
+# path when run as `python3 scripts/health_check.py`, not the repo root).
+sys.path.insert(0, str(REPO))
 LOG_DIR = Path(os.environ.get("LOG_DIR", "/root/logs"))
 
 # job-name (as passed to cron_wrapper) -> (log filename, max age hours or None).

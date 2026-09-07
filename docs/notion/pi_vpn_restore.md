@@ -136,6 +136,18 @@ cd /root/s3reporting && python3 restore_from_sharepoint.py
 
 See `deploy/mount_cache_disk.sh` for options (`MOUNTPOINT`, `LABEL`, `OWNER`).
 
+**Current setup (this Pi):** the data disk is `/dev/sda1` (≈931 GB, ext4), mounted at **`/root/s3reporting/.cache`**, UUID `e5ffd1e9-0090-4377-9589-48238ce33812`. The persistent entry in `/etc/fstab` is:
+```
+UUID=e5ffd1e9-0090-4377-9589-48238ce33812  /root/s3reporting/.cache  ext4  defaults,nofail,x-systemd.device-timeout=15  0  2
+```
+Verify it's actually mounted (a blank MOUNTPOINT for `sda1` in `lsblk` means it is **not** — the pipeline would then write to the SD card):
+```bash
+findmnt /root/s3reporting/.cache      # shows /dev/sda1 when mounted; blank if not
+lsblk | grep sda1                     # should list the mountpoint
+sudo mount /root/s3reporting/.cache   # remount via fstab if it dropped off (nofail auto-mounts on boot)
+```
+> `nofail` means the Pi boots even if the disk is missing — good for resilience, but it also means a dropped disk fails **silently** and the pipeline quietly falls back to the SD card. If you ever unmount it manually (e.g. to reformat), remember to remount before the next cron run.
+
 ## Can't reach the Pi at all?
 
 Normal access **is** Tailscale, so if Tailscale is the thing that's down you can't SSH by MagicDNS. Recovery paths, in order:

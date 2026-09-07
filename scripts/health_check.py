@@ -132,13 +132,22 @@ def check_warehouse():
 
 def check_disk():
     path = os.environ.get("S3_CACHE_DIR", "/root/s3reporting/.cache")
+    # If /etc/fstab declares this path as a mount but it isn't mounted right now,
+    # the pipeline is silently writing to the SD card instead of the data disk.
+    try:
+        declared = os.path.exists("/etc/fstab") and f" {path} " in Path("/etc/fstab").read_text()
+    except Exception:
+        declared = False
+    if declared and os.path.exists(path) and not os.path.ismount(path):
+        return FAIL, f"{path} is in fstab but NOT mounted — writing to the SD card! `sudo mount {path}`"
     try:
         du = shutil.disk_usage(path if os.path.exists(path) else "/")
     except Exception as e:
         return WARN, f"could not stat disk: {e}"
     free_gb = du.free / (1024 ** 3)
     pct = du.used / du.total * 100
-    detail = f"{free_gb:.1f} GB free ({pct:.0f}% used) on {path}"
+    mnt = " [mounted]" if os.path.ismount(path) else ""
+    detail = f"{free_gb:.1f} GB free ({pct:.0f}% used) on {path}{mnt}"
     if free_gb < 1.5 or pct > 92:
         return FAIL, "LOW: " + detail
     if free_gb < 3 or pct > 85:

@@ -146,7 +146,29 @@ findmnt /root/s3reporting/.cache      # shows /dev/sda1 when mounted; blank if n
 lsblk | grep sda1                     # should list the mountpoint
 sudo mount /root/s3reporting/.cache   # remount via fstab if it dropped off (nofail auto-mounts on boot)
 ```
-> `nofail` means the Pi boots even if the disk is missing — good for resilience, but it also means a dropped disk fails **silently** and the pipeline quietly falls back to the SD card. If you ever unmount it manually (e.g. to reformat), remember to remount before the next cron run.
+> `nofail` means the Pi boots even if the disk is missing — good for resilience, but it also means a dropped disk fails **silently** and the pipeline quietly falls back to the SD card. If you ever unmount it manually (e.g. to reformat), remember to remount before the next cron run. (The nightly `health_check.py` now FAILs if the cache path is in fstab but not mounted, so a dropped disk emails an alert.)
+
+### Boot order — SD-only (`0xf1`)
+
+The OS lives on the **SD card** (`/boot/firmware` + `/` on `mmcblk0`); the USB is data only. The bootloader must therefore **not** try the USB disk at boot — a USB-first order (`0xf14`) makes the Pi scan the data disk first, fall through to SD, and appear to "try to boot from USB" (slow boot). Set SD-only:
+
+```bash
+sudo /root/s3reporting/deploy/set_sd_boot.sh        # sets BOOT_ORDER=0xf1 (SD only)
+sudo reboot
+```
+Or by hand (Pi 4/5, `rpi-eeprom`):
+```bash
+sudo rpi-eeprom-config --edit
+#   BOOT_ORDER=0xf14  ->  BOOT_ORDER=0xf1     # nibbles read right-to-left: 1=SD, 4=USB, f=retry
+sudo reboot
+```
+`0xf1` = try SD, retry SD, never USB. (`0xf41` keeps USB as a boot *fallback* if you'd prefer that.) Verify after reboot:
+```bash
+sudo rpi-eeprom-config | grep BOOT_ORDER      # 0xf1
+findmnt /                                     # /dev/mmcblk0p2 (SD)
+findmnt /root/s3reporting/.cache              # /dev/sda1 auto-mounted via nofail
+```
+> Pi 3 and earlier don't use `rpi-eeprom` — boot order is fixed in OTP; `set_sd_boot.sh` detects this and exits with guidance. Check the model with `cat /proc/device-tree/model`.
 
 ## Can't reach the Pi at all?
 

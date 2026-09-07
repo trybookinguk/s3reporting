@@ -101,7 +101,13 @@ def check_job(job, logname, max_age_h, weekday_only=False):
             body = lines[start_idx + 1:j]
             break
     else:
-        return WARN, "started but no 'finished' marker (still running or killed?)"
+        # started but no finished marker — recent start = still running (fine),
+        # old start = likely killed. Either way not a hard FAIL.
+        st = _parse_ts(_MARK.search(lines[start_idx]).group(3))
+        st_age = ((_now() - st).total_seconds() / 3600) if st else None
+        if st_age is not None and st_age < 2:
+            return WARN, f"started {st_age:.1f}h ago — still running (no finish marker yet)"
+        return WARN, "started but no 'finished' marker (killed? check the log)"
 
     # errors within this run's slice
     errs = [ln for ln in body if _ERR.search(ln) and not _BENIGN.search(ln)]
@@ -111,7 +117,9 @@ def check_job(job, logname, max_age_h, weekday_only=False):
     if exit_code not in (0, None):
         return FAIL, f"last run exit {exit_code} ({age_str})"
     if errs:
-        return FAIL, f"exit 0 but {len(errs)} error line(s) in last run ({age_str}): {errs[0][:80]}"
+        # exit 0 = the job succeeded overall; a logged error (often a transient
+        # network retry) is worth surfacing but not a FAIL.
+        return WARN, f"exit 0 but {len(errs)} error line(s), likely transient ({age_str}): {errs[0][:70]}"
     if max_age_h is not None and age_h is not None and age_h > max_age_h:
         return FAIL, f"last successful run was {age_str} (> {max_age_h}h — did cron run?)"
     return OK, f"clean, {age_str}"

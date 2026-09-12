@@ -17,7 +17,10 @@
 # and the script exits non-zero if anything failed.
 set -uo pipefail
 
-REPO="${S3REPORTING_DIR:-/root/s3reporting}"
+# Repo root: explicit S3REPORTING_DIR, else derived from this script's location
+# (deploy/run_daily.sh) so it works on the Pi (/root/s3reporting) and in the
+# Synology container (/app) without change.
+REPO="${S3REPORTING_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 ENV_FILE="$REPO/.env"
 LOG_DIR="${LOG_DIR:-/root/logs}"
 

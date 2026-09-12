@@ -131,6 +131,11 @@ dmesg | grep -i oom          # after: was it OOM-killed?
 If it OOMs, add RAM. On 2 GB without more RAM, the 4 GB Raspberry Pi is the
 better host; the NAS is a good home once it's at 6 GB.
 
+## Troubleshooting
+
+- **`WARNING: Python-dotenv could not parse statement starting at line N`** during build/up — harmless. That's *docker-compose's* strict `env_file:` parser disliking the comment/JSON lines in `.env`; the pipeline scripts source `.env` with bash themselves, so no variable is lost. Ignore it.
+- **`.env file not found: /root/s3reporting/.env`** — fixed: `test_secrets.py` and `run_daily.sh` now resolve `.env` relative to their own location (so `/app/.env` in the container). If you're on an older checkout, either `git pull` inside the container's repo or pass `--env-file /app/.env` explicitly.
+
 ## Notes / caveats
 - **DuckDB version**: the `Dockerfile` pins `DUCKDB_VERSION`. If the dashboard
   later reads this warehouse, match it to the dashboard's `@duckdb/node-api`.

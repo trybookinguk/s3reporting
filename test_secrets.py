@@ -336,7 +336,10 @@ CHECKS = [
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--env-file", default="/root/s3reporting/.env", help="path to .env (default: /root/s3reporting/.env)")
+    # Default .env sits alongside this script (repo root): /root/s3reporting/.env
+    # on the Pi, /app/.env in the Synology container. Override with --env-file.
+    default_env = str(Path(__file__).resolve().parent / ".env")
+    ap.add_argument("--env-file", default=default_env, help=f"path to .env (default: {default_env})")
     ap.add_argument("--only", help="comma-separated subset, e.g. aws,zoho,graph")
     args = ap.parse_args()
 

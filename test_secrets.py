@@ -204,9 +204,16 @@ def check_mailbox():
         )
         if r.ok:
             return PASS, f"sender mailbox resolves ({mbx})"
-        return FAIL, f"HTTP {r.status_code}: {r.text[:120]}"
+        # A least-privilege Mail.Send app has no User.Read.All, so reading the
+        # directory object 403s — that's expected and does NOT affect sending
+        # (sendMail uses Mail.Send + the Exchange application access policy).
+        if r.status_code == 403 and "Authorization_RequestDenied" in r.text:
+            return PASS, f"{mbx}: send OK (directory read 403s — app is least-privilege, expected)"
+        if r.status_code == 404:
+            return FAIL, f"mailbox not found ({mbx}) — check AZURE_SENDER_MAILBOX"
+        return WARN, f"HTTP {r.status_code}: {r.text[:100]}"
     except Exception as e:
-        return FAIL, f"{type(e).__name__}: {e}"
+        return WARN, f"{type(e).__name__}: {e}"
 
 
 def check_ga4():

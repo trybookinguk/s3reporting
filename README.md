@@ -122,6 +122,8 @@ python3 restore_from_sharepoint.py --date YYYY-MM-DD
 
 **Tiers look wrong** — check `/root/logs/zoho-tiers.log` for the most recent run. The tier algorithm and bands are documented on the Tier & Retention Update page.
 
+**`HeadObject … 404 Not Found` / "Failed to process S3 files" on the 1st–2nd of the month** — expected, not a fault. TryBooking publishes the new month's S3 export *on the 2nd, after* the 02:45 run, so that run 404s and skips (a 3-second exit-0 run, vs the usual ~9 min). It's a 404 (file not published yet), **not** a 403 (credentials) or a disk problem. The next day's run catches up automatically; to update tiers sooner, just re-run `python3 zoho_tiers.py` by hand once the file has landed (later on the 2nd or on the 3rd) and confirm it's a full ~9-minute run.
+
 ---
 
 ## Credentials needed

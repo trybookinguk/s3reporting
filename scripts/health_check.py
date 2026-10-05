@@ -55,7 +55,15 @@ JOBS = [
 _MARK = re.compile(r"=====\s+(\S+)\s+(started|finished)\s+at\s+(\S+)(?:\s+\(exit\s+(\d+)\))?")
 _ERR = re.compile(r"error|exception|traceback|no module|denied|forbidden", re.I)
 # benign lines that contain "error/failed" but are not problems
-_BENIGN = re.compile(r"failed:\s*0|0 failed|no errors|error rate", re.I)
+# Lines that contain "error" but are not problems: benign summaries, and
+# transient per-batch network drops that an exit-0 run already handled (Zoho
+# occasionally resets a connection mid-sync; the job retries/continues). A real
+# outage still exits non-zero (FAIL), and any other error string still WARNs.
+_BENIGN = re.compile(
+    r"failed:\s*0|0 failed|no errors|error rate"
+    r"|connection aborted|remotedisconnected|remote end closed|connection reset",
+    re.I,
+)
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 

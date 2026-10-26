@@ -97,6 +97,24 @@ No `cloudflared tunnel login`, `cert.pem`, or `config.yml` is needed for a token
 
 > Also restore `/root/certs/trybooking.internal*.pem` (Caddy's HTTPS cert) on a rebuild, or Caddy can't serve the dashboard for the tunnel to reach.
 
+### Keeping cloudflared patched
+The connector runs with `--no-autoupdate`, so **security releases have to be applied by hand** — cloudflared will not update itself. Periodically (and whenever Cloudflare emails a security advisory) check the running version against the latest release:
+```bash
+cloudflared --version                                   # what the Pi is running
+# compare to https://github.com/cloudflare/cloudflared/releases/latest
+```
+Upgrade in place (ARM64 .deb — leaves the token and systemd unit untouched):
+```bash
+cd /root
+curl -L -o cloudflared-linux-arm64.deb \
+  https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb
+sudo dpkg -i cloudflared-linux-arm64.deb
+sudo systemctl restart cloudflared                      # ~30s tunnel blip; config/token unchanged
+```
+A single-connector restart is a ~30-second outage on the dashboard — fine for an internal tool.
+
+**On a CA/certificate advisory** (e.g. the Oct 2026 eMudhra weak-key issue, fixed in cloudflared **2026.10.2**): the origin-rejection caveat only bites if the tunnel's *origin* is an HTTPS endpoint whose cert chains to an affected CA. Here the origin is local **Caddy** with the internal `trybooking.internal` cert (not a public CA), so the tunnel keeps working after the upgrade — but patch anyway to clear the client-side vulnerability. **Never** paper over a cert error with `noTLSVerify`; fix the cert instead.
+
 ### Verify
 ```bash
 systemctl is-active cloudflared

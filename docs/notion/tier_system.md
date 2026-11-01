@@ -59,7 +59,7 @@ current‑month file isn't finalised yet).
 
 ## 3. Tier models
 
-Two taxonomies coexist; `TIER_SYSTEM` (env, default `v1`) selects which drives
+Two taxonomies coexist; `TIER_SYSTEM` (env, default `v2`) selects which drives
 `Current_Tier`/`Previous_Tier`.
 
 ### v1 (legacy) — higher is better
@@ -134,8 +134,8 @@ v2 also emits `Tier_Movement` (Improved 2+/1, No Change, Dropped 1/2+) and
 composite diagnostics.
 
 ### How `TIER_SYSTEM` picks the path
-- `v1` (default): `process_accounts`' tiers are kept as‑is; **no** `Tier_Movement`.
-- `v2`: `_apply_v2_tiers` overlays **only** `Current_Tier`/`Previous_Tier`/
+- `v1`: `process_accounts`' tiers are kept as‑is; **no** `Tier_Movement`.
+- `v2` (default): `_apply_v2_tiers` overlays **only** `Current_Tier`/`Previous_Tier`/
   `Tier_Movement` where v2 produced a value (v1 is the fallback for skipped
   accounts). All non‑tier fields (Rating, Event_Frequency_*, Retention_Priority…)
   always come from v1.
@@ -258,7 +258,7 @@ email; `TEST_MODE` alone still writes state (it only redirects email).
 | Constant | Value |
 |---|---|
 | `S3_BUCKET` | `produk-rdsextracts-438255373632` |
-| `TIER_SYSTEM` (env) | default `v1` (Pi `.env` sets `v1`) |
+| `TIER_SYSTEM` (env) | default `v2`; set `TIER_SYSTEM=v2` in the Pi `.env` |
 | `TIER_PERCENTILES` (v1) | Key 99, High 95, T4 75, T3 50, T2 25 |
 | `MIN_YEARS_BY_TIER` | Key 8, High 7, T4 5, T3 3, T2 2, T1 1 |
 | `MIN_TICKETS_FOR_ACTIVE` | 10 |

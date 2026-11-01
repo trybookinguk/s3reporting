@@ -43,7 +43,7 @@ ZOHO_ORG_ID = os.environ.get("ZOHO_ORG_ID")
 # Tier 1..5 / Free / Nil labels and adds Tier_Movement to the upsert payload.
 # All other fields (Rating, Event_Frequency_*, Retention_Priority, …) are
 # unchanged regardless of the flag.
-TIER_SYSTEM = os.environ.get("TIER_SYSTEM", "v1").lower()
+TIER_SYSTEM = os.environ.get("TIER_SYSTEM", "v2").lower()
 
 
 def _apply_v2_tiers(updates: pd.DataFrame, account_metrics: dict) -> pd.DataFrame:
@@ -593,7 +593,7 @@ def main(dry_run: bool = False, use_combined: bool = False):
         print("\n[TIER_SYSTEM=v2] Overlaying composite tiers + Tier_Movement onto Zoho payload")
         updates = _apply_v2_tiers(updates, account_metrics)
     else:
-        logger.info("TIER_SYSTEM=v1 (default) — sending legacy tier taxonomy to Zoho")
+        logger.info("TIER_SYSTEM=v1 — sending legacy tier taxonomy to Zoho")
 
     # Save results to CSV for audit. Reports land in REPORTS_DIR (./reports by
     # default, /root/reporting/reports on the Pi) — this replaces the GitHub

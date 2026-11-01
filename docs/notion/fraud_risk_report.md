@@ -61,7 +61,7 @@ If several booking rows match, the Successful one wins, then the latest. The **M
 
 **Account Tier** is the account's *current* tier from the tier pipeline (`tier_snapshot` in `tier_state.db`). It is refreshed on every run.
 
-> **Booking GUID.** The S3 inventory (Nov 2026) confirmed that `BookingUrlId` is the booking GUID (text). The warehouse used to coerce it to an integer, so it was stored blank. That left the first live run matching only by gateway reference (347 of 471; the PayPal cases stayed unmatched). The warehouse now keeps it as text. Rows loaded before the fix are refilled **once** with `python3 warehouse_backfill.py`, run outside the 02:00–03:30 jobs. That script also builds the index matching uses. Each run prints *Unmatched chargebacks by source*.
+> **Booking GUID.** The S3 inventory (Nov 2026) confirmed that `BookingUrlId` is the booking GUID (text). The warehouse used to coerce it to an integer, so it was stored blank. That left the first live run matching only by gateway reference (347 of 471; the PayPal cases stayed unmatched). The warehouse now keeps it as text. Rows loaded before the fix are refilled **once** with `python3 warehouse_backfill.py`, run outside the 02:00–03:30 jobs. Matching scans `bookings` for the GUID (about 15–30 s on the Pi) rather than adding an index, which would add about 190 MB to `warehouse.db` and its backups. Each run prints *Unmatched chargebacks by source*.
 
 ---
 

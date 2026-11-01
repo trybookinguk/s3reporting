@@ -17,7 +17,8 @@ How it works
   ~2 GB BookingDataAll.
 - UPDATEs the existing rows by BookingTransactionId (never inserts or
   deletes), committing per chunk.
-- Builds the normalised-GUID index used by chargeback matching.
+- Adds no indexes (the warehouse is copied nightly to DuckDB and backed up;
+  see warehouse._RETIRED_INDEXES) and drops the one an earlier version built.
 
 Run it once after deploying the BookingUrlId fix, outside the 02:00-03:30
 nightly jobs (it writes to the same warehouse):
@@ -182,9 +183,7 @@ def main() -> int:
             log.info("  %s: %s read, %s updated", ref, f"{stats['read']:,}", f"{stats['updated']:,}")
             for k in totals:
                 totals[k] += stats[k]
-        if "BookingUrlId" in columns:
-            log.info("Building normalised BookingUrlId index...")
-            warehouse.ensure_booking_urlid_index(conn)
+        warehouse.drop_retired_indexes(conn)
         filled = {c: conn.execute(f'SELECT COUNT(*) FROM bookings WHERE "{c}" IS NOT NULL').fetchone()[0]
                   for c in columns}
         total = conn.execute("SELECT COUNT(*) FROM bookings").fetchone()[0]

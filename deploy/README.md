@@ -36,6 +36,21 @@ under `DATA_DIR` by default; override with `WAREHOUSE_DB`). Tables:
   a transaction whose status/fees are revised later is corrected in place;
   prior-month rows are never deleted. Indexed on `AccountId`, `TransactionDate`.
 - `accounts`, `users` — current-state snapshots, full-replaced each run.
+- `retention_priority` — written by `zoho_tiers.py`; `ppc_attribution` — written
+  by the GA4 ingest; `meta` — bookkeeping.
+- Fraud risk (written only by `fraud_risk_report.py` / `warehouse_backfill.py`,
+  never read by the nightly jobs or the DuckDB materialise): `chargebacks`,
+  `chargeback_history`, `chargeback_files`, `risk_exposure` (RiskReport
+  snapshot), `risk_fraud`, `risk_fraud_history`, and the optional
+  `booking_signals`, `account_logins`.
+
+Column rules (`modules/warehouse.py`): integer ID columns are coerced to
+INTEGER (`_INT_ID_COLUMNS`); `BookingUrlId` is the booking GUID and is kept as
+TEXT (`_TEXT_ID_COLUMNS`). `bookings` columns carry no declared types (the PK
+rebuild drops them), so the DuckDB materialise casts every column it copies —
+add a new column there explicitly if the dashboard needs it. Don't add indexes
+to `bookings` from other tools: the file is backed up nightly and copied to
+DuckDB; `prepare_data.py` drops any listed in `warehouse._RETIRED_INDEXES`.
 
 The first run does the one-time `BookingDataAll` seed (heavy); subsequent runs
 just upsert the small daily delta. The combined pickle is still written too —

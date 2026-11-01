@@ -127,10 +127,11 @@ GA4_SERVICE_ACCOUNT_KEY=...   # service account JSON (single line, or a path the
 SHAREPOINT_DRIVE_ID=...
 ```
 
-`TIER_SYSTEM` selects the tier taxonomy sent to Zoho — `v2` (composite
-Tier 1..5 / Free / Nil, the current default) or `v1` (legacy Key Account /
-High Value / Tier 4..1 / NIL). Set `TIER_SYSTEM=v2` in `.env`. `TEST_MODE`
-defaults to off; set `TEST_MODE=true` for a manual preview run.
+`TIER_SYSTEM` selects the tier taxonomy sent to Zoho — `v1` (legacy Key Account /
+High Value / Tier 4..1 / NIL, the current production setting and code default) or
+`v2` (composite Tier 1..5 / Free / Nil). Keep `TIER_SYSTEM=v1` in `.env` until the
+cutover to v2 is signed off. `TEST_MODE` defaults to off; set `TEST_MODE=true` for
+a manual preview run.
 
 > `GA4_SERVICE_ACCOUNT_KEY` is read the same way it was on Actions. If the
 > existing Actions secret held the JSON inline, keep that format in `.env`.

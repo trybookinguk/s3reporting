@@ -43,7 +43,7 @@ ZOHO_ORG_ID = os.environ.get("ZOHO_ORG_ID")
 # Tier 1..5 / Free / Nil labels and adds Tier_Movement to the upsert payload.
 # All other fields (Rating, Event_Frequency_*, Retention_Priority, …) are
 # unchanged regardless of the flag.
-TIER_SYSTEM = os.environ.get("TIER_SYSTEM", "v2").lower()
+TIER_SYSTEM = os.environ.get("TIER_SYSTEM", "v1").lower()
 
 
 def _apply_v2_tiers(updates: pd.DataFrame, account_metrics: dict) -> pd.DataFrame:

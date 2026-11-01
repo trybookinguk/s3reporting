@@ -54,7 +54,7 @@ REPORTS_DIR=/data/reports
 SYNC_MANIFEST_DIR=/data/.sync_manifest
 DUCKDB_BIN=/usr/local/bin/duckdb
 CACHE_TRUST_TODAY=1
-TIER_SYSTEM=v2
+TIER_SYSTEM=v1
 ```
 ```bash
 sudo chmod 600 /volume1/docker/s3reporting/.env

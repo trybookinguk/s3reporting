@@ -58,7 +58,8 @@ DEFAULT_SAMPLE_ROWS = 500
 SCHEMA_DOC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "s3_report_schemas.md")
 
 # File name: YYYYMM[DD]-<report>-TBUK.csv
-_NAME_RE = re.compile(r"^(?P<period>\d{6}(?:\d{2})?)-(?P<report>.+?)-TBUK\.csv$", re.I)
+# (older/ad-hoc exports such as 202610-AccountFeatureList.csv omit "-TBUK")
+_NAME_RE = re.compile(r"^(?P<period>\d{6}(?:\d{2})?)-(?P<report>.+?)(?:-TBUK)?\.csv$", re.I)
 
 # Preamble files: line 1 is gateway-batch metadata, real header on line 2.
 _PREAMBLE_MARKERS = ("first gateway id", "start booking transaction id")
@@ -70,10 +71,10 @@ FRAUD_USE = {
     "ipaddress": "IP-level checks (repeat IPs across accounts); needs geo-lookup for country",
     "status": "Booking Failed Transactions Test (Status = Failed)",
     "paymenttype": "Quicksale Test (if quicksale shows in PaymentType); box office vs online",
-    "bookingcountrycode": "Booking address country for location tests (always GBR in UK)",
+    "bookingcountrycode": "Booking address country for IP/card location tests (mostly GBR, not always)",
     "gatewayid": "Chargeback matching (PayPal txn / Stripe charge); joins Stripe signals export",
     "gatewayreference": "Chargeback matching fallback",
-    "bookingurlid": "Chargeback matching to Invoice ID / Stripe Description (booking GUID)",
+    "bookingurlid": "Chargeback matching: booking GUID = PayPal Invoice ID / Stripe Description",
     "bookingid": "Chargeback matching fallback",
     "bookingtransactionid": "Booking key; joins signals file",
     "accountid": "Per-account grouping (Event Organiser Account Number)",
@@ -112,6 +113,13 @@ FRAUD_USE = {
     "emaildeliveryfailed": "Booking Failed Email Delivery Test",
     "isquicksale": "Quicksale Test",
     "secondfactorenabled": "Account security (2FA) context",
+    "second factor enabled": "Account security (2FA) context",
+    "lastloginmethod": "Login method only — no IP; not enough for the Account Logins Test",
+    "lastlogindate": "Last login only — not enough for the Account Logins Test",
+    "bankaccountverified": "Payout risk: unverified bank account",
+    "bankaccount": "Payout risk: bank account set up",
+    "datecreated": "Account age (new-account risk)",
+    "provider": "Payment provider (Stripe / Braintree PayPal)",
     "smsmultifactorenabled": "Account security (MFA) context",
     "lastpasswordchangedate": "Account takeover context",
 }
@@ -248,22 +256,77 @@ def _human(n: int) -> str:
         size /= 1024
 
 
+def _decode(data: bytes) -> str:
+    """Decode export bytes: UTF-16 (BOM or NUL-heavy) or UTF-8 (BOM tolerant)."""
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16", errors="replace")
+    if data[:200].count(b"\x00") > 20:
+        return data.decode("utf-16-le", errors="replace")
+    return data.decode("utf-8-sig", errors="replace")
+
+
+def _cells(row):
+    """Row cells with BOMs / zero-width chars / whitespace stripped."""
+    return [c.replace("\ufeff", "").replace("\u200b", "").strip() for c in row]
+
+
 def parse_head(data: bytes, truncated: bool, max_rows: int) -> tuple:
-    """(header, rows, preamble_line) from the first bytes of a CSV."""
-    text = data.decode("utf-8-sig", errors="replace")
+    """(header, rows, preamble) from the first bytes of a CSV.
+
+    Copes with what the inventory has seen in the bucket: a gateway-batch
+    metadata line before the header (AccountMovement*, GatewayMovement,
+    TransactionReconciliation), stray leading lines that hold only a BOM or a
+    single cell, UTF-16 files and non-comma delimiters. The header is taken as
+    the first non-preamble row with the most fields among the first few rows.
+    """
+    text = _decode(data)
     if truncated and "\n" in text:
         text = text[: text.rfind("\n")]  # drop the partial last line
-    rows = list(csv.reader(io.StringIO(text)))
-    rows = [r for r in rows if r and any(c.strip() for c in r)]
+    sample = text[:20000]
+    candidates = [","]
+    try:
+        sniffed = csv.Sniffer().sniff(sample, delimiters=",\t;|").delimiter
+        if sniffed != ",":
+            candidates.append(sniffed)
+    except csv.Error:
+        pass
+
+    def _width(d):
+        # Typical field count of the first lines under delimiter d.
+        widths = sorted(len(r) for r in csv.reader(io.StringIO(sample), delimiter=d) if r)[:40]
+        return widths[len(widths) // 2] if widths else 0
+
+    delim = max(candidates, key=_width)  # ties keep the comma
+    rows = [_cells(r) for r in csv.reader(io.StringIO(text), delimiter=delim)]
+    rows = [r for r in rows if any(r)]
     if not rows:
         return [], [], ""
-    preamble = ""
-    first = ",".join(rows[0]).lower()
-    if any(m in first for m in _PREAMBLE_MARKERS) and len(rows) > 1:
-        preamble = ",".join(rows[0])
-        rows = rows[1:]
-    header = [h.strip().lstrip("﻿") for h in rows[0]]
-    return header, rows[1:1 + max_rows], preamble
+
+    skipped = []
+    head_window = rows[:6]
+    def _is_preamble(r):
+        joined = ",".join(r).lower()
+        return any(m in joined for m in _PREAMBLE_MARKERS)
+
+    widest = max([sum(1 for c in r if c) for r in head_window if not _is_preamble(r)] or [0])
+    idx = 0
+    while idx < len(head_window):
+        r = head_window[idx]
+        is_preamble = _is_preamble(r)
+        too_narrow = widest >= 2 and sum(1 for c in r if c) < max(2, widest // 2)
+        if (is_preamble or too_narrow) and idx + 1 < len(rows):
+            skipped.append(",".join(c for c in r if c))
+            idx += 1
+            continue
+        break
+    header = rows[idx]
+    # Trim trailing empty header cells (a trailing delimiter on the header line).
+    while header and not header[-1]:
+        header = header[:-1]
+    preamble = " | ".join(skipped)
+    if delim != ",":
+        preamble = (preamble + " | " if preamble else "") + f"delimiter={delim!r}"
+    return header, rows[idx + 1: idx + 1 + max_rows], preamble
 
 
 _INT = re.compile(r"^-?\d+$")
@@ -289,6 +352,27 @@ def infer_type(values) -> str:
     return "text"
 
 
+# Category values are listed for columns with this many distinct values or
+# fewer — enough to see formats (Status, PaymentType, IPCountry, …) — but never
+# for columns that could hold personal or free-text data.
+MAX_LISTED_VALUES = 15
+_PII_COLUMN = re.compile(
+    r"email|name|user|ip ?address|postcode|address|bank|accnumber|bsb|description|"
+    r"filename|phone|mobile|abn|entity|comment|note|password|token|card ?no", re.I)
+
+
+def category_values(col: str, filled: list) -> str:
+    """'Successful (480), Failed (20)' for low-cardinality, non-personal columns."""
+    if not filled or _PII_COLUMN.search(col):
+        return ""
+    counts = {}
+    for v in filled:
+        counts[v] = counts.get(v, 0) + 1
+    if len(counts) > MAX_LISTED_VALUES:
+        return ""
+    return ", ".join(f"{v} ({n})" for v, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
 def column_rows(src, f: dict, header, rows, preamble, known: dict, show_samples: bool):
     """One output row per column of one file."""
     rep_key = _report_key(f["ReportType"])
@@ -311,7 +395,8 @@ def column_rows(src, f: dict, header, rows, preamble, known: dict, show_samples:
             DistinctInSample=len(set(filled)),
             SampleRows=len(rows),
             FraudRiskUse=FRAUD_USE.get(col.lower(), ""),
-            HasPreamble="Yes" if preamble else "",
+            ValuesInSample=category_values(col, filled),
+            SkippedBeforeHeader=preamble[:200],
         )
         if show_samples:
             row["SampleValue"] = filled[0] if filled else ""
@@ -322,7 +407,8 @@ def column_rows(src, f: dict, header, rows, preamble, known: dict, show_samples:
                 ReportType=f["ReportType"], FileReference=src.ref(f["Key"]), Period=f["Period"],
                 Position=None, Column=col, Documented="Missing from file", Description=desc,
                 InferredType="", FilledPct=None, DistinctInSample=None, SampleRows=len(rows),
-                FraudRiskUse=FRAUD_USE.get(col.lower(), ""), HasPreamble="Yes" if preamble else "",
+                FraudRiskUse=FRAUD_USE.get(col.lower(), ""), ValuesInSample="",
+                SkippedBeforeHeader=preamble[:200],
             )
             if show_samples:
                 row["SampleValue"] = ""
@@ -368,7 +454,7 @@ def build(src, prefix: str, all_files: bool, sample_bytes: int, sample_rows: int
         header, rows, preamble = parse_head(data, truncated, sample_rows)
         col_rows.extend(column_rows(src, f, header, rows, preamble, known, show_samples))
         log(f"  {f['Key']}: {len(header)} columns, {len(rows)} sample rows"
-            + (" (preamble skipped)" if preamble else ""))
+            + (f" (skipped before header: {preamble[:80]})" if preamble else ""))
     return files_df, pd.DataFrame(col_rows)
 
 

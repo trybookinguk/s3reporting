@@ -12,6 +12,44 @@ retention priorities and tier‑movement alerts, and writes them back to Zoho CR
 
 ---
 
+## 0. Known risks & gotchas (read first)
+
+**Two tier systems run side by side — this is the most important point.**
+
+- **v1 (legacy):** Key Account, High Value, then Tier 4 → Tier 1, then NIL.
+  *Higher is better.* An account can qualify on tickets, on current revenue, or
+  on long‑term loyalty + lifetime revenue, and keeps whichever tier is best.
+- **v2 (composite):** Tier 1 → Tier 5, plus Free and Nil. *Tier 1 is best — the
+  reverse of v1.* One weighted score: 55% current revenue, 35% lifetime revenue,
+  10% loyalty. Tier 1 = top 2%, Tier 2 = top 10%, and so on.
+
+`TIER_SYSTEM` controls which version is written to **Zoho**, but the
+**movement emails always use v2**. So while Zoho shows v1, a "Tier 1" alert to
+Joan/Kathryn means a *top‑2% v2* account, yet the same account in Zoho reads
+"Tier 1" which in v1 is the *lowest* qualifying tier — opposite meanings, a real
+chance of confusion until one system is retired. **Aligning Zoho to v2
+(`TIER_SYSTEM=v2`) removes this mismatch; the long‑term fix is retiring v1.**
+
+**Other things worth knowing:**
+
+- **Single point of failure.** Runs on a 4 GB Raspberry Pi. The legacy
+  `--combined` (full‑pickle) load path OOMs the Pi — don't use it in production.
+  A reporting job the business depends on with no redundancy.
+- **Zoho match key is `Account_Name`, which actually holds the TryBooking account
+  ID.** If anyone renames an account in Zoho to a real name, the next sync
+  *creates a duplicate* instead of updating it (duplicate_check is on
+  `Account_Name`).
+- **Alerts are intentionally quiet.** An account bouncing between Tier 1/Tier 2
+  stops triggering emails (bouncer rule), and there's a 30‑day cooldown — owners
+  aren't spammed, but a genuine move can be suppressed. See §8.
+- **Testing trap.** `--dry-run` still sends **real emails**; it only skips state
+  writes. To test safely, combine it with `TEST_MODE=true`, which redirects all
+  mail to Henry and makes the Zoho upsert log‑only.
+- **Scheduling is UTC.** The 02:45 UTC run is ≈ 1:45pm Melbourne, and 02:45 or
+  03:45 London depending on daylight saving.
+
+---
+
 ## 1. End‑to‑end flow
 
 ```

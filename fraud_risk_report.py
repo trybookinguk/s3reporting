@@ -181,6 +181,9 @@ def _summary_rows(as_of, accounts, events, cb, cb_stats, match_stats, rr_loaded,
              ("", ""), ("Test data coverage (event rows evaluated)", "")]
     for t in fr.RISK_TESTS:
         rows.append((f"  {t['name']}{'' if t['active'] else ' (inactive)'}", coverage.get(t["key"], 0)))
+    unknown = sorted(fr.UNRECOGNISED_COUNTRIES.items(), key=lambda kv: -kv[1])
+    rows += [("", ""), ("Unrecognised country values (counted as foreign)",
+                        ", ".join(f"{k} ({v})" for k, v in unknown[:15]) if unknown else "none")]
     rows += [("", ""), ("Scoring", "Risk Score = Test Points (max 40) + Chargeback Points (max 40) "
                                    "+ Exposure Points (max 20). See docs/notion/fraud_risk_report.md."),
              ("Bands", "Critical >= 60, High >= 40, Medium >= 20, Low < 20")]
@@ -355,6 +358,9 @@ def main() -> int:
             conn, as_of, risk_report=rr, tiers=tiers,
             event_lookback_days=args.event_lookback_days,
             booking_lookback_days=args.booking_lookback_days)
+        if fr.UNRECOGNISED_COUNTRIES:
+            top = sorted(fr.UNRECOGNISED_COUNTRIES.items(), key=lambda kv: -kv[1])[:10]
+            log.warning("Unrecognised country values (add to modules/utils/countries.py): %s", top)
         n = fr.write_risk_fraud(conn, accounts, events, as_of)
         print(f"risk_fraud: {len(accounts):,} accounts + {len(events):,} events ({n:,} rows).")
         cb = fr.chargeback_frame(conn)

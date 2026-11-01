@@ -96,11 +96,19 @@ def _table_rowcount(conn: sqlite3.Connection, table: str) -> int:
 # can then use `AccountId = ?` with an int param and hit the index directly.
 _INT_ID_COLUMNS = (
     "BookingTransactionId", "AccountId", "EventId", "CustomerId",
-    "DonationCampaignId", "BookingId", "BookingUrlId", "GiftCertificateId",
+    "DonationCampaignId", "BookingId", "GiftCertificateId",
     # Snapshot tables (accounts.Id, users.Id) also benefit — joins to bookings
     # become INTEGER = INTEGER and the PRIMARY KEY's autoindex applies.
     "Id",
 )
+
+# ID columns that are TEXT in the S3 exports and must be kept verbatim.
+# BookingUrlId is the booking GUID (the customer-facing booking reference, =
+# PayPal "Invoice ID" / Stripe dispute "Description"). It used to be in
+# _INT_ID_COLUMNS, which coerced every GUID to NULL; the fraud report's
+# chargeback matching needs it. Rows ingested before that fix are refilled by
+# warehouse_backfill.py.
+_TEXT_ID_COLUMNS = ("BookingUrlId",)
 
 
 def _prepare_for_sqlite(df: pd.DataFrame) -> pd.DataFrame:
@@ -115,6 +123,8 @@ def _prepare_for_sqlite(df: pd.DataFrame) -> pd.DataFrame:
             out[col] = out[col].astype("string")  # NaT -> <NA> -> NULL
         elif isinstance(out[col].dtype, pd.CategoricalDtype):
             out[col] = out[col].astype("string")
+        elif col in _TEXT_ID_COLUMNS:
+            out[col] = out[col].astype("string").str.strip().replace("", pd.NA)
         elif col in _INT_ID_COLUMNS:
             # to_numeric handles strings like '4349.0', floats, and ints alike.
             # Int64 (nullable) preserves NaN as <NA>, which to_sql writes as NULL.
@@ -384,6 +394,21 @@ def write_retention_priority(conn: sqlite3.Connection, updates: pd.DataFrame) ->
         snap = snap.drop_duplicates("account_id", keep="last")
 
     return replace_snapshot(conn, "retention_priority", snap, key="account_id")
+
+
+BOOKING_URLID_INDEX_EXPR = "LOWER(REPLACE(BookingUrlId,'-',''))"
+
+
+def ensure_booking_urlid_index(conn: sqlite3.Connection) -> bool:
+    """Expression index on the normalised booking GUID (lower case, no dashes),
+    used by chargeback matching. Queries must use BOOKING_URLID_INDEX_EXPR
+    verbatim to hit it. Returns False if bookings has no BookingUrlId."""
+    if "BookingUrlId" not in _existing_columns(conn, "bookings"):
+        return False
+    with conn:
+        conn.execute(f"CREATE INDEX IF NOT EXISTS ix_bookings_urlid_norm "
+                     f"ON bookings({BOOKING_URLID_INDEX_EXPR})")
+    return True
 
 
 # ---- read helpers (re-parse dates so callers get pickle-equivalent dtypes) ----

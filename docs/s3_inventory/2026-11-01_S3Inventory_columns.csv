@@ -1,0 +1,365 @@
+ReportType,FileReference,Period,Position,Column,Documented,Description,InferredType,FilledPct,DistinctInSample,SampleRows,FraudRiskUse,HasPreamble
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,1.0,AccountID,No schema doc,,integer,100.0,500.0,500,Per-account grouping (Event Organiser Account Number),
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,2.0,Homepage Template,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,3.0,Venue Template,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,4.0,Pricing Group Template,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,5.0,Data Collection Template,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,6.0,Ticket Style Template,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,7.0,EDX Password,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,8.0,Salesforce,No schema doc,,boolean,100.0,1.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,9.0,NotifyUrl,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,10.0,API Generated,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,11.0,Has Event Listing Page,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,12.0,Has Group Tag for EventListing,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,13.0,Count GC Created,No schema doc,,integer,100.0,7.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,14.0,GC Style Uploaded,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,15.0,GC Promo Codes,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,16.0,GC Notification,No schema doc,,boolean,100.0,1.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,17.0,Account ABN ENtered,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,18.0,Purchase Confirmation as tax invoice enabled,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,19.0,Second Factor Enabled,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,20.0,ConnectedToXero,No schema doc,,boolean,100.0,1.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,21.0,DonationCampaigns,No schema doc,,boolean (0/1),100.0,1.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,22.0,DateCreated,No schema doc,,datetime,100.0,500.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,23.0,LastLoginDate,No schema doc,,datetime,51.2,256.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,24.0,BankAccount,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,25.0,BankAccountVerified,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,26.0,WidgetTemplate,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,27.0,EventListingPage,No schema doc,,boolean,100.0,2.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,28.0,UsingConditionalQuestions,No schema doc,,boolean,100.0,1.0,500,,
+(other),s3://produk-rdsextracts-438255373632/2026/10/202610-AccountFeatureList.csv,,29.0,XeroSignup,No schema doc,,boolean,100.0,1.0,500,,
+Account-Transactions,s3://produk-rdsextracts-438255373632/2026/10/202610-Account-Transactions-TBUK.csv,202610,1.0,Id,Yes,Ledger entry ID.,integer,100.0,500.0,500,,
+Account-Transactions,s3://produk-rdsextracts-438255373632/2026/10/202610-Account-Transactions-TBUK.csv,202610,2.0,AccountID,Yes,The account the entry is against.,integer,100.0,128.0,500,Per-account grouping (Event Organiser Account Number),
+Account-Transactions,s3://produk-rdsextracts-438255373632/2026/10/202610-Account-Transactions-TBUK.csv,202610,3.0,Description,Yes,Free-text description of the line item.,text,46.0,159.0,500,,
+Account-Transactions,s3://produk-rdsextracts-438255373632/2026/10/202610-Account-Transactions-TBUK.csv,202610,4.0,DebitAmount,Yes,Amount debited.,decimal,100.0,63.0,500,,
+Account-Transactions,s3://produk-rdsextracts-438255373632/2026/10/202610-Account-Transactions-TBUK.csv,202610,5.0,CreditAmount,Yes,Amount credited.,decimal,100.0,71.0,500,,
+Account-Transactions,s3://produk-rdsextracts-438255373632/2026/10/202610-Account-Transactions-TBUK.csv,202610,6.0,TransactionDate,Yes,When the entry was made.,datetime,100.0,219.0,500,Last-N bookings ordering; dispute ratio window,
+Account-Transactions,s3://produk-rdsextracts-438255373632/2026/10/202610-Account-Transactions-TBUK.csv,202610,7.0,IsAdditionalBilling,Yes,Whether this is additional billing.,boolean (0/1),100.0,1.0,500,,
+Account-Transactions,s3://produk-rdsextracts-438255373632/2026/10/202610-Account-Transactions-TBUK.csv,202610,8.0,TransactionTypeId,Yes,Transaction type code.,integer,100.0,5.0,500,,
+Account-Transactions,s3://produk-rdsextracts-438255373632/2026/10/202610-Account-Transactions-TBUK.csv,202610,9.0,TransactionType,Yes,Transaction type (e.g. Booking).,text,100.0,5.0,500,,
+Account-Transactions,s3://produk-rdsextracts-438255373632/2026/10/202610-Account-Transactions-TBUK.csv,202610,10.0,BookingId,Yes,"The related booking, if any.",integer,99.4,220.0,500,Chargeback matching fallback,
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,1.0,AccountId,Yes,The account's ID.,integer,100.0,500.0,500,Per-account grouping (Event Organiser Account Number),Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,2.0,DateTimeCreated,Yes,When the account was created.,datetime,100.0,500.0,500,Account age (new-account risk),Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,3.0,AccountName,Yes,The account's name.,text,100.0,467.0,500,Account label in report,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,4.0,TicketValue,Yes,,decimal,100.0,43.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,5.0,FundraisingDonation,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,6.0,Donation,Yes,,decimal,100.0,8.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,7.0,BoxOfficeFee,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,8.0,TotalBookingFee,Yes,,decimal,100.0,29.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,9.0,TotalSurcharge,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,10.0,TotalProcessingFeeSurcharge,Yes,,boolean (0/1),100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,11.0,TotalCardFee,Yes,,decimal,100.0,39.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,12.0,TotalTicketFee,Yes,,decimal,100.0,11.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,13.0,TotalProcessingFee,Yes,,decimal,100.0,8.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,14.0,TotalDonationFee,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,15.0,GCUsed,Yes,Gift certificate amount used.,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,16.0,TicketRefundedAmount,Yes,,decimal,100.0,13.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,17.0,FundraisingDonationRefunded,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,18.0,DonationRefundedAmount,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,19.0,BoxOfficeFeeRefundedAmount,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,20.0,TotalRefundedCardFee,Yes,,decimal,100.0,12.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,21.0,TotalRefundedTicketFee,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,22.0,TotalRefundedProcessingFee,Yes,,decimal,100.0,2.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,23.0,TotalRefundedSurcharge,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,24.0,TotalRefundedPFSurcharge,Yes,,boolean (0/1),100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,25.0,TotalRefundedDonationFee,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,26.0,ReturnedGCValue,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,27.0,RefundedGCValue,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,28.0,GCValue,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,29.0,GCDiscount,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,30.0,AdditionalCreditBilling,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,31.0,AdditionalDebitBilling,Yes,,decimal,100.0,2.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,32.0,DebitListing,Yes,,text,9.4,44.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,33.0,FundTransafer,Yes,Funds transferred out. (Misspelled in source.),decimal,100.0,13.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,34.0,BankVerfication,Yes,Bank verification. (Misspelled in source.),decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,35.0,Recredit,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,36.0,Pending,Yes,Amount currently in a transfer state. Used by the funds/event reminder logic.,decimal,100.0,1.0,500,Funds in transfer (exposure),Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,37.0,OpeningBalance,Yes,,decimal,100.0,83.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,38.0,ClosingBalance,Yes,,decimal,100.0,89.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,39.0,Industry,Yes,Industry assigned to the account.,text,86.4,15.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,40.0,SubIndustry,Yes,Sub-industry assigned to the account.,text,58.8,51.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,41.0,GatewayGroup,Yes,Gateway assigned to the account.,text,100.0,3.0,500,Gateway (Stripe Connect / Default) segmentation,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,42.0,DGRStatus,Yes,Not used in UK.,text,100.0,1.0,500,,Yes
+AccountMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-AccountMovement-TBUK.csv,202610,43.0,StripeTransfers,Yes,,decimal,100.0,43.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,1.0,AccountId,Yes,The account's ID.,integer,100.0,500.0,500,Per-account grouping (Event Organiser Account Number),Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,2.0,DateTimeCreated,Yes,When the account was created.,datetime,100.0,500.0,500,Account age (new-account risk),Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,3.0,AccountName,Yes,The account's name.,text,100.0,467.0,500,Account label in report,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,4.0,TicketValue,Yes,,decimal,100.0,21.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,5.0,FundraisingDonation,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,6.0,Donation,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,7.0,BoxOfficeFee,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,8.0,TotalBookingFee,Yes,,decimal,100.0,10.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,9.0,TotalSurcharge,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,10.0,TotalProcessingFeeSurcharge,Yes,,boolean (0/1),100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,11.0,TotalCardFee,Yes,,decimal,100.0,17.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,12.0,TotalTicketFee,Yes,,decimal,100.0,5.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,13.0,TotalProcessingFee,Yes,,decimal,100.0,5.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,14.0,TotalDonationFee,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,15.0,GCUsed,Yes,Gift certificate amount used.,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,16.0,TicketRefundedAmount,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,17.0,FundraisingDonationRefunded,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,18.0,DonationRefundedAmount,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,19.0,BoxOfficeFeeRefundedAmount,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,20.0,TotalRefundedCardFee,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,21.0,TotalRefundedTicketFee,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,22.0,TotalRefundedProcessingFee,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,23.0,TotalRefundedSurcharge,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,24.0,TotalRefundedPFSurcharge,Yes,,boolean (0/1),100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,25.0,TotalRefundedDonationFee,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,26.0,ReturnedGCValue,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,27.0,RefundedGCValue,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,28.0,GCValue,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,29.0,GCDiscount,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,30.0,AdditionalCreditBilling,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,31.0,AdditionalDebitBilling,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,32.0,DebitListing,Yes,,text,4.2,20.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,33.0,FundTransafer,Yes,Funds transferred out. (Misspelled in source.),decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,34.0,BankVerfication,Yes,Bank verification. (Misspelled in source.),decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,35.0,Recredit,Yes,,decimal,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,36.0,Pending,Yes,Amount currently in a transfer state. Used by the funds/event reminder logic.,decimal,100.0,1.0,500,Funds in transfer (exposure),Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,37.0,OpeningBalance,Yes,,decimal,100.0,89.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,38.0,ClosingBalance,Yes,,decimal,100.0,89.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,39.0,Industry,Yes,Industry assigned to the account.,text,86.4,15.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,40.0,SubIndustry,Yes,Sub-industry assigned to the account.,text,58.8,51.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,41.0,GatewayGroup,Yes,Gateway assigned to the account.,text,100.0,3.0,500,Gateway (Stripe Connect / Default) segmentation,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,42.0,DGRStatus,Yes,Not used in UK.,text,100.0,1.0,500,,Yes
+AccountMovementDaily,s3://produk-rdsextracts-438255373632/2026/10/20261031-AccountMovementDaily-TBUK.csv,20261031,43.0,StripeTransfers,Yes,,decimal,100.0,22.0,500,,Yes
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,1.0,Id,Yes,"The account's ID on TryBooking. (Note: `Id` here, not `AccountId`.)",integer,100.0,500.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,2.0,AccountName,Yes,The account's name.,text,100.0,467.0,500,Account label in report,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,3.0,AccountStatus,Yes,"Account status (e.g. Activated, Closed).",text,100.0,4.0,500,Account context (closed / activated),
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,4.0,DateTimeCreated,Yes,When the account was created.,datetime,100.0,500.0,500,Account age (new-account risk),
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,5.0,IsVerified,Yes,Whether the account is verified.,boolean (0/1),49.4,1.0,500,Account verification status,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,6.0,BankAccountIsDeleted,Yes,Whether the bank account has been removed.,boolean (0/1),49.4,1.0,500,Bank account removed (payout risk),
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,7.0,BankAccountName,Yes,Bank account name (hashed/encrypted in the export).,text,49.4,234.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,8.0,BSB,Yes,Bank-state-branch code (hashed/encrypted).,integer,49.4,186.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,9.0,AccNumber,Yes,Bank account number (hashed/encrypted).,text,49.4,232.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,10.0,BankAccountStatusId,Yes,Bank account status code.,integer,49.4,1.0,500,Bank account status (payout risk),
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,11.0,LastLogIn,Yes,Last login to the account.,datetime,49.0,245.0,500,Last login only — not enough for the Account Logins Test,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,12.0,FirstEventCreation,Yes,When the account first created an event.,datetime,85.6,428.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,13.0,LastEventCreation,Yes,When the account most recently created an event.,datetime,85.6,428.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,14.0,Industry,Yes,Industry assigned to the account.,text,86.4,15.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,15.0,SubIndustry,Yes,Sub-industry assigned to the account.,text,58.8,51.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,16.0,GatewayGroup,Yes,Payment gateway assigned to the account.,text,100.0,3.0,500,Gateway (Stripe Connect / Default) segmentation,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,17.0,DGRStatus,Yes,Not used in UK.,text,100.0,1.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,18.0,IsGstEnabled,Yes,Whether GST is enabled (AU concept).,boolean (0/1),100.0,2.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,19.0,ProcessingFeeOnline,Yes,,text,100.0,2.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,20.0,ProcessingFeeBoxOffice,Yes,,text,100.0,2.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,21.0,TicketFeeOnline,Yes,,text,100.0,2.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,22.0,TicketFeeBoxOffice,Yes,,text,100.0,2.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,23.0,DonationFeeOnline,Yes,,text,100.0,2.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,24.0,DonationFeeBoxOffice,Yes,,text,100.0,2.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,25.0,TierSystem,Yes,Which tier system the account is on (v1/v2).,text,88.4,7.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,26.0,PreviousTier,Yes,The account's prior tier.,text,88.4,6.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,27.0,YearsLoyalty,Yes,Years the account has been active.,integer,88.4,13.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,28.0,TicketQuantity,Yes,,integer,88.4,91.0,500,Tickets per event,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,29.0,AccountRating,Yes,Current activity rating.,text,97.0,9.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,30.0,PreviousRating,Yes,Prior activity rating.,text,55.8,10.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,31.0,RatingChanged,Yes,Whether the rating changed.,datetime,81.2,69.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,32.0,State,Yes,,text,63.0,100.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,33.0,Postcode,Yes,Account postcode (from account settings).,text,64.2,277.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,34.0,Country,Yes,,text,94.0,4.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,35.0,SchoolRecNumber,Yes,,empty,0.0,0.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,36.0,PromoCode,Yes,,empty,0.0,0.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,37.0,LastAccountTransactionDate,Yes,Date of the account's last transaction.,datetime,54.8,268.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,38.0,NewBookingAppEnabled,New (not in docs),,boolean,100.0,2.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,39.0,TierChanged,New (not in docs),,datetime,88.4,24.0,500,,
+Accounts,s3://produk-rdsextracts-438255373632/2026/10/202610-Accounts-TBUK.csv,202610,40.0,OrganiserId,New (not in docs),,empty,0.0,0.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,1.0,BookingId,Yes,Internal platform use only.,integer,100.0,498.0,500,Chargeback matching fallback,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,2.0,BookingTransactionId,Yes,Internal platform use only.,integer,100.0,498.0,500,Booking key; joins signals file,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,3.0,AccountId,Yes,The ID of the account on TryBooking.,integer,100.0,249.0,500,Per-account grouping (Event Organiser Account Number),
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,4.0,AccountName,Yes,The name of the account.,text,100.0,249.0,500,Account label in report,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,5.0,DateTimeCreated,Yes,When the account was created.,datetime,100.0,249.0,500,Account age (new-account risk),
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,6.0,EventId,Yes,The ID of the event.,integer,100.0,280.0,500,Per-event grouping,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,7.0,EventName,Yes,The name of the event.,text,100.0,279.0,500,Event label in report,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,8.0,DonationCampaignId,Yes,Not used in UK.,empty,0.0,0.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,9.0,DonationCampaignName,Yes,Not used in UK.,empty,0.0,0.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,10.0,TransactionDate,Yes,When the transaction took place.,datetime,100.0,490.0,500,Last-N bookings ordering; dispute ratio window,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,11.0,BookingUrlId,Yes,External booking ID.,text,100.0,498.0,500,Chargeback matching to Invoice ID / Stripe Description (booking GUID),
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,12.0,PaymentReceived,Yes,Price of all tickets in the transaction (excluding fees).,decimal,100.0,98.0,500,"Paid bookings, gross sales, amount at risk",
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,13.0,TicketQuantity,Yes,Number of tickets in the transaction.,integer,100.0,13.0,500,Tickets per event,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,14.0,BookingFee,Yes,Ticket fee paid by the event organiser.,decimal,100.0,16.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,15.0,CardFee,Yes,Processing fee paid by the event organiser.,decimal,100.0,71.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,16.0,ProcessingFee,Yes,Processing fee paid by the ticket purchaser.,decimal,100.0,56.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,17.0,Surcharge,Yes,No longer used in UK.,decimal,100.0,1.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,18.0,ProcessingFeeSurcharge,Yes,No longer used in UK.,boolean (0/1),100.0,1.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,19.0,TicketFee,Yes,Ticket fee paid by the ticket purchaser.,decimal,100.0,14.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,20.0,TransactionType,Yes,"Appears to always be ""Payment"".",text,100.0,2.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,21.0,PaymentType,Yes,Payment type used (paid tickets only).,text,75.6,4.0,500,Quicksale Test (if quicksale shows in PaymentType); box office vs online,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,22.0,EventPostcode,Yes,Postcode on the event's venue details.,text,92.2,231.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,23.0,AccountPostcode,Yes,Postcode from the account's settings.,text,24.4,53.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,24.0,EventDate,Yes,Session date/time of the event the tickets were for.,datetime,100.0,244.0,500,Event scope (recent/upcoming) and amount-at-risk window,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,25.0,Industry,Yes,Industry assigned to the account.,text,98.0,14.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,26.0,SubIndustry,Yes,Sub-industry assigned to the account.,text,77.8,41.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,27.0,GatewayGroup,Yes,Gateway assigned to the account.,text,100.0,2.0,500,Gateway (Stripe Connect / Default) segmentation,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,28.0,DGRStatus,Yes,Not used in UK.,text,100.0,1.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,29.0,CustomerId,Yes,Internal customer ID.,integer,0.2,1.0,500,Repeat-buyer / velocity checks,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,30.0,IPCountry,Yes,"Country of the transaction, by IP.",text,100.0,11.0,500,Booking Outside UK Test; Booking IP Location Test (vs booking address),
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,31.0,Status,Yes,"Successful, Failed or Unknown.",text,100.0,2.0,500,Booking Failed Transactions Test (Status = Failed),
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,32.0,Wallet,Yes,Mobile wallet (Apple Pay / Google Pay) — Stripe only.,text,38.6,2.0,500,Apple/Google Pay share (lower card-fraud risk),
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,33.0,GatewayName,Yes,Payment gateway used.,text,75.6,3.0,500,Payment gateway used (Stripe / PayPal),
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,34.0,GatewayId,Yes,Payment reference within Stripe/PayPal.,text,74.6,372.0,500,Chargeback matching (PayPal txn / Stripe charge); joins Stripe signals export,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,35.0,GatewayReference,Yes,Not used in UK.,empty,0.0,0.0,500,Chargeback matching fallback,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,36.0,GiftCertificateTypeName,Yes,Gift certificate name (if used).,empty,0.0,0.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,37.0,GiftCertificateId,Yes,Gift certificate ID (if used).,empty,0.0,0.0,500,,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,38.0,BookingCountryCode,Yes,Always GBR.,text,100.0,5.0,500,Booking address country for location tests (always GBR in UK),
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,39.0,IPAddress,Yes,Buyer's IP address.,text,100.0,453.0,500,IP-level checks (repeat IPs across accounts); needs geo-lookup for country,
+BookingData,s3://produk-rdsextracts-438255373632/2026/10/202610-BookingData-TBUK.csv,202610,40.0,OrganiserId,New (not in docs),,empty,0.0,0.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,1.0,BookingId,Yes,Internal platform use only.,integer,100.0,499.0,500,Chargeback matching fallback,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,2.0,BookingTransactionId,Yes,Internal platform use only.,integer,100.0,500.0,500,Booking key; joins signals file,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,3.0,AccountId,Yes,The ID of the account on TryBooking.,integer,100.0,260.0,500,Per-account grouping (Event Organiser Account Number),
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,4.0,AccountName,Yes,The name of the account.,text,100.0,258.0,500,Account label in report,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,5.0,DateTimeCreated,Yes,When the account was created.,datetime,100.0,260.0,500,Account age (new-account risk),
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,6.0,EventId,Yes,The ID of the event.,integer,100.0,321.0,500,Per-event grouping,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,7.0,EventName,Yes,The name of the event.,text,100.0,316.0,500,Event label in report,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,8.0,DonationCampaignId,Yes,Not used in UK.,empty,0.0,0.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,9.0,DonationCampaignName,Yes,Not used in UK.,empty,0.0,0.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,10.0,TransactionDate,Yes,When the transaction took place.,datetime,100.0,486.0,500,Last-N bookings ordering; dispute ratio window,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,11.0,BookingUrlId,Yes,External booking ID.,text,100.0,499.0,500,Chargeback matching to Invoice ID / Stripe Description (booking GUID),
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,12.0,PaymentReceived,Yes,Price of all tickets in the transaction (excluding fees).,decimal,100.0,90.0,500,"Paid bookings, gross sales, amount at risk",
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,13.0,TicketQuantity,Yes,Number of tickets in the transaction.,integer,100.0,10.0,500,Tickets per event,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,14.0,BookingFee,Yes,Ticket fee paid by the event organiser.,decimal,100.0,10.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,15.0,CardFee,Yes,Processing fee paid by the event organiser.,decimal,100.0,67.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,16.0,ProcessingFee,Yes,Processing fee paid by the ticket purchaser.,decimal,100.0,40.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,17.0,Surcharge,Yes,No longer used in UK.,decimal,100.0,1.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,18.0,ProcessingFeeSurcharge,Yes,No longer used in UK.,boolean (0/1),100.0,1.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,19.0,TicketFee,Yes,Ticket fee paid by the ticket purchaser.,decimal,100.0,9.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,20.0,TransactionType,Yes,"Appears to always be ""Payment"".",text,100.0,2.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,21.0,PaymentType,Yes,Payment type used (paid tickets only).,text,58.2,5.0,500,Quicksale Test (if quicksale shows in PaymentType); box office vs online,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,22.0,EventPostcode,Yes,Postcode on the event's venue details.,text,84.0,228.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,23.0,AccountPostcode,Yes,Postcode from the account's settings.,text,26.2,76.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,24.0,EventDate,Yes,Session date/time of the event the tickets were for.,datetime,100.0,270.0,500,Event scope (recent/upcoming) and amount-at-risk window,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,25.0,Industry,Yes,Industry assigned to the account.,text,98.8,16.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,26.0,SubIndustry,Yes,Sub-industry assigned to the account.,text,79.0,46.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,27.0,GatewayGroup,Yes,Gateway assigned to the account.,text,100.0,3.0,500,Gateway (Stripe Connect / Default) segmentation,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,28.0,DGRStatus,Yes,Not used in UK.,text,100.0,1.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,29.0,CustomerId,Yes,Internal customer ID.,integer,1.0,4.0,500,Repeat-buyer / velocity checks,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,30.0,IPCountry,Yes,"Country of the transaction, by IP.",text,100.0,10.0,500,Booking Outside UK Test; Booking IP Location Test (vs booking address),
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,31.0,Status,Yes,"Successful, Failed or Unknown.",text,100.0,2.0,500,Booking Failed Transactions Test (Status = Failed),
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,32.0,Wallet,Yes,Mobile wallet (Apple Pay / Google Pay) — Stripe only.,text,27.0,2.0,500,Apple/Google Pay share (lower card-fraud risk),
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,33.0,GatewayName,Yes,Payment gateway used.,text,58.6,4.0,500,Payment gateway used (Stripe / PayPal),
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,34.0,GatewayId,Yes,Payment reference within Stripe/PayPal.,text,58.0,290.0,500,Chargeback matching (PayPal txn / Stripe charge); joins Stripe signals export,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,35.0,GatewayReference,Yes,Not used in UK.,empty,0.0,0.0,500,Chargeback matching fallback,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,36.0,GiftCertificateTypeName,Yes,Gift certificate name (if used).,empty,0.0,0.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,37.0,GiftCertificateId,Yes,Gift certificate ID (if used).,empty,0.0,0.0,500,,
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,38.0,BookingCountryCode,Yes,Always GBR.,text,100.0,5.0,500,Booking address country for location tests (always GBR in UK),
+BookingDataAll,s3://produk-rdsextracts-438255373632/2026/09/20260930-BookingDataAll-TBUK.csv,20260930,39.0,IPAddress,Yes,Buyer's IP address.,text,100.0,474.0,500,IP-level checks (repeat IPs across accounts); needs geo-lookup for country,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,1.0,NULL,New (not in docs),,text,100.0,13.0,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,PaymentGatewayId,Missing from file,Gateway ID.,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,PaymentGatewayName,Missing from file,"Gateway name (e.g. Stripe, PayPal).",,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TicketValue,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,FundraisingDonation,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,Donation,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,BoxOfficeFee,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalBookingFee,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalSurcharge,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalProcessingFeeSurcharge,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalCardFee,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalTicketFee,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalProcessingFee,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalDonationFee,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,GCUsed,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TicketRefundedAmount,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,FundraisingDonationRefunded,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,DonationRefundedAmount,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,BoxOfficeFeeRefundedAmount,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalRefundedCardFee,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalRefundedTicketFee,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalRefundedProcessingFee,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalRefundedSurcharge,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalRefundedPFSurcharge,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,TotalRefundedDonationFee,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,ReturnedGCValue,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,RefundedGCValue,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,GCValue,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,GCDiscount,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,DebitListing,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,OpeningBalance,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,ClosingBalance,Missing from file,,,,,13,,
+GatewayMovement,s3://produk-rdsextracts-438255373632/2026/10/202610-GatewayMovement-TBUK.csv,202610,,StripeTransfers,Missing from file,,,,,13,,
+RiskReport,s3://produk-rdsextracts-438255373632/2026/10/202610-RiskReport-TBUK.csv,202610,1.0,AccountId,Yes,The account's ID.,integer,100.0,500.0,500,Per-account grouping (Event Organiser Account Number),
+RiskReport,s3://produk-rdsextracts-438255373632/2026/10/202610-RiskReport-TBUK.csv,202610,2.0,AccountName,Yes,The account's name.,text,100.0,281.0,500,Account label in report,
+RiskReport,s3://produk-rdsextracts-438255373632/2026/10/202610-RiskReport-TBUK.csv,202610,3.0,FullBalance,Yes,"Total balance, including pending.",decimal,100.0,35.0,500,Exposure: amount at risk,
+RiskReport,s3://produk-rdsextracts-438255373632/2026/10/202610-RiskReport-TBUK.csv,202610,4.0,Balance,Yes,Available balance (excludes pending).,decimal,100.0,14.0,500,Exposure: available balance,
+RiskReport,s3://produk-rdsextracts-438255373632/2026/10/202610-RiskReport-TBUK.csv,202610,5.0,SalesForUpcomingEvents,Yes,Revenue tied to events that haven't happened yet.,decimal,100.0,13.0,500,Exposure: amount at risk,
+RiskReport,s3://produk-rdsextracts-438255373632/2026/10/202610-RiskReport-TBUK.csv,202610,6.0,Exposure,Yes,TryBooking's own exposure flag/figure.,decimal,100.0,6.0,500,Exposure: amount at risk,
+RiskReport,s3://produk-rdsextracts-438255373632/2026/10/202610-RiskReport-TBUK.csv,202610,7.0,FutureDays,Yes,Days until the furthest upcoming event.,integer,100.0,13.0,500,Exposure horizon,
+RiskReport,s3://produk-rdsextracts-438255373632/2026/10/202610-RiskReport-TBUK.csv,202610,8.0,LastEventDate,Yes,Date of the account's last event.,datetime,14.8,71.0,500,,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,1.0,NULL,New (not in docs),,text,100.0,500.0,500,,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,BookingTransactionId,Missing from file,The transaction ID.,,,,500,Booking key; joins signals file,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,TransactionDate,Missing from file,When the transaction took place.,,,,500,Last-N bookings ordering; dispute ratio window,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,GatewayId,Missing from file,Payment reference within the gateway.,,,,500,Chargeback matching (PayPal txn / Stripe charge); joins Stripe signals export,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,BookingUrlId,Missing from file,External booking ID.,,,,500,Chargeback matching to Invoice ID / Stripe Description (booking GUID),
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,CardType,Missing from file,"Card type (VISA, MasterCard, etc.).",,,,500,Card brand only — no issuing country,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,CardNo,Missing from file,Last 4 digits of the card only.,,,,500,Last 4 digits only,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,Amount,Missing from file,Transaction amount.,,,,500,Transaction amount,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,Transaction,Missing from file,Transaction type (e.g. Payment).,,,,500,,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,GatewayMessage,Missing from file,Message returned by the gateway.,,,,500,Gateway decline / failure reasons,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,PayoutId,Missing from file,Payout the transaction was settled in.,,,,500,,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,ArrivalDate,Missing from file,When funds arrived.,,,,500,,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,Provider,Missing from file,"Payment provider (Stripe, Braintree PayPal, etc.).",,,,500,,
+TransactionReconciliation,s3://produk-rdsextracts-438255373632/2026/10/202610-TransactionReconciliation-TBUK.csv,202610,,AccountName,Missing from file,The account's name.,,,,500,Account label in report,
+accountbalance,s3://produk-rdsextracts-438255373632/2026/10/202610-accountbalance-TBUK.csv,202610,1.0,AccountID,Yes,The account's ID.,integer,100.0,500.0,500,Per-account grouping (Event Organiser Account Number),
+accountbalance,s3://produk-rdsextracts-438255373632/2026/10/202610-accountbalance-TBUK.csv,202610,2.0,AccountName,Yes,The account's name.,text,100.0,467.0,500,Account label in report,
+accountbalance,s3://produk-rdsextracts-438255373632/2026/10/202610-accountbalance-TBUK.csv,202610,3.0,AccountCreationDate,Yes,When the account was created.,empty,0.0,0.0,500,,
+accountbalance,s3://produk-rdsextracts-438255373632/2026/10/202610-accountbalance-TBUK.csv,202610,4.0,AccountBalance,Yes,The account's balance.,decimal,100.0,89.0,500,,
+accountbalance,s3://produk-rdsextracts-438255373632/2026/10/202610-accountbalance-TBUK.csv,202610,5.0,Industry,Yes,Industry assigned to the account.,text,86.4,15.0,500,,
+accountbalance,s3://produk-rdsextracts-438255373632/2026/10/202610-accountbalance-TBUK.csv,202610,6.0,SubIndustry,Yes,Sub-industry assigned to the account.,text,58.8,51.0,500,,
+accountbalance,s3://produk-rdsextracts-438255373632/2026/10/202610-accountbalance-TBUK.csv,202610,7.0,GatewayGroup,Yes,Gateway assigned to the account.,text,100.0,3.0,500,Gateway (Stripe Connect / Default) segmentation,
+accountbalance,s3://produk-rdsextracts-438255373632/2026/10/202610-accountbalance-TBUK.csv,202610,8.0,DGRStatus,Yes,Not used in UK.,text,100.0,1.0,500,,
+donationcampaigns,s3://produk-rdsextracts-438255373632/2026/10/202610-donationcampaigns-TBUK.csv,202610,1.0,Id,Yes,Campaign ID.,empty,,0.0,0,,
+donationcampaigns,s3://produk-rdsextracts-438255373632/2026/10/202610-donationcampaigns-TBUK.csv,202610,2.0,PageUrlHandle,Yes,URL handle for the campaign page.,empty,,0.0,0,,
+donationcampaigns,s3://produk-rdsextracts-438255373632/2026/10/202610-donationcampaigns-TBUK.csv,202610,3.0,AccountId,Yes,The owning account.,empty,,0.0,0,Per-account grouping (Event Organiser Account Number),
+donationcampaigns,s3://produk-rdsextracts-438255373632/2026/10/202610-donationcampaigns-TBUK.csv,202610,4.0,IsActive,Yes,Whether the campaign is active.,empty,,0.0,0,,
+donationcampaigns,s3://produk-rdsextracts-438255373632/2026/10/202610-donationcampaigns-TBUK.csv,202610,5.0,PageName,Yes,Campaign page name.,empty,,0.0,0,,
+donationcampaigns,s3://produk-rdsextracts-438255373632/2026/10/202610-donationcampaigns-TBUK.csv,202610,6.0,Description,Yes,Campaign description.,empty,,0.0,0,,
+donationcampaigns,s3://produk-rdsextracts-438255373632/2026/10/202610-donationcampaigns-TBUK.csv,202610,7.0,ContactEmailAddress,Yes,Contact email.,empty,,0.0,0,,
+donationcampaigns,s3://produk-rdsextracts-438255373632/2026/10/202610-donationcampaigns-TBUK.csv,202610,8.0,DateTimeCreated,Yes,When the campaign was created.,empty,,0.0,0,Account age (new-account risk),
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,1.0,BookingId,Yes,Internal platform use only.,empty,,0.0,0,Chargeback matching fallback,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,2.0,BookingTransactionId,Yes,Internal platform use only.,empty,,0.0,0,Booking key; joins signals file,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,3.0,AccountId,Yes,The account's ID.,empty,,0.0,0,Per-account grouping (Event Organiser Account Number),
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,4.0,AccountName,Yes,The account's name.,empty,,0.0,0,Account label in report,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,5.0,DateTimeCreated,Yes,When the account was created.,empty,,0.0,0,Account age (new-account risk),
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,6.0,EventId,Yes,The event ID.,empty,,0.0,0,Per-event grouping,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,7.0,EventName,Yes,The event name.,empty,,0.0,0,Event label in report,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,8.0,TransactionDate,Yes,When the donation was made.,empty,,0.0,0,Last-N bookings ordering; dispute ratio window,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,9.0,BookingFirstName,Yes,Donor first name.,empty,,0.0,0,,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,10.0,BookingLastName,Yes,Donor last name.,empty,,0.0,0,,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,11.0,BookingUrlId,Yes,External booking ID.,empty,,0.0,0,Chargeback matching to Invoice ID / Stripe Description (booking GUID),
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,12.0,Donation,Yes,Donation amount.,empty,,0.0,0,,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,13.0,PaymentType,Yes,Payment type used.,empty,,0.0,0,Quicksale Test (if quicksale shows in PaymentType); box office vs online,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,14.0,Industry,Yes,Industry assigned to the account.,empty,,0.0,0,,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,15.0,SubIndustry,Yes,Sub-industry assigned to the account.,empty,,0.0,0,,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,16.0,GatewayGroup,Yes,Gateway assigned to the account.,empty,,0.0,0,Gateway (Stripe Connect / Default) segmentation,
+donations,s3://produk-rdsextracts-438255373632/2026/10/202610-donations-TBUK.csv,202610,17.0,DGRStatus,Yes,Not used in UK.,empty,,0.0,0,,
+fundraising,s3://produk-rdsextracts-438255373632/2026/10/202610-fundraising-TBUK.csv,202610,1.0,AccountId,No schema doc,,empty,,0.0,0,Per-account grouping (Event Organiser Account Number),
+fundraising,s3://produk-rdsextracts-438255373632/2026/10/202610-fundraising-TBUK.csv,202610,2.0,AccountName,No schema doc,,empty,,0.0,0,Account label in report,
+fundraising,s3://produk-rdsextracts-438255373632/2026/10/202610-fundraising-TBUK.csv,202610,3.0,Current ABN,No schema doc,,empty,,0.0,0,,
+fundraising,s3://produk-rdsextracts-438255373632/2026/10/202610-fundraising-TBUK.csv,202610,4.0,Current Entity Name,No schema doc,,empty,,0.0,0,,
+fundraising,s3://produk-rdsextracts-438255373632/2026/10/202610-fundraising-TBUK.csv,202610,5.0,Txn ABN,No schema doc,,empty,,0.0,0,,
+fundraising,s3://produk-rdsextracts-438255373632/2026/10/202610-fundraising-TBUK.csv,202610,6.0,Txn Entity Name,No schema doc,,empty,,0.0,0,,
+scanapp-users,s3://produk-rdsextracts-438255373632/2026/10/202610-scanapp-users-TBUK.csv,202610,1.0,AccountId,Yes,The account's ID.,integer,100.0,76.0,90,Per-account grouping (Event Organiser Account Number),
+scanapp-users,s3://produk-rdsextracts-438255373632/2026/10/202610-scanapp-users-TBUK.csv,202610,2.0,AccountName,Yes,The account's name.,text,100.0,76.0,90,Account label in report,
+scanapp-users,s3://produk-rdsextracts-438255373632/2026/10/202610-scanapp-users-TBUK.csv,202610,3.0,EventId,Yes,The event ID.,integer,100.0,90.0,90,Per-event grouping,
+scanapp-users,s3://produk-rdsextracts-438255373632/2026/10/202610-scanapp-users-TBUK.csv,202610,4.0,EventName,Yes,The event name.,text,100.0,90.0,90,Event label in report,
+scanapp-users,s3://produk-rdsextracts-438255373632/2026/10/202610-scanapp-users-TBUK.csv,202610,5.0,TotalDevices,Yes,Number of devices used to scan.,integer,100.0,5.0,90,,
+scanapp-users,s3://produk-rdsextracts-438255373632/2026/10/202610-scanapp-users-TBUK.csv,202610,6.0,TotalScanned,Yes,Number of tickets scanned.,integer,100.0,58.0,90,,
+transfers,s3://produk-rdsextracts-438255373632/2026/10/202610-transfers-TBUK.csv,202610,1.0,Amount,Yes,Transfer amount.,decimal,100.0,297.0,500,Transaction amount,
+transfers,s3://produk-rdsextracts-438255373632/2026/10/202610-transfers-TBUK.csv,202610,2.0,DateCreated,Yes,When the transfer was created.,datetime,100.0,482.0,500,,
+transfers,s3://produk-rdsextracts-438255373632/2026/10/202610-transfers-TBUK.csv,202610,3.0,Filename,Yes,Source file the transfer came from.,text,100.0,27.0,500,,
+transfers,s3://produk-rdsextracts-438255373632/2026/10/202610-transfers-TBUK.csv,202610,4.0,AccountId,Yes,The account the transfer is for.,integer,100.0,409.0,500,Per-account grouping (Event Organiser Account Number),
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,1.0,UserId,Yes,The user's ID.,integer,100.0,482.0,500,,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,2.0,RoleId,Yes,Role ID.,integer,100.0,6.0,500,,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,3.0,RoleName,Yes,Role name; the account owner has `AccountOwner`.,text,85.4,3.0,500,,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,4.0,Username,Yes,The user's login email.,text,95.0,457.0,500,,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,5.0,FirstName,Yes,First name.,text,95.0,280.0,500,,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,6.0,LastName,Yes,Last name.,text,95.0,393.0,500,,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,7.0,IsDeleted,Yes,Whether the user has been deleted.,boolean (0/1),100.0,2.0,500,,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,8.0,AccountId,Yes,The account this user belongs to.,integer,100.0,407.0,500,Per-account grouping (Event Organiser Account Number),
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,9.0,Unsubscribed,Yes,Whether the user has unsubscribed from email.,boolean (0/1),100.0,2.0,500,,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,10.0,ProviderName,Yes,Identity provider (if applicable).,text,0.2,1.0,500,,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,11.0,SmsMultiFactorEnabled,Yes,Whether SMS MFA is on.,boolean (0/1),100.0,2.0,500,Account security (MFA) context,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,12.0,SecondFactorEnabled,Yes,Whether 2FA is on.,boolean (0/1),100.0,2.0,500,Account security (2FA) context,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,13.0,MfaReminderDate,Yes,,datetime,100.0,167.0,500,,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,14.0,LastLoginDatetime,Yes,Last login.,datetime,41.4,207.0,500,Last login only — not enough for the Account Logins Test,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,15.0,LastLoginMethod,New (not in docs),,text,12.2,2.0,500,,
+users,s3://produk-rdsextracts-438255373632/2026/10/202610-users-TBUK.csv,202610,16.0,LastPasswordChangeDate,Yes,Last password change.,datetime,25.2,111.0,500,Account takeover context,

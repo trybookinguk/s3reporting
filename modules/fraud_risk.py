@@ -9,7 +9,9 @@ The scoring logic is documented for non-technical readers in
 Data sources (all in the SQLite warehouse unless noted)
 -------------------------------------------------------
 - ``bookings``         : S3 BookingData/BookingDataAll (IPCountry, Status,
-                         PaymentType, BookingCountryCode, GatewayId, …)
+                         PaymentType, BookingCountryCode, GatewayId, BookingUrlId…).
+                         Which S3 file/column feeds each test is mapped in
+                         docs/notion/fraud_risk_report.md (from the S3 inventory).
 - ``accounts``         : S3 Accounts snapshot (name, status, created)
 - ``chargebacks``      : PayPal + Stripe disputes (modules/chargebacks.py)
 - ``risk_exposure``    : S3 RiskReport snapshot (balances) — written by the
@@ -120,40 +122,42 @@ _UK_ALIASES = {
     "UNITED KINGDOM OF GREAT BRITAIN AND NORTHERN IRELAND",
 }
 _UNKNOWN = {"", "-", "--", "UNKNOWN", "N/A", "NA", "NONE", "NULL", "XX", "ZZ", "NAN"}
-_ISO3 = {
-    "IRL": "IE", "USA": "US", "FRA": "FR", "DEU": "DE", "ESP": "ES", "NLD": "NL",
-    "BEL": "BE", "ITA": "IT", "PRT": "PT", "CAN": "CA", "AUS": "AU", "NZL": "NZ",
-    "IND": "IN", "NGA": "NG", "ZAF": "ZA", "CHN": "CN", "HKG": "HK", "SGP": "SG",
-    "ARE": "AE", "POL": "PL", "ROU": "RO", "CHE": "CH", "SWE": "SE", "NOR": "NO",
-    "DNK": "DK", "FIN": "FI", "AUT": "AT", "GRC": "GR", "TUR": "TR", "PAK": "PK",
-    "BGD": "BD", "PHL": "PH", "BRA": "BR", "MEX": "MX", "RUS": "RU", "UKR": "UA",
-    "JEY": "JE", "GGY": "GG", "IMN": "IM",
-}
-_NAME_TO_ISO2 = None
+
+# Raw values seen that could not be resolved to an ISO2 code (reported so the
+# country mapping can be extended when S3 formats change).
+UNRECOGNISED_COUNTRIES = {}
 
 
 def norm_country(value):
-    """Normalise a country (ISO2/ISO3/name) to ISO2 upper case, UK -> 'GB'.
-    Returns None for blank/unknown."""
-    global _NAME_TO_ISO2
+    """Normalise a country (ISO2 / ISO3 / name) to ISO2 upper case, UK -> 'GB'.
+    Returns None for blank/unknown; an unresolvable value is returned as-is
+    (upper case) and counted in UNRECOGNISED_COUNTRIES."""
+    from modules.utils.countries import ISO2_CODES, ISO3_TO_ISO2, NAME_TO_ISO2
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return None
-    s = str(value).strip().upper()
+    s = re.sub(r"\s+", " ", str(value).strip().upper())
     if s in _UNKNOWN:
         return None
     if s in _UK_ALIASES:
         return UK
-    if len(s) == 2 and s.isalpha():
+    if len(s) == 2 and s in ISO2_CODES:
         return s
-    if s in _ISO3:
-        return _ISO3[s]
-    if _NAME_TO_ISO2 is None:
-        try:
-            import pytz
-            _NAME_TO_ISO2 = {n.upper(): c for c, n in pytz.country_names.items()}
-        except Exception:
-            _NAME_TO_ISO2 = {}
-    return _NAME_TO_ISO2.get(s, s)
+    if len(s) == 3 and s in ISO3_TO_ISO2:
+        return ISO3_TO_ISO2[s]
+    if s in NAME_TO_ISO2:
+        return NAME_TO_ISO2[s]
+    if s.startswith("THE ") and s[4:] in NAME_TO_ISO2:
+        return NAME_TO_ISO2[s[4:]]
+    # ISO writes "KOREA, REPUBLIC OF"; feeds may say "REPUBLIC OF KOREA" (and vice versa).
+    if ", " in s:
+        a, b = s.split(", ", 1)
+        if f"{b} {a}" in NAME_TO_ISO2:
+            return NAME_TO_ISO2[f"{b} {a}"]
+    for lead in ("REPUBLIC OF ", "DEMOCRATIC REPUBLIC OF ", "ISLAMIC REPUBLIC OF ", "UNITED REPUBLIC OF "):
+        if s.startswith(lead) and f"{s[len(lead):]}, {lead.strip()}" in NAME_TO_ISO2:
+            return NAME_TO_ISO2[f"{s[len(lead):]}, {lead.strip()}"]
+    UNRECOGNISED_COUNTRIES[s] = UNRECOGNISED_COUNTRIES.get(s, 0) + 1
+    return s
 
 
 _GB_TZ = {"EUROPE/LONDON", "EUROPE/BELFAST", "GB", "GB-EIRE", "GMT", "BST", "UTC",

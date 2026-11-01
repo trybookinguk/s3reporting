@@ -61,7 +61,7 @@ If several booking rows match, the Successful one wins, then the latest. The **M
 
 **Account Tier** is the account's *current* tier from the tier pipeline (`tier_snapshot` in `tier_state.db`). It is refreshed on every run.
 
-> ⚠️ **Check after the first live run:** the Summary sheet shows how many chargebacks matched. The warehouse stores `BookingUrlId` as an integer (`modules/warehouse.py` `_INT_ID_COLUMNS`). If the S3 `BookingUrlId` is really the booking GUID, the warehouse stores it as blank. Matching then relies on the gateway-reference fallback alone. If the match rate is low, remove `BookingUrlId` from `_INT_ID_COLUMNS` and re-seed the warehouse.
+> **Booking GUID.** The S3 inventory (Nov 2026) confirmed that `BookingUrlId` is the booking GUID (text). The warehouse used to coerce it to an integer, so it was stored blank. That left the first live run matching only by gateway reference (347 of 471; the PayPal cases stayed unmatched). The warehouse now keeps it as text. Rows loaded before the fix are refilled **once** with `python3 warehouse_backfill.py`, run outside the 02:00–03:30 jobs. That script also builds the index matching uses. Each run prints *Unmatched chargebacks by source*.
 
 ---
 
@@ -73,7 +73,7 @@ Settings: **No. of Logins = 10**, **No. of Bookings = 100**.
 - **Per account:** the last 100 bookings across the whole account within the last 365 days (`--booking-lookback-days`), plus the last 10 logins.
 - **Threshold:** the % of the evaluated sample that is flagged. With a full 100-booking sample this is the same as a count. *Average Risk Score* is the exception: it is the mean Stripe risk score (0–100). A test **Fails** when the value is **≥ the threshold**.
 - **Minimum evidence:** a test needs at least 5 evaluable bookings (or 3 logins) before it can pass or fail. Fewer than that shows **Insufficient**, and none at all shows **No data**. Neither scores any points.
-- The **booking address country** is the billing or booking country from the signals file if present. Otherwise it is `BookingCountryCode`, which is always GBR in the UK export, so it defaults to UK.
+- The **booking address country** is the billing or booking country from the signals file if present. Otherwise it is the booking's `BookingCountryCode`, which is mostly GBR but not always (5 distinct values in the Oct 2026 S3 sample). If both are blank, it is taken as UK.
 
 | Test | Threshold | Active | Weight | Flagged when… | Data source |
 |---|---|---|---|---|---|
@@ -90,11 +90,28 @@ Settings: **No. of Logins = 10**, **No. of Bookings = 100**.
 
 Inactive tests are still calculated and shown in the workbook, but they add **0 points**. To change a threshold, active flag or weight, edit `RISK_TESTS` in `modules/fraud_risk.py`.
 
-UK means GB, GBR, UK, United Kingdom, Great Britain, England, Scotland, Wales or Northern Ireland. A blank or unknown country is left out of the sample rather than counted as foreign.
+UK means GB, GBR, UK, United Kingdom, Great Britain, England, Scotland, Wales or Northern Ireland. Other countries are recognised as ISO 2- or 3-letter codes or by name (`modules/utils/countries.py`, the full ISO 3166 list). A blank or "unknown" country is left out of the sample rather than counted as foreign. Any value that can't be recognised is counted as foreign. Such values are listed on the Summary sheet and in the run log, so they can be added to the country table.
+
+### Which S3 file and column each test uses
+
+From the S3 inventory of 2026-11-01. The snapshot is `docs/s3_inventory/2026-11-01_S3Inventory_columns.csv`; re-run `python3 s3_inventory.py` to refresh it. Every column below is already in the warehouse `bookings` table, loaded nightly by `prepare_data.py`. The only exception is `BookingUrlId`, which needs the one-off backfill described above.
+
+| Test / need | S3 file | Column (inventory: type, % filled) | Warehouse |
+|---|---|---|---|
+| Booking Failed Transactions | `YYYYMM-BookingData-TBUK.csv`, `YYYYMMDD-BookingDataAll-TBUK.csv` | `Status` (text, 100%, 2 values) | `bookings.Status` |
+| Booking Outside UK | BookingData / BookingDataAll | `IPCountry` (text, 100%, 11 values) | `bookings.IPCountry` |
+| Booking IP Location | BookingData / BookingDataAll | `IPCountry` vs `BookingCountryCode` (text, 100%, 5 values) | `bookings.IPCountry`, `bookings.BookingCountryCode` |
+| Quicksale | BookingData / BookingDataAll | `PaymentType` (text, 58–76%, 4–5 values) | `bookings.PaymentType` |
+| Last-N ordering, scope | BookingData / BookingDataAll | `TransactionDate`, `EventDate`, `EventId`, `AccountId` | `bookings` |
+| Chargeback → booking | BookingData / BookingDataAll | `BookingUrlId` (text GUID, 100%) and `GatewayId` (text, 58–75%) | `bookings.BookingUrlId` (backfilled), `bookings.GatewayId` |
+| Exposure | `YYYYMM-RiskReport-TBUK.csv` | `FullBalance`, `Balance`, `SalesForUpcomingEvents`, `Exposure`, `FutureDays` | `risk_exposure` (written by the report run) |
+| Account name, status, age | `YYYYMM-Accounts-TBUK.csv` | `AccountName`, `AccountStatus`, `DateTimeCreated` | `accounts` |
+
+Run `s3_inventory.py` to see the actual values of the category columns (its *ValuesInSample* column). Check `PaymentType` has a quicksale value before switching the Quicksale Test on, and check the `IPCountry` / `BookingCountryCode` formats against the Summary sheet's unrecognised-country line.
 
 ### Data the S3 exports don't have
 
-Only **Failed Transactions**, **Outside UK**, **IP Location** and **Quicksale** can be calculated from the S3 BookingData export. The other tests need extra inputs, which are optional and can be loaded on any run:
+The inventory confirms that only **Failed Transactions**, **Outside UK**, **IP Location** and **Quicksale** can be calculated from S3. No S3 report has a card issuing country (TransactionReconciliation `CardType` is the brand only), a Stripe risk score, a browser time zone or email delivery status. The users file (`LastLoginDatetime`, `LastLoginMethod`) and AccountFeatureList (`LastLoginDate`) hold only the *last* login, with no IP address. The other tests therefore need extra inputs, which are optional and can be loaded on any run:
 
 - `--signals-file <csv>`: one row per booking or payment. A **Stripe payments export** works as-is: `id` (charge), `PaymentIntent ID`, `Card Issue Country`, `Card Address Country`, and `Risk Score` if your export includes it. A TryBooking extract can also be used, with columns `BookingTransactionId`, `BookingUrlId`, `RiskScore`, `CardCountry`, `BookingCountry`, `BrowserTimeZone`, `EmailDeliveryFailed` or `IsQuicksale`. Column names are matched loosely. Rows join to bookings on BookingTransactionId, booking GUID or gateway ID.
 - `--logins-file <csv>`: `AccountId, LoginDateTime, IPAddress, IPCountry`. The S3 Users export only has the *last* login date and no IP, so this test needs a login history extract from TryBooking.
@@ -182,6 +199,9 @@ Worked example: an event fails *Outside UK* at 40% (2× its threshold of 20, so 
 
 ```bash
 set -a && source /root/s3reporting/.env && set +a
+
+# One-off, after deploying the BookingUrlId fix (outside 02:00-03:30)
+python3 warehouse_backfill.py
 
 # Load new dispute exports and send the report
 python3 fraud_risk_report.py \

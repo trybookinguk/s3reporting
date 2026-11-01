@@ -367,8 +367,14 @@ def _lookup(conn, column: str, keys: list, compact: bool) -> dict:
     latest TransactionDate, when several rows share a key."""
     if not keys:
         return {}
-    expr = (f"LOWER(REPLACE(CAST(\"{column}\" AS TEXT),'-',''))" if compact
-            else f"CAST(\"{column}\" AS TEXT)")
+    if compact and column == "BookingUrlId":
+        # Must match the expression index verbatim (warehouse.ensure_booking_urlid_index).
+        from modules.warehouse import BOOKING_URLID_INDEX_EXPR
+        expr = BOOKING_URLID_INDEX_EXPR
+    elif compact:
+        expr = f"LOWER(REPLACE(CAST(\"{column}\" AS TEXT),'-',''))"
+    else:
+        expr = f"CAST(\"{column}\" AS TEXT)"
     conn.execute("DROP TABLE IF EXISTS temp._cb_keys")
     conn.execute("CREATE TEMP TABLE _cb_keys (k TEXT PRIMARY KEY)")
     conn.executemany("INSERT OR IGNORE INTO temp._cb_keys VALUES (?)", [(k,) for k in keys])
@@ -402,6 +408,9 @@ def match_to_bookings(conn: sqlite3.Connection, rematch: bool = False) -> dict:
         log.warning("No bookings table in the warehouse — chargebacks left unmatched.")
         return {"pending": len(pending), "matched": 0}
 
+    if "BookingUrlId" in cols:
+        from modules.warehouse import ensure_booking_urlid_index
+        ensure_booking_urlid_index(conn)  # one-off build (~1 min on the Pi), then instant
     remaining = {d: (guid_compact(inv), gw or "", pi or "") for d, inv, gw, pi in pending}
     found = {}
     # 1) Invoice GUID -> booking ID columns.

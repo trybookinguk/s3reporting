@@ -36,6 +36,7 @@ These are run manually when needed — typically from the Pi or a machine with c
 | `ppc_reporting.py` | PPC campaign conversion and revenue attribution |
 | `regional_segmentation.py` | UK regional distribution of accounts and events |
 | `keyword_analysis_report.py` | Analysis of event types by keyword (balls, concerts, etc.) |
+| `fraud_risk_report.py` | Fraud risk score per account and event (risk tests + PayPal/Stripe chargebacks + exposure), emailed as xlsx — see `docs/notion/fraud_risk_report.md` |
 
 ---
 
@@ -88,7 +89,7 @@ You can run these on your own machine for development or one-off analysis, as lo
 2. **Install dependencies:**
    ```bash
    pip install --break-system-packages boto3 msal requests pandas pytz numpy scipy \
-       python-dateutil google-analytics-data matplotlib weasyprint
+       python-dateutil google-analytics-data matplotlib weasyprint openpyxl
    ```
    (`weasyprint` is only needed for the commission report's PDFs; `google-analytics-data` only for PPC/planning.)
 

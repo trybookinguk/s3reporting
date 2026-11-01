@@ -298,6 +298,12 @@ def main() -> int:
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if not args.load_only:
+        import importlib.util
+        if importlib.util.find_spec("openpyxl") is None:  # needed for the xlsx; fail fast
+            print("Error: openpyxl is not installed — run: "
+                  "pip install --break-system-packages openpyxl")
+            return 1
     as_of = datetime.strptime(args.as_of, "%Y-%m-%d").date() if args.as_of else date.today()
 
     from modules import warehouse
@@ -332,6 +338,12 @@ def main() -> int:
             print(f"Chargebacks {s['file']} ({s['source']}): {s['read']} read, {s['new']} new, "
                   f"{s['changed']} changed, {s['unchanged']} unchanged")
         print(f"Chargeback matching: {match_stats['matched']} of {match_stats['pending']} pending matched.")
+        unmatched = conn.execute(
+            "SELECT Source, COUNT(*) FROM chargebacks WHERE AccountId IS NULL OR AccountId = '' "
+            "GROUP BY Source").fetchall()
+        if unmatched:
+            print("Unmatched chargebacks by source: "
+                  + ", ".join(f"{src} {n}" for src, n in unmatched))
         if args.load_only:
             return 0
 

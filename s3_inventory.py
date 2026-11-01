@@ -625,6 +625,21 @@ def main() -> int:
                        (f"{stem}_columns.csv", ("text", "csv"))):
         with open(path, "rb") as f:
             attachments.append((os.path.basename(path), f.read()) + mime)
+    # Graph sendMail caps the request at ~4 MB and attachments go base64 (+33%);
+    # the large-attachment path needs Mail.ReadWrite, which the app doesn't have.
+    # Attach in priority order (columns CSV, workbook, files CSV) within 2.5 MB
+    # raw (~3.3 MB encoded); the rest stay on disk and are named in the email.
+    budget = int(2.5 * 1024 * 1024)
+    order = {f"{os.path.basename(stem)}_columns.csv": 0, f"{os.path.basename(stem)}.xlsx": 1}
+    kept, left_out, used = [], [], 0
+    for a in sorted(attachments, key=lambda a: order.get(a[0], 2)):
+        if used + len(a[1]) <= budget:
+            kept.append(a); used += len(a[1])
+        else:
+            left_out.append(a[0])
+    attachments = kept
+    if left_out:
+        print(f"Too large to email (kept in {out_dir}): {', '.join(left_out)}")
     subject = f"S3 Inventory {date.today().isoformat()}" + (f" ({args.prefix})" if args.prefix else "")
     if args.show_samples:
         subject += " - contains sample values"
@@ -632,8 +647,11 @@ def main() -> int:
         from modules.utils.email_utils import send_html_email
         send_html_email(to=args.email, subject=subject,
                         html_content=email_body(files_df, cols_df, label, args.prefix,
-                                                [a[0] for a in attachments]),
-                        attachments=attachments)
+                                                [a[0] for a in attachments])
+                        + (f"<p>Not attached (over the email size limit), saved on the Pi in "
+                           f"{_html_escape(os.path.abspath(out_dir))}: "
+                           f"{_html_escape(', '.join(left_out))}.</p>" if left_out else ""),
+                        attachments=attachments or None)
     except Exception as e:
         print(f"Error sending email: {e}")
         return 1

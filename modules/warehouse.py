@@ -396,19 +396,28 @@ def write_retention_priority(conn: sqlite3.Connection, updates: pd.DataFrame) ->
     return replace_snapshot(conn, "retention_priority", snap, key="account_id")
 
 
-BOOKING_URLID_INDEX_EXPR = "LOWER(REPLACE(BookingUrlId,'-',''))"
+# Normalised booking GUID (lower case, no dashes) used by chargeback matching.
+BOOKING_URLID_NORM_EXPR = "LOWER(REPLACE(BookingUrlId,'-',''))"
+
+# Indexes that were briefly created on bookings and must not persist:
+# ix_bookings_urlid_norm (an expression index from warehouse_backfill.py v1)
+# added ~190 MB to warehouse.db and to every nightly backup, and an expression
+# index is something prepare_data's DuckDB materialise (ATTACH … TYPE sqlite)
+# has never had to read. Chargeback matching scans instead (~15-30 s on the Pi).
+_RETIRED_INDEXES = ("ix_bookings_urlid_norm",)
 
 
-def ensure_booking_urlid_index(conn: sqlite3.Connection) -> bool:
-    """Expression index on the normalised booking GUID (lower case, no dashes),
-    used by chargeback matching. Queries must use BOOKING_URLID_INDEX_EXPR
-    verbatim to hit it. Returns False if bookings has no BookingUrlId."""
-    if "BookingUrlId" not in _existing_columns(conn, "bookings"):
-        return False
-    with conn:
-        conn.execute(f"CREATE INDEX IF NOT EXISTS ix_bookings_urlid_norm "
-                     f"ON bookings({BOOKING_URLID_INDEX_EXPR})")
-    return True
+def drop_retired_indexes(conn: sqlite3.Connection) -> list:
+    """Drop indexes listed in _RETIRED_INDEXES if present. Returns names dropped."""
+    dropped = []
+    for name in _RETIRED_INDEXES:
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+                        (name,)).fetchone():
+            with conn:
+                conn.execute(f"DROP INDEX IF EXISTS {name}")
+            dropped.append(name)
+            logger.info("Dropped retired index %s", name)
+    return dropped
 
 
 # ---- read helpers (re-parse dates so callers get pickle-equivalent dtypes) ----

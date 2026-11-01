@@ -139,6 +139,12 @@ def _update_warehouse(report_date, accounts_df, users_df) -> None:
     try:
         before = warehouse.summary(conn)
         log.info("  Warehouse before: %s", before)
+        # Self-heal: remove indexes other tools must not leave on bookings
+        # (they bloat warehouse.db + backups; see warehouse._RETIRED_INDEXES).
+        try:
+            warehouse.drop_retired_indexes(conn)
+        except Exception as e:
+            log.warning("  Could not drop retired indexes: %s", e)
 
         # Bookings are streamed in chunks — never the whole frame in memory.
         # On a 4 GB Pi the full BookingDataAll (~4.6M rows / ~2 GB) cannot be

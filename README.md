@@ -36,7 +36,7 @@ These are run manually when needed — typically from the Pi or a machine with c
 | `ppc_reporting.py` | PPC campaign conversion and revenue attribution |
 | `regional_segmentation.py` | UK regional distribution of accounts and events |
 | `keyword_analysis_report.py` | Analysis of event types by keyword (balls, concerts, etc.) |
-| `s3_inventory.py` | Dumps every S3 bucket file, then each report's columns with file reference, schema-doc description, inferred type, fill rate and fraud-risk use (xlsx + CSV) |
+| `s3_inventory.py` | Dumps every S3 bucket file, then each report's columns with file reference, schema-doc description, inferred type, fill rate and fraud-risk use; emails the xlsx + CSVs to henry@trybooking.co.uk |
 | `fraud_risk_report.py` | Fraud risk score per account and event (risk tests + PayPal/Stripe chargebacks + exposure), emailed as xlsx — see `docs/notion/fraud_risk_report.md` |
 
 ---

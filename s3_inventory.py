@@ -24,15 +24,20 @@ Outputs (in --output-dir, default REPORTS_DIR):
     <date>_S3Inventory_files.csv
     <date>_S3Inventory_columns.csv
 
+All three are emailed to henry@trybooking.co.uk (auto-CCs Kathryn) with a
+summary and any schema drift in the body; --email changes the recipient and
+--no-email skips it. TEST_MODE=true prefixes the subject with [TEST].
+
 Sample VALUES are not written unless --show-samples is passed: the exports hold
 customer data (emails, names, IPs) and the outputs are meant to be shareable.
 
-Usage (source .env first for the AWS credentials):
+Usage (source .env first for the AWS + Azure email credentials):
     set -a && source /root/s3reporting/.env && set +a
     python3 s3_inventory.py                       # whole bucket, latest file per report
     python3 s3_inventory.py --prefix 2026/11/     # one month only
     python3 s3_inventory.py --all-files           # column dump for EVERY file, not just latest
     python3 s3_inventory.py --local-dir ./exports # inspect local CSVs instead of S3
+    python3 s3_inventory.py --no-email            # write files only
 """
 import argparse
 import csv
@@ -46,6 +51,8 @@ from datetime import date, datetime
 import pandas as pd
 
 DEFAULT_BUCKET = "produk-rdsextracts-438255373632"
+DEFAULT_EMAIL = "henry@trybooking.co.uk"
+XLSX_MIME = ("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 DEFAULT_SAMPLE_BYTES = 512 * 1024
 DEFAULT_SAMPLE_ROWS = 500
 SCHEMA_DOC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "s3_report_schemas.md")
@@ -407,6 +414,66 @@ def write_xlsx(path, sheets):
                 ws.column_dimensions[get_column_letter(i)].width = min(max(width, 8), 70)
 
 
+def _html_escape(v) -> str:
+    import html
+    return html.escape("" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v))
+
+
+def email_body(files_df, cols_df, label, prefix, filenames) -> str:
+    """HTML body: headline numbers, per-report table, and schema drift."""
+    cell = 'style="border:1px solid #ccc;padding:4px 8px;text-align:left"'
+    head = 'style="border:1px solid #ccc;padding:4px 8px;background:#1F3864;color:#fff;text-align:left"'
+
+    def table(df, cols):
+        rows = "".join("<tr>" + "".join(f"<td {cell}>{_html_escape(r[c])}</td>" for c in cols) + "</tr>"
+                       for r in df.to_dict("records"))
+        return ('<table style="border-collapse:collapse;font-family:Arial;font-size:12px">'
+                + "<tr>" + "".join(f"<th {head}>{_html_escape(c)}</th>" for c in cols) + "</tr>"
+                + rows + "</table>")
+
+    per_report = (files_df.groupby("ReportType")
+                  .agg(Files=("Key", "count"), Bytes=("SizeBytes", "sum"),
+                       Earliest=("Period", "min"), Latest=("Period", "max"))
+                  .reset_index())
+    per_report["Size"] = per_report["Bytes"].map(lambda b: _human(int(b)))
+    if len(cols_df):
+        ncols = (cols_df[cols_df["Position"].notna()].groupby("ReportType")["Column"]
+                 .count().rename("Columns"))
+        per_report = per_report.merge(ncols, on="ReportType", how="left")
+    else:
+        per_report["Columns"] = 0
+    per_report["Columns"] = per_report["Columns"].fillna(0).astype(int)
+    per_report = per_report.rename(columns={"ReportType": "Report"})
+
+    parts = [
+        f"<p>The S3 inventory for <b>{_html_escape(label)}</b> "
+        f"({_html_escape(prefix or 'whole bucket')}) is attached: "
+        + ", ".join(_html_escape(f) for f in filenames) + ".</p>",
+        f"<p><b>{len(files_df):,}</b> files, "
+        f"{_human(int(files_df['SizeBytes'].sum()))} in total; "
+        f"<b>{int(cols_df['Position'].notna().sum()) if len(cols_df) else 0:,}</b> columns "
+        f"listed from {cols_df['FileReference'].nunique() if len(cols_df) else 0} files "
+        f"(newest file per report type unless --all-files).</p>",
+        "<h3>Reports</h3>",
+        table(per_report, ["Report", "Files", "Size", "Earliest", "Latest", "Columns"]),
+    ]
+    if len(cols_df):
+        drift = cols_df[cols_df["Documented"].isin(["New (not in docs)", "Missing from file"])]
+        undocumented = sorted(cols_df.loc[cols_df["Documented"] == "No schema doc", "ReportType"].unique())
+        parts.append("<h3>Schema drift vs docs/s3_report_schemas.md</h3>")
+        if len(drift):
+            parts.append(table(drift.rename(columns={"ReportType": "Report", "Documented": "Change"}),
+                               ["Report", "Column", "Change", "FileReference"]))
+        else:
+            parts.append("<p>None — every documented column is present and nothing new appeared.</p>")
+        if undocumented:
+            parts.append("<p>Report types with no schema doc entry: "
+                         + ", ".join(_html_escape(u) for u in undocumented) + ".</p>")
+    parts.append("<p>The Columns sheet has each column's file reference, position, description, "
+                 "inferred type, % filled and fraud-risk use.</p>")
+    return "".join(parts)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Dump S3 bucket files and their data columns.")
     p.add_argument("--bucket", default=DEFAULT_BUCKET, help=f"S3 bucket (default {DEFAULT_BUCKET}).")
@@ -422,6 +489,9 @@ def main() -> int:
                    help="Include one example value per column (contains customer data).")
     p.add_argument("--schema-doc", default=SCHEMA_DOC, help="Schema markdown to compare against.")
     p.add_argument("--output-dir", help="Output folder (default REPORTS_DIR).")
+    p.add_argument("--email", default=DEFAULT_EMAIL,
+                   help=f"Recipient(s) for the inventory files (default {DEFAULT_EMAIL}).")
+    p.add_argument("--no-email", action="store_true", help="Write the files but don't email them.")
     args = p.parse_args()
     import importlib.util
     if importlib.util.find_spec("openpyxl") is None:
@@ -461,6 +531,27 @@ def main() -> int:
     print(f"Wrote {stem}.xlsx, {stem}_files.csv, {stem}_columns.csv")
     print(f"{len(files_df):,} files; {len(cols_df):,} column rows across "
           f"{cols_df['FileReference'].nunique() if len(cols_df) else 0} files.")
+
+    if args.no_email:
+        return 0
+    attachments = []
+    for path, mime in ((f"{stem}.xlsx", XLSX_MIME), (f"{stem}_files.csv", ("text", "csv")),
+                       (f"{stem}_columns.csv", ("text", "csv"))):
+        with open(path, "rb") as f:
+            attachments.append((os.path.basename(path), f.read()) + mime)
+    subject = f"S3 Inventory {date.today().isoformat()}" + (f" ({args.prefix})" if args.prefix else "")
+    if args.show_samples:
+        subject += " - contains sample values"
+    try:
+        from modules.utils.email_utils import send_html_email
+        send_html_email(to=args.email, subject=subject,
+                        html_content=email_body(files_df, cols_df, label, args.prefix,
+                                                [a[0] for a in attachments]),
+                        attachments=attachments)
+    except Exception as e:
+        print(f"Error sending email: {e}")
+        return 1
+    print(f"Emailed {len(attachments)} inventory files to {args.email}")
     return 0
 
 

@@ -116,7 +116,7 @@ The inventory confirms that only **Failed Transactions**, **Outside UK**, **IP L
 - `--signals-file <csv>`: one row per booking or payment. A **Stripe payments export** works as-is: `id` (charge), `PaymentIntent ID`, `Card Issue Country`, `Card Address Country`, and `Risk Score` if your export includes it. A TryBooking extract can also be used, with columns `BookingTransactionId`, `BookingUrlId`, `RiskScore`, `CardCountry`, `BookingCountry`, `BrowserTimeZone`, `EmailDeliveryFailed` or `IsQuicksale`. Column names are matched loosely. Rows join to bookings on BookingTransactionId, booking GUID or gateway ID.
 - `--logins-file <csv>`: `AccountId, LoginDateTime, IPAddress, IPCountry`. The S3 Users export only has the *last* login date and no IP, so this test needs a login history extract from TryBooking.
 
-The **Tests Evaluated** column (e.g. `2/8`) and the Summary sheet's *Test data coverage* show how much evidence each score is based on.
+The **Tests Evaluated** column (e.g. `2/8`) and the Summary sheet's *Test data coverage* show how much evidence each score is based on. A test with no data on any row of a sheet has its `%` and `Result` columns hidden from that sheet. The Summary sheet lists it under *Tests with no data* along with the file that would supply it: `--signals-file` for risk score, card country, browser time zone and email delivery, and `--logins-file` for account logins.
 
 ---
 
@@ -187,7 +187,7 @@ Worked example: an event fails *Outside UK* at 40% (2× its threshold of 20, so 
 
 | Sheet | Contents |
 |---|---|
-| Summary | Band counts, chargeback load and match stats, RiskReport status, test data coverage |
+| Summary | Band counts, chargeback load and match stats, RiskReport status, test data coverage, tests with no data and the file each needs |
 | Account Risk | One row per account, sorted by Risk Score: tier, score breakdown, failed tests, chargeback counts, balances, each test's value and result |
 | Event Risk | One row per event, sorted by Risk Score, with the same detail at event level |
 | Chargebacks | Every dispute: Customer Email, Dispute Date, Invoice ID, Dispute Status, Event Organiser Account Number, Event ID, Account Tier, source, reason, amount, match method |

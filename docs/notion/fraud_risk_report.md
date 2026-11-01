@@ -1,7 +1,7 @@
 # Fraud Risk Report
 
 **Script:** `fraud_risk_report.py` (engine: `modules/fraud_risk.py`, chargebacks: `modules/chargebacks.py`)
-**Output:** `<date>_FraudRiskReport.xlsx` in `REPORTS_DIR`, emailed to henry@trybooking.co.uk (Kathryn is auto-CC'd)
+**Output:** `<date>_FraudRiskReport.xlsx` in `REPORTS_DIR`, uploaded to SharePoint **Platform Data/Users and Accounts** and emailed to henry@trybooking.co.uk (Kathryn is auto-CC'd). The email carries the top-10 tables and a link to the workbook. The workbook is also attached when it's under 2.5 MB. A full run is bigger than that, and the email app's permissions (`Mail.Send` only) can't send larger attachments.
 **Warehouse tables:** `chargebacks`, `chargeback_history`, `chargeback_files`, `risk_exposure`, `risk_fraud`, `risk_fraud_history`, and the optional `booking_signals` and `account_logins`
 
 ## What it is for
@@ -90,7 +90,7 @@ Settings: **No. of Logins = 10**, **No. of Bookings = 100**.
 
 Inactive tests are still calculated and shown in the workbook, but they add **0 points**. To change a threshold, active flag or weight, edit `RISK_TESTS` in `modules/fraud_risk.py`.
 
-UK means GB, GBR, UK, United Kingdom, Great Britain, England, Scotland, Wales or Northern Ireland. Other countries are recognised as ISO 2- or 3-letter codes or by name (`modules/utils/countries.py`, the full ISO 3166 list). A blank or "unknown" country is left out of the sample rather than counted as foreign. Any value that can't be recognised is counted as foreign. Such values are listed on the Summary sheet and in the run log, so they can be added to the country table.
+UK means GB, GBR, UK, UKG (TryBooking's own UK code, seen in the live data), United Kingdom, Great Britain, England, Scotland, Wales or Northern Ireland. Other countries are recognised as ISO 2- or 3-letter codes or by name (`modules/utils/countries.py`, the full ISO 3166 list). A blank or "unknown" country is left out of the sample rather than counted as foreign. Any value that can't be recognised is counted as foreign. Such values are listed on the Summary sheet and in the run log, so they can be added to the country table.
 
 ### Which S3 file and column each test uses
 
@@ -220,6 +220,10 @@ python3 fraud_risk_report.py --signals-file stripe_payments.csv --logins-file lo
 # Safe dry run: [TEST] subject, or no email at all
 TEST_MODE=true python3 fraud_risk_report.py
 python3 fraud_risk_report.py --no-email --output-dir /tmp
+
+# A different SharePoint folder, or no upload (then a large workbook can't be emailed)
+python3 fraud_risk_report.py --sharepoint-folder "Platform Data/Fraud"
+python3 fraud_risk_report.py --no-upload
 ```
 
 Needs `openpyxl` for the Excel output (`pip install --break-system-packages openpyxl`).

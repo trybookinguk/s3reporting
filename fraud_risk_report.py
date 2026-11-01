@@ -51,6 +51,12 @@ from modules import chargebacks as cbmod
 from modules import fraud_risk as fr
 
 DEFAULT_EMAIL = "henry@trybooking.co.uk"
+DEFAULT_SHAREPOINT_FOLDER = "Platform Data/Users and Accounts"
+# Graph sendMail caps the whole request at ~4 MB, and attachments travel base64
+# (+33%). Bigger files need the draft/upload-session path, which needs
+# Mail.ReadWrite — the app only has Mail.Send. So a workbook over 2.5 MB raw
+# (~3.3 MB encoded) is linked from SharePoint instead of attached.
+MAX_ATTACHMENT_BYTES = int(2.5 * 1024 * 1024)
 XLSX_MIME = ("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 log = logging.getLogger("fraud_risk_report")
@@ -250,7 +256,8 @@ def build_workbook(as_of, accounts, events, cb, summary_df) -> bytes:
     return buf.getvalue()
 
 
-def _email_body(as_of, accounts, events, summary_df, filename):
+def _email_body(as_of, accounts, events, summary_df, filename, web_url=None, attached=True,
+                local_path=None):
     from modules.utils.email_utils import create_html_table
     top_a = _pick(accounts.head(10), {k: ACCOUNT_COLUMNS[k] for k in (
         "AccountId", "AccountName", "AccountTier", "RiskScore", "RiskBand", "Chargebacks",
@@ -260,8 +267,19 @@ def _email_body(as_of, accounts, events, summary_df, filename):
         "CB_Lost", "AmountAtRisk", "FailedTests")})
     style = "border-collapse: collapse; font-family: Arial; font-size: 12px;"
     bands = accounts["RiskBand"].value_counts().to_dict() if len(accounts) else {}
+    if web_url and attached:
+        where = (f'is attached ({filename}) and saved to SharePoint: '
+                 f'<a href="{web_url}">{filename}</a>')
+    elif web_url:
+        where = (f'is on SharePoint: <a href="{web_url}">{filename}</a> '
+                 f'(too large to attach)')
+    elif attached:
+        where = f"is attached ({filename})"
+    else:
+        where = (f"was too large to attach and could not be uploaded to SharePoint; "
+                 f"it is on the Pi at {local_path}")
     return (
-        f"<p>The Fraud Risk Report for {as_of.isoformat()} is attached ({filename}), "
+        f"<p>The Fraud Risk Report for {as_of.isoformat()} {where}, "
         f"sorted by risk score.</p>"
         f"<p><b>Accounts:</b> {len(accounts):,} scored — Critical {bands.get('Critical', 0)}, "
         f"High {bands.get('High', 0)}, Medium {bands.get('Medium', 0)}. "
@@ -298,6 +316,10 @@ def main() -> int:
     p.add_argument("--output-dir", help="Where to save the xlsx (default: REPORTS_DIR).")
     p.add_argument("--email", default=DEFAULT_EMAIL, help=f"Recipient (default {DEFAULT_EMAIL}).")
     p.add_argument("--no-email", action="store_true", help="Skip the email.")
+    p.add_argument("--sharepoint-folder", default=DEFAULT_SHAREPOINT_FOLDER,
+                   help=f"SharePoint folder for the workbook (default '{DEFAULT_SHAREPOINT_FOLDER}').")
+    p.add_argument("--no-upload", action="store_true",
+                   help="Don't upload to SharePoint (a workbook over 3 MB then can't be emailed).")
     args = p.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -386,17 +408,55 @@ def main() -> int:
         f.write(xlsx)
     print(f"Wrote {out_path}")
 
+    web_url = None
+    if not args.no_upload:
+        web_url = upload_to_sharepoint(filename, xlsx, args.sharepoint_folder)
+
     if not args.no_email:
+        attach = len(xlsx) <= MAX_ATTACHMENT_BYTES
+        if not attach:
+            print(f"Workbook is {len(xlsx) / 2**20:.1f} MB (over the "
+                  f"{MAX_ATTACHMENT_BYTES / 2**20:.0f} MB attachment limit): emailing "
+                  + ("the SharePoint link instead of attaching it." if web_url
+                     else "a summary only — no SharePoint link is available."))
         try:
             from modules.utils.email_utils import send_html_email
             send_html_email(to=args.email, subject=f"Fraud Risk Report {as_of.isoformat()}",
-                            html_content=_email_body(as_of, accounts, events, summary_df, filename),
-                            attachments=[(filename, xlsx) + XLSX_MIME])
+                            html_content=_email_body(as_of, accounts, events, summary_df, filename,
+                                                     web_url=web_url, attached=attach,
+                                                     local_path=out_path),
+                            attachments=[(filename, xlsx) + XLSX_MIME] if attach else None)
         except Exception as e:
             print(f"Error sending email: {e}")
             return 1
-        print(f"Emailed {filename} to {args.email}")
+        how = "attached" if attach else ("SharePoint link" if web_url else "summary only")
+        print(f"Emailed the report ({how}) to {args.email}")
+        if not attach and not web_url:
+            return 1  # the recipient didn't get the workbook — make the failure visible
     return 0
+
+
+def upload_to_sharepoint(filename: str, data: bytes, folder: str):
+    """Upload the workbook to SharePoint; return its webUrl, or None on failure."""
+    try:
+        from modules.utils import sharepoint
+        from modules.utils.config import SHAREPOINT_DRIVE_ID
+        if not SHAREPOINT_DRIVE_ID:
+            print("SharePoint upload skipped: SHAREPOINT_DRIVE_ID not set.")
+            return None
+        token = sharepoint.authenticate_graph()
+        if not token:
+            print("SharePoint upload skipped: could not authenticate to Microsoft Graph.")
+            return None
+        if not sharepoint.upload(token, SHAREPOINT_DRIVE_ID, filename, data, folder):
+            print(f"SharePoint upload of {filename} to '{folder}' failed.")
+            return None
+        url = sharepoint.get_web_url(token, SHAREPOINT_DRIVE_ID, filename, folder)
+        print(f"Uploaded {filename} to SharePoint '{folder}'.")
+        return url
+    except Exception as e:
+        print(f"SharePoint upload failed: {e}")
+        return None
 
 
 if __name__ == "__main__":

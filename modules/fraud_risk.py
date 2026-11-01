@@ -117,7 +117,8 @@ RISK_BANDS = [(60, "Critical"), (40, "High"), (20, "Medium"), (0, "Low")]
 
 UK = "GB"
 _UK_ALIASES = {
-    "GB", "GBR", "UK", "UNITED KINGDOM", "GREAT BRITAIN", "BRITAIN", "ENGLAND",
+    # "UKG" is TryBooking's own UK code (seen in the Nov 2026 live run, 447 rows).
+    "GB", "GBR", "UK", "UKG", "UNITED KINGDOM", "GREAT BRITAIN", "BRITAIN", "ENGLAND",
     "SCOTLAND", "WALES", "NORTHERN IRELAND",
     "UNITED KINGDOM OF GREAT BRITAIN AND NORTHERN IRELAND",
 }
@@ -454,7 +455,11 @@ def account_aggregates(conn, account_ids, as_of: date) -> pd.DataFrame:
         "ROUND(COALESCE(SUM(CASE WHEN TransactionDate>=? AND Status='Successful' THEN PaymentReceived END),0),2) AS GrossSales365, "
         "ROUND(COALESCE(SUM(CASE WHEN EventDate>=? AND Status='Successful' THEN PaymentReceived END),0),2) AS UpcomingSales, "
         "COUNT(DISTINCT CASE WHEN EventDate>=? THEN EventId END) AS UpcomingEvents "
-        "FROM bookings WHERE AccountId IN (SELECT id FROM temp._scope_accounts) GROUP BY AccountId",
+        # NOT INDEXED: the scoped accounts cover most bookings, so one sequential
+        # scan beats millions of random AccountId-index lookups (10 min -> ~1-2 min
+        # on the Pi's disk). Same result either way.
+        "FROM bookings NOT INDEXED "
+        "WHERE AccountId IN (SELECT id FROM temp._scope_accounts) GROUP BY AccountId",
         conn, params=(c365, c365, today, today))
     acc_cols = _cols(conn, "accounts")
     if {"Id", "AccountName"} <= acc_cols:

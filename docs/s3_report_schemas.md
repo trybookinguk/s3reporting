@@ -122,7 +122,7 @@ Current-month ticket transactions, refreshed daily. **One row per transaction.**
 | `GatewayReference` | Not used in UK. |
 | `GiftCertificateTypeName` | Gift certificate name (if used). |
 | `GiftCertificateId` | Gift certificate ID (if used). |
-| `BookingCountryCode` | Booking country code. Mostly GBR but **not always** — 5 distinct values in the Oct 2026 sample. Used as the booking address country by the fraud IP/card location tests. |
+| `BookingCountryCode` | Booking country code. Mostly GBR but **not always** — 5 distinct values in the Oct 2026 sample, including `UKG` (TryBooking's own UK code; 447 rows in the Nov 2026 fraud run). Used as the booking address country by the fraud IP/card location tests. |
 | `IPAddress` | Buyer's IP address. |
 | `OrganiserId` | Empty in Oct 2026 sample. Added by Nov 2026 (not in BookingDataAll 20260930). |
 

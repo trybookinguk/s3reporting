@@ -423,6 +423,10 @@ def main() -> int:
     p.add_argument("--schema-doc", default=SCHEMA_DOC, help="Schema markdown to compare against.")
     p.add_argument("--output-dir", help="Output folder (default REPORTS_DIR).")
     args = p.parse_args()
+    import importlib.util
+    if importlib.util.find_spec("openpyxl") is None:
+        print("Error: openpyxl is not installed — run: pip install --break-system-packages openpyxl")
+        return 1
 
     if args.local_dir:
         src, label = LocalSource(args.local_dir), f"local folder {os.path.abspath(args.local_dir)}"

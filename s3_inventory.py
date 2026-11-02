@@ -28,8 +28,15 @@ All three are emailed to henry@trybooking.co.uk (auto-CCs Kathryn) with a
 summary and any schema drift in the body; --email changes the recipient and
 --no-email skips it. TEST_MODE=true prefixes the subject with [TEST].
 
-Sample VALUES are not written unless --show-samples is passed: the exports hold
-customer data (emails, names, IPs) and the outputs are meant to be shareable.
+Sample VALUES are not written to the Columns sheet/CSV unless --show-samples is
+passed: the exports hold customer data (emails, names, IPs) and the columns CSV
+is meant to be shareable.
+
+3. Tail     : the workbook also gets a "<Report> last 20" sheet with the last
+             --tail-rows rows (default 20) of the newest non-empty BookingDataAll,
+             read with a ranged GET of the file's end. These are RAW rows
+             (customer IDs, IP addresses) — they go in the xlsx only, never the
+             CSVs. --tail-rows 0 turns it off; --tail-report picks other reports.
 
 Usage (source .env first for the AWS + Azure email credentials):
     set -a && source /root/s3reporting/.env && set +a
@@ -38,6 +45,8 @@ Usage (source .env first for the AWS + Azure email credentials):
     python3 s3_inventory.py --all-files           # column dump for EVERY file, not just latest
     python3 s3_inventory.py --local-dir ./exports # inspect local CSVs instead of S3
     python3 s3_inventory.py --no-email            # write files only
+    python3 s3_inventory.py --tail-rows 50        # last 50 BookingDataAll rows
+    python3 s3_inventory.py --tail-rows 0         # no raw-row sheet
 """
 import argparse
 import csv
@@ -55,6 +64,10 @@ DEFAULT_EMAIL = "henry@trybooking.co.uk"
 XLSX_MIME = ("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 DEFAULT_SAMPLE_BYTES = 512 * 1024
 DEFAULT_SAMPLE_ROWS = 500
+DEFAULT_TAIL_REPORTS = ["BookingDataAll"]
+DEFAULT_TAIL_ROWS = 20
+TAIL_START_BYTES = 256 * 1024
+TAIL_MAX_BYTES = 8 * 1024 * 1024
 SCHEMA_DOC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "s3_report_schemas.md")
 
 # File name: YYYYMM[DD]-<report>-TBUK.csv
@@ -205,6 +218,13 @@ class S3Source:
         truncated = total.isdigit() and int(total) > len(data)
         return data, truncated
 
+    def tail_bytes(self, key: str, n: int) -> tuple:
+        """(bytes, whole_file?) — last n bytes via a suffix ranged GET."""
+        resp = self.client.get_object(Bucket=self.bucket, Key=key, Range=f"bytes=-{n}")
+        data = resp["Body"].read()
+        total = resp.get("ContentRange", "").rsplit("/", 1)[-1]
+        return data, not (total.isdigit() and int(total) > len(data))
+
 
 class LocalSource:
     def __init__(self, root: str):
@@ -229,6 +249,14 @@ class LocalSource:
         with open(full, "rb") as f:
             data = f.read(n)
         return data, os.path.getsize(full) > len(data)
+
+    def tail_bytes(self, key: str, n: int) -> tuple:
+        full = os.path.join(self.root, key)
+        size = os.path.getsize(full)
+        with open(full, "rb") as f:
+            f.seek(max(0, size - n))
+            data = f.read()
+        return data, size <= n
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +486,46 @@ def build(src, prefix: str, all_files: bool, sample_bytes: int, sample_rows: int
     return files_df, pd.DataFrame(col_rows)
 
 
+def parse_tail(data: bytes, whole_file: bool, header: list, n: int) -> list:
+    """Last n complete data rows from the end bytes of a CSV.
+
+    The first (partial) line is dropped unless the read covers the whole file,
+    and only rows with the header's field count are kept, so a read that starts
+    inside a quoted multi-line field can't shift the columns.
+    """
+    text = data.decode("utf-8-sig", errors="replace")
+    if not whole_file:
+        cut = text.find("\n")
+        text = text[cut + 1:] if cut >= 0 else ""
+    width = len(header)
+    rows = [_cells(r) for r in csv.reader(io.StringIO(text))]
+    rows = [r[:width] if len(r) > width and not any(r[width:]) else r for r in rows]
+    rows = [r for r in rows if any(r) and len(r) == width and r != header]
+    return rows[-n:] if n else []
+
+
+def tail_frame(src, files_df, report: str, n: int, log=print) -> tuple:
+    """(DataFrame of the last n rows, file reference) for the newest non-empty
+    file of ``report``; (None, None) when there is no such file."""
+    cands = files_df[(files_df["ReportType"].map(_report_key) == _report_key(report))
+                     & (files_df["FileType"] == "csv") & (files_df["SizeBytes"] > 0)]
+    if cands.empty:
+        log(f"  ! no non-empty {report} file for the tail sheet")
+        return None, None
+    f = cands.sort_values(["Period", "LastModified"], ascending=False).iloc[0]
+    head, truncated = src.head_bytes(f["Key"], DEFAULT_SAMPLE_BYTES)
+    header, _, _ = parse_head(head, truncated, 1)
+    size, rows = TAIL_START_BYTES, []
+    while header:
+        data, whole = src.tail_bytes(f["Key"], size)
+        rows = parse_tail(data, whole, header, n)
+        if len(rows) >= n or whole or size >= TAIL_MAX_BYTES:
+            break
+        size *= 4
+    log(f"  {f['Key']}: last {len(rows)} rows for the tail sheet")
+    return pd.DataFrame(rows, columns=header), src.ref(f["Key"])
+
+
 def summary_frame(files_df, cols_df, source_label, prefix):
     rows = [("Source", source_label), ("Prefix", prefix or "(whole bucket)"),
             ("Generated", datetime.now().strftime("%Y-%m-%d %H:%M")),
@@ -573,6 +641,10 @@ def main() -> int:
                    help="Max rows used to infer types / fill rates (default 500).")
     p.add_argument("--show-samples", action="store_true",
                    help="Include one example value per column (contains customer data).")
+    p.add_argument("--tail-rows", type=int, default=DEFAULT_TAIL_ROWS,
+                   help=f"Raw last-N-rows sheet per --tail-report (default {DEFAULT_TAIL_ROWS}; 0 = off).")
+    p.add_argument("--tail-report", action="append",
+                   help="Report type(s) for the tail sheet (default BookingDataAll; repeatable).")
     p.add_argument("--schema-doc", default=SCHEMA_DOC, help="Schema markdown to compare against.")
     p.add_argument("--output-dir", help="Output folder (default REPORTS_DIR).")
     p.add_argument("--email", default=DEFAULT_EMAIL,
@@ -613,7 +685,20 @@ def main() -> int:
     files_df.to_csv(f"{stem}_files.csv", index=False)
     cols_df.to_csv(f"{stem}_columns.csv", index=False)
     summary = summary_frame(files_df, cols_df, label, args.prefix)
-    write_xlsx(f"{stem}.xlsx", [("Summary", summary), ("Files", files_df), ("Columns", cols_df)])
+    tail_sheets = []
+    if args.tail_rows > 0:
+        for report in args.tail_report or DEFAULT_TAIL_REPORTS:
+            try:
+                df, ref = tail_frame(src, files_df, report, args.tail_rows)
+            except Exception as e:
+                print(f"  ! {report}: could not read the end of the file ({e})")
+                continue
+            if df is not None:
+                name = f"{report} last {args.tail_rows}"[:31]
+                tail_sheets.append((name, df))
+                summary.loc[len(summary)] = [f"{name} (sheet)", f"{len(df)} rows from {ref}"]
+    write_xlsx(f"{stem}.xlsx", [("Summary", summary), ("Files", files_df), ("Columns", cols_df)]
+               + tail_sheets)
     print(f"Wrote {stem}.xlsx, {stem}_files.csv, {stem}_columns.csv")
     print(f"{len(files_df):,} files; {len(cols_df):,} column rows across "
           f"{cols_df['FileReference'].nunique() if len(cols_df) else 0} files.")
@@ -641,8 +726,8 @@ def main() -> int:
     if left_out:
         print(f"Too large to email (kept in {out_dir}): {', '.join(left_out)}")
     subject = f"S3 Inventory {date.today().isoformat()}" + (f" ({args.prefix})" if args.prefix else "")
-    if args.show_samples:
-        subject += " - contains sample values"
+    if args.show_samples or tail_sheets:
+        subject += " - contains booking data"
     try:
         from modules.utils.email_utils import send_html_email
         send_html_email(to=args.email, subject=subject,

@@ -32,11 +32,15 @@ Sample VALUES are not written to the Columns sheet/CSV unless --show-samples is
 passed: the exports hold customer data (emails, names, IPs) and the columns CSV
 is meant to be shareable.
 
-3. Tail     : the workbook also gets a "<Report> last 20" sheet with the last
-             --tail-rows rows (default 20) of the newest non-empty BookingDataAll,
-             read with a ranged GET of the file's end. These are RAW rows
-             (customer IDs, IP addresses) — they go in the xlsx only, never the
-             CSVs. --tail-rows 0 turns it off; --tail-report picks other reports.
+3. Latest   : the workbook also gets a "BookingDataAll latest 20" sheet: the
+             20 most recent transactions (by TransactionDate, newest first) in
+             the newest non-empty BookingDataAll. The file isn't guaranteed to
+             be in date order, so it is streamed end to end (~2 GB, a few
+             minutes on the Pi) keeping only the top N. --latest-quick reads
+             just the end of the file instead (fast, but only "last in file").
+             These are RAW rows (customer IDs, IP addresses) — xlsx only, never
+             the CSVs. --latest-rows 0 turns it off; --latest-report picks other
+             reports.
 
 Usage (source .env first for the AWS + Azure email credentials):
     set -a && source /root/s3reporting/.env && set +a
@@ -45,8 +49,9 @@ Usage (source .env first for the AWS + Azure email credentials):
     python3 s3_inventory.py --all-files           # column dump for EVERY file, not just latest
     python3 s3_inventory.py --local-dir ./exports # inspect local CSVs instead of S3
     python3 s3_inventory.py --no-email            # write files only
-    python3 s3_inventory.py --tail-rows 50        # last 50 BookingDataAll rows
-    python3 s3_inventory.py --tail-rows 0         # no raw-row sheet
+    python3 s3_inventory.py --latest-rows 50      # 50 most recent BookingDataAll transactions
+    python3 s3_inventory.py --latest-quick        # last rows in the file, no full read
+    python3 s3_inventory.py --latest-rows 0       # no raw-row sheet
 """
 import argparse
 import csv
@@ -66,6 +71,8 @@ DEFAULT_SAMPLE_BYTES = 512 * 1024
 DEFAULT_SAMPLE_ROWS = 500
 DEFAULT_TAIL_REPORTS = ["BookingDataAll"]
 DEFAULT_TAIL_ROWS = 20
+LATEST_DATE_COLUMNS = ("TransactionDate", "DateCreated", "DateTimeCreated")
+LATEST_CHUNK_ROWS = 200000
 TAIL_START_BYTES = 256 * 1024
 TAIL_MAX_BYTES = 8 * 1024 * 1024
 SCHEMA_DOC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "s3_report_schemas.md")
@@ -218,6 +225,10 @@ class S3Source:
         truncated = total.isdigit() and int(total) > len(data)
         return data, truncated
 
+    def open_stream(self, key: str):
+        """Binary stream of the whole object (read in chunks by the caller)."""
+        return self.client.get_object(Bucket=self.bucket, Key=key)["Body"]
+
     def tail_bytes(self, key: str, n: int) -> tuple:
         """(bytes, whole_file?) — last n bytes via a suffix ranged GET."""
         resp = self.client.get_object(Bucket=self.bucket, Key=key, Range=f"bytes=-{n}")
@@ -249,6 +260,9 @@ class LocalSource:
         with open(full, "rb") as f:
             data = f.read(n)
         return data, os.path.getsize(full) > len(data)
+
+    def open_stream(self, key: str):
+        return open(os.path.join(self.root, key), "rb")
 
     def tail_bytes(self, key: str, n: int) -> tuple:
         full = os.path.join(self.root, key)
@@ -504,15 +518,26 @@ def parse_tail(data: bytes, whole_file: bool, header: list, n: int) -> list:
     return rows[-n:] if n else []
 
 
-def tail_frame(src, files_df, report: str, n: int, log=print) -> tuple:
-    """(DataFrame of the last n rows, file reference) for the newest non-empty
-    file of ``report``; (None, None) when there is no such file."""
+def _newest_nonempty(files_df, report: str):
     cands = files_df[(files_df["ReportType"].map(_report_key) == _report_key(report))
                      & (files_df["FileType"] == "csv") & (files_df["SizeBytes"] > 0)]
     if cands.empty:
-        log(f"  ! no non-empty {report} file for the tail sheet")
+        return None
+    return cands.sort_values(["Period", "LastModified"], ascending=False).iloc[0]
+
+
+def _header_of(src, key: str) -> list:
+    head, truncated = src.head_bytes(key, DEFAULT_SAMPLE_BYTES)
+    return parse_head(head, truncated, 1)[0]
+
+
+def tail_frame(src, files_df, report: str, n: int, log=print) -> tuple:
+    """(last n rows in the file, file reference) for the newest non-empty
+    file of ``report``; (None, None) when there is no such file."""
+    f = _newest_nonempty(files_df, report)
+    if f is None:
+        log(f"  ! no non-empty {report} file for the latest-rows sheet")
         return None, None
-    f = cands.sort_values(["Period", "LastModified"], ascending=False).iloc[0]
     head, truncated = src.head_bytes(f["Key"], DEFAULT_SAMPLE_BYTES)
     header, _, _ = parse_head(head, truncated, 1)
     size, rows = TAIL_START_BYTES, []
@@ -522,8 +547,50 @@ def tail_frame(src, files_df, report: str, n: int, log=print) -> tuple:
         if len(rows) >= n or whole or size >= TAIL_MAX_BYTES:
             break
         size *= 4
-    log(f"  {f['Key']}: last {len(rows)} rows for the tail sheet")
+    log(f"  {f['Key']}: last {len(rows)} rows in the file")
     return pd.DataFrame(rows, columns=header), src.ref(f["Key"])
+
+
+def top_latest(chunks, n: int, date_col: str) -> pd.DataFrame:
+    """The n rows with the newest ``date_col`` across chunks, newest first.
+    Rows whose date doesn't parse are ignored. Ties keep file order."""
+    best = None
+    for chunk in chunks:
+        chunk.columns = [str(c).replace("\ufeff", "").strip() for c in chunk.columns]
+        chunk = chunk.assign(_ts=pd.to_datetime(chunk[date_col], errors="coerce", utc=True))
+        chunk = chunk[chunk["_ts"].notna()]
+        if chunk.empty:
+            continue
+        top = chunk.nlargest(n, "_ts", keep="last")
+        best = top if best is None else pd.concat([best, top]).nlargest(n, "_ts", keep="last")
+    if best is None:
+        return pd.DataFrame()
+    return best.sort_values("_ts", ascending=False, kind="stable").drop(columns="_ts") \
+               .reset_index(drop=True)
+
+
+def latest_frame(src, files_df, report: str, n: int, log=print) -> tuple:
+    """(n most recent transactions, file reference, date column) for the
+    newest non-empty file of ``report``, streaming the whole file. Falls back
+    to the end of the file when it has no date column."""
+    f = _newest_nonempty(files_df, report)
+    if f is None:
+        log(f"  ! no non-empty {report} file for the latest-rows sheet")
+        return None, None, None
+    header = _header_of(src, f["Key"])
+    date_col = next((c for c in LATEST_DATE_COLUMNS if c in header), None)
+    if not date_col:
+        log(f"  {f['Key']}: no date column — using the last rows in the file")
+        df, ref = tail_frame(src, files_df, report, n, log)
+        return df, ref, None
+    log(f"  {f['Key']}: streaming {f.get('Size', '')} for the {n} latest by {date_col} …")
+    with src.open_stream(f["Key"]) as body:
+        chunks = pd.read_csv(body, dtype=str, keep_default_na=False, encoding="utf-8-sig",
+                             chunksize=LATEST_CHUNK_ROWS, on_bad_lines="skip")
+        df = top_latest(chunks, n, date_col)
+    log(f"  {f['Key']}: {len(df)} latest rows"
+        + (f", {df[date_col].iloc[0]} to {df[date_col].iloc[-1]}" if len(df) else ""))
+    return df, src.ref(f["Key"]), date_col
 
 
 def summary_frame(files_df, cols_df, source_label, prefix):
@@ -641,10 +708,15 @@ def main() -> int:
                    help="Max rows used to infer types / fill rates (default 500).")
     p.add_argument("--show-samples", action="store_true",
                    help="Include one example value per column (contains customer data).")
-    p.add_argument("--tail-rows", type=int, default=DEFAULT_TAIL_ROWS,
-                   help=f"Raw last-N-rows sheet per --tail-report (default {DEFAULT_TAIL_ROWS}; 0 = off).")
-    p.add_argument("--tail-report", action="append",
-                   help="Report type(s) for the tail sheet (default BookingDataAll; repeatable).")
+    p.add_argument("--latest-rows", "--tail-rows", dest="latest_rows", type=int,
+                   default=DEFAULT_TAIL_ROWS,
+                   help=f"Most recent N transactions sheet per --latest-report "
+                        f"(default {DEFAULT_TAIL_ROWS}; 0 = off).")
+    p.add_argument("--latest-report", "--tail-report", dest="latest_report", action="append",
+                   help="Report type(s) for the latest sheet (default BookingDataAll; repeatable).")
+    p.add_argument("--latest-quick", action="store_true",
+                   help="Take the last rows in the file (ranged GET) instead of streaming "
+                        "the whole file for the most recent by date.")
     p.add_argument("--schema-doc", default=SCHEMA_DOC, help="Schema markdown to compare against.")
     p.add_argument("--output-dir", help="Output folder (default REPORTS_DIR).")
     p.add_argument("--email", default=DEFAULT_EMAIL,
@@ -686,17 +758,23 @@ def main() -> int:
     cols_df.to_csv(f"{stem}_columns.csv", index=False)
     summary = summary_frame(files_df, cols_df, label, args.prefix)
     tail_sheets = []
-    if args.tail_rows > 0:
-        for report in args.tail_report or DEFAULT_TAIL_REPORTS:
+    if args.latest_rows > 0:
+        for report in args.latest_report or DEFAULT_TAIL_REPORTS:
             try:
-                df, ref = tail_frame(src, files_df, report, args.tail_rows)
+                if args.latest_quick:
+                    df, ref = tail_frame(src, files_df, report, args.latest_rows)
+                    how = "last rows in the file"
+                else:
+                    df, ref, date_col = latest_frame(src, files_df, report, args.latest_rows)
+                    how = (f"most recent by {date_col}, newest first" if date_col
+                           else "last rows in the file (no date column)")
             except Exception as e:
-                print(f"  ! {report}: could not read the end of the file ({e})")
+                print(f"  ! {report}: could not read the latest rows ({e})")
                 continue
             if df is not None:
-                name = f"{report} last {args.tail_rows}"[:31]
+                name = f"{report} latest {args.latest_rows}"[:31]
                 tail_sheets.append((name, df))
-                summary.loc[len(summary)] = [f"{name} (sheet)", f"{len(df)} rows from {ref}"]
+                summary.loc[len(summary)] = [f"{name} (sheet)", f"{len(df)} rows, {how}, from {ref}"]
     write_xlsx(f"{stem}.xlsx", [("Summary", summary), ("Files", files_df), ("Columns", cols_df)]
                + tail_sheets)
     print(f"Wrote {stem}.xlsx, {stem}_files.csv, {stem}_columns.csv")

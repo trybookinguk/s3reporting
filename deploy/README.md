@@ -38,7 +38,7 @@ under `DATA_DIR` by default; override with `WAREHOUSE_DB`). Tables:
 - `accounts`, `users` — current-state snapshots, full-replaced each run.
 - `retention_priority` — written by `zoho_tiers.py`; `ppc_attribution` — written
   by the GA4 ingest; `meta` — bookkeeping.
-- Fraud risk (written only by `fraud_risk_report.py` / `warehouse_backfill.py`,
+- Fraud risk (written only by RiskManagement's `fraud_risk_report.py` / `warehouse_backfill.py`,
   never read by the nightly jobs or the DuckDB materialise): `chargebacks`,
   `chargeback_history`, `chargeback_files`, `risk_exposure` (RiskReport
   snapshot), `risk_fraud`, `risk_fraud_history`, and the optional

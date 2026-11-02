@@ -72,6 +72,19 @@ sudo docker exec s3reporting python3 test_secrets.py
 sudo docker exec s3reporting ./deploy/run_daily.sh --test    # safe preview
 ```
 
+## Fraud risk tool (trybookinguk/RiskManagement)
+
+The fraud risk report lives in its own repo and runs inside this container.
+`docker-compose.yml` mounts it at `/risk`, and it imports this repo's modules
+from `/app`. Clone it before running `deploy_synology.sh`; otherwise Docker
+creates an empty folder at that path:
+```bash
+sudo git clone https://github.com/trybookinguk/RiskManagement.git /volume1/docker/RiskManagement
+sudo docker exec -w /risk s3reporting python3 fraud_risk_report.py
+```
+Setup, dispute-file location and scheduling are in that repo's
+`deploy/synology/README.md`.
+
 ## Scheduling the daily run (DSM Task Scheduler — the crontab replacement)
 
 DSM ignores the repo's `deploy/pi-crontab`; use **Control Panel → Task

@@ -160,8 +160,34 @@ CHARGEBACK_COLUMNS = {
 }
 
 
-def _pick(df, mapping):
-    cols = [c for c in mapping if c in df.columns]
+# Where each test's data comes from. Only the booking-based ones have an S3
+# source; the rest stay "No data" until the matching optional file is loaded.
+TEST_DATA_SOURCE = {
+    "account_logins": "--logins-file (AccountId, LoginDateTime, IPCountry)",
+    "avg_risk_score": "--signals-file RiskScore column",
+    "browser_timezone": "--signals-file BrowserTimeZone column",
+    "card_location": "--signals-file CardCountry column",
+    "card_outside_uk": "--signals-file CardCountry column",
+    "failed_email": "--signals-file EmailDeliveryFailed column",
+    "failed_transactions": "S3 BookingData (Status)",
+    "ip_location": "S3 BookingData (IPCountry vs BookingCountryCode)",
+    "outside_uk": "S3 BookingData (IPCountry)",
+    "quicksale": "S3 BookingData (PaymentType) or --signals-file IsQuicksale",
+}
+
+
+def _tests_without_data(df) -> list:
+    """Test keys where no row on this frame was evaluated (all "No data")."""
+    if df is None or not len(df):
+        return [t["key"] for t in fr.RISK_TESTS]
+    return [t["key"] for t in fr.RISK_TESTS
+            if f"{t['key']}__result" not in df.columns
+            or not df[f"{t['key']}__result"].isin(["Pass", "Fail"]).any()]
+
+
+def _pick(df, mapping, hide_tests=()):
+    hidden = {f"{k}__{part}" for k in hide_tests for part in ("value", "result", "n")}
+    cols = [c for c in mapping if c in df.columns and c not in hidden]
     return df[cols].rename(columns=mapping)
 
 
@@ -187,6 +213,11 @@ def _summary_rows(as_of, accounts, events, cb, cb_stats, match_stats, rr_loaded,
              ("", ""), ("Test data coverage (event rows evaluated)", "")]
     for t in fr.RISK_TESTS:
         rows.append((f"  {t['name']}{'' if t['active'] else ' (inactive)'}", coverage.get(t["key"], 0)))
+    missing = [t for t in fr.RISK_TESTS if not coverage.get(t["key"])]
+    if missing:
+        rows += [("", ""), ("Tests with no data (columns hidden, score 0)", "Data needed")]
+        rows += [(f"  {t['name']}{'' if t['active'] else ' (inactive)'}",
+                  TEST_DATA_SOURCE.get(t["key"], "")) for t in missing]
     unknown = sorted(fr.UNRECOGNISED_COUNTRIES.items(), key=lambda kv: -kv[1])
     rows += [("", ""), ("Unrecognised country values (counted as foreign)",
                         ", ".join(f"{k} ({v})" for k, v in unknown[:15]) if unknown else "none")]
@@ -208,8 +239,8 @@ def build_workbook(as_of, accounts, events, cb, summary_df) -> bytes:
     cb_sorted = cb.sort_values(["DisputeDate"], ascending=False) if len(cb) else cb
     sheets = [
         ("Summary", summary_df),
-        ("Account Risk", _pick(accounts, ACCOUNT_COLUMNS)),
-        ("Event Risk", _pick(events, EVENT_COLUMNS)),
+        ("Account Risk", _pick(accounts, ACCOUNT_COLUMNS, _tests_without_data(accounts))),
+        ("Event Risk", _pick(events, EVENT_COLUMNS, _tests_without_data(events))),
         ("Chargebacks", _pick(cb_sorted, CHARGEBACK_COLUMNS)),
         ("Risk Tests", tests_df),
     ]
@@ -287,7 +318,8 @@ def _email_body(as_of, accounts, events, summary_df, filename, web_url=None, att
         f"<h3>Top 10 accounts</h3>{create_html_table(top_a.fillna(''), style=style)}"
         f"<h3>Top 10 events</h3>{create_html_table(top_e.fillna(''), style=style)}"
         f"<p>Risk Score (0-100) = risk tests (max 40) + chargebacks (max 40) + exposure "
-        f"(max 20). The Summary sheet shows data coverage; tests without data score 0.</p>"
+        f"(max 20). Tests without data score 0 and their columns are hidden; "
+        f"the Summary sheet lists them with the file each one needs.</p>"
     )
 
 

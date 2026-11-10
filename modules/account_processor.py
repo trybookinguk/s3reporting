@@ -12,7 +12,7 @@ from .utils.config import (
     EVENT_FREQ_CUTOFF_CURRENT, EVENT_FREQ_CUTOFF_PREVIOUS,
     MIN_REVENUE_FOR_RAPID_DROP
 )
-from .tier_calculator import determine_tier_from_percentiles, batch_determine_tiers
+from .tier_calculator_v2 import calculate_composite_tiers
 from .event_frequency import classify_event_frequency, get_months_active_fingerprint, format_months_active_for_zoho, batch_classify_frequencies
 from .retention_priority import calculate_revenue_drop_category, get_revenue_drop_score
 from .revenue_factor import get_revenue_factor, calculate_industry_quintiles
@@ -163,35 +163,36 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
     # Apply tier logic and other calculations
     logger.info(f"Assigning tiers and calculating new metrics for {len(metrics_df)} accounts")
     
-    # Use batch tier calculations for better logging
-    logger.debug("Calculating tiers...")
+    # Tier assignment — single source of truth is the v2 composite calculator
+    # (Tier 1..5 / Free / Nil, Tier 1 = best). The legacy v1 taxonomy
+    # (Key Account / High Value / Tier 4..1 / NIL, higher = better) has been
+    # retired: it shared the "Tier N" strings with v2 but with inverted meaning,
+    # which leaked mismatched labels into Zoho and the retention dashboard.
+    logger.debug("Calculating tiers (v2 composite)...")
     tier_start = time.time()
-    
-    # Prepare data for batch processing
-    current_tier_data = list(zip(
-        metrics_df['tickets_current_pct'],
-        metrics_df['revenue_current_pct'],
-        metrics_df['years_loyalty'],
-        metrics_df['lifetime_revenue_pct'],
-        metrics_df['avg_revenue_per_year_pct'],
-        metrics_df['has_activity']
-    ))
-    
-    previous_tier_data = list(zip(
-        metrics_df['tickets_prev_pct'],
-        metrics_df['revenue_prev_pct'],
-        metrics_df['years_loyalty_prev'],
-        metrics_df['lifetime_revenue_prev_pct'],
-        metrics_df['avg_revenue_prev_pct'],
-        metrics_df['tickets_prev'] >= MIN_TICKETS_FOR_ACTIVE
-    ))
-    
-    logger.info("Processing current period tiers...")
-    metrics_df['Current_Tier'] = batch_determine_tiers(current_tier_data)
-    
-    logger.info("Processing previous period tiers...")
-    metrics_df['Previous_Tier'] = batch_determine_tiers(previous_tier_data)
-    
+
+    v2_df = calculate_composite_tiers(account_metrics)
+    if v2_df.empty:
+        logger.warning("v2 composite calculator returned no rows; defaulting all tiers to Nil.")
+        metrics_df['Current_Tier'] = 'Nil'
+        metrics_df['Previous_Tier'] = 'Nil'
+        metrics_df['Tier_Movement'] = ''
+    else:
+        v2_by_id = v2_df.set_index(v2_df['AccountId'].astype('int64'))
+        key = pd.to_numeric(metrics_df['Account_Name'], errors='coerce').astype('Int64')
+        metrics_df['Current_Tier'] = key.map(v2_by_id['Current_Tier']).astype(object)
+        metrics_df['Previous_Tier'] = key.map(v2_by_id['Previous_Tier']).astype(object)
+        metrics_df['Tier_Movement'] = key.map(v2_by_id['Tier_Movement']).astype(object)
+
+    # Accounts the v2 calculator did not score (e.g. no current paid activity)
+    # fall to the v2 bottom label rather than an inverted v1 string. This keeps
+    # Current_Tier/Previous_Tier 100% v2 taxonomy for every account.
+    metrics_df['Current_Tier'] = metrics_df['Current_Tier'].fillna('Nil')
+    metrics_df['Previous_Tier'] = metrics_df['Previous_Tier'].fillna('Nil')
+    if 'Tier_Movement' not in metrics_df.columns:
+        metrics_df['Tier_Movement'] = ''
+    metrics_df['Tier_Movement'] = metrics_df['Tier_Movement'].fillna('')
+
     logger.info(f"Tier calculation completed in {time.time() - tier_start:.1f}s")
     
     logger.debug("Processing account names...")
@@ -869,6 +870,7 @@ def process_accounts(account_metrics, account_lookup=None, booking_data_df=None)
         'Account_Name': metrics_df['Account_Name_Clean'],
         'Current_Tier': metrics_df['Current_Tier'],
         'Previous_Tier': metrics_df['Previous_Tier'],
+        'Tier_Movement': metrics_df['Tier_Movement'],
         'Ticket_Quantity': metrics_df['tickets_current'].astype(int),
         'Last_Year_Ticket_Quantity': metrics_df['tickets_prev'].astype(int),
         'Years_Loyalty': metrics_df['years_loyalty'],

@@ -54,8 +54,9 @@ REPORTS_DIR=/data/reports
 SYNC_MANIFEST_DIR=/data/.sync_manifest
 DUCKDB_BIN=/usr/local/bin/duckdb
 CACHE_TRUST_TODAY=1
-TIER_SYSTEM=v1
 ```
+> `TIER_SYSTEM` has been retired — tiers are always the v2 composite taxonomy
+> (Tier 1..5 / Free / Nil). Setting the variable has no effect; omit it.
 ```bash
 sudo chmod 600 /volume1/docker/s3reporting/.env
 ```

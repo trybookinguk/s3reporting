@@ -84,7 +84,7 @@ _NAME_RE = re.compile(r"^(?P<period>\d{6}(?:\d{2})?)-(?P<report>.+?)(?:-TBUK)?\.
 # Preamble files: line 1 is gateway-batch metadata, real header on line 2.
 _PREAMBLE_MARKERS = ("first gateway id", "start booking transaction id")
 
-# How a column can feed the fraud risk report (modules/fraud_risk.py).
+# How a column can feed the fraud risk report (trybookinguk/RiskManagement fraud/risk.py).
 # Keyed on column name (case-insensitive); applies to whichever report has it.
 FRAUD_USE = {
     "ipcountry": "Booking Outside UK Test; Booking IP Location Test (vs booking address)",

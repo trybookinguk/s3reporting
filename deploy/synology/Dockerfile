@@ -25,9 +25,10 @@ RUN curl -fsSL -o /tmp/duckdb.zip \
 ENV DUCKDB_BIN=/usr/local/bin/duckdb
 
 # Python deps — same set the Pi uses, plus cryptography (backup) and weasyprint.
+# openpyxl: xlsx output for s3_inventory.py and RiskManagement's fraud report.
 RUN pip install --no-cache-dir \
         boto3 msal requests pandas pytz numpy scipy python-dateutil \
-        google-analytics-data matplotlib weasyprint cryptography
+        google-analytics-data matplotlib weasyprint cryptography openpyxl
 
 WORKDIR /app
 # The repo is bind-mounted at /app by docker-compose (so `git pull` on the NAS

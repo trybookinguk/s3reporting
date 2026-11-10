@@ -38,7 +38,7 @@ These are run manually when needed — typically from the Pi or a machine with c
 | `keyword_analysis_report.py` | Analysis of event types by keyword (balls, concerts, etc.) |
 | `s3_inventory.py` | Dumps every S3 bucket file, then each report's columns with file reference, schema-doc description, inferred type, fill rate and fraud-risk use, plus a sheet of the 20 most recent BookingDataAll transactions (`--latest-rows`); emails the xlsx + CSVs to henry@trybooking.co.uk |
 | `warehouse_backfill.py` | One-off: refills booking columns the warehouse stored wrongly (BookingUrlId) by streaming BookingDataAll + monthly BookingData from S3 |
-| `fraud_risk_report.py` | Fraud risk score per account and event (risk tests + PayPal/Stripe chargebacks + exposure), emailed as xlsx — see `docs/notion/fraud_risk_report.md` |
+| `fraud_risk_report.py` | **Moved to [trybookinguk/RiskManagement](https://github.com/trybookinguk/RiskManagement).** It still uses this repo's warehouse, email, SharePoint and S3 code, so keep both checked out on the Pi |
 
 ---
 

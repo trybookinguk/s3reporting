@@ -127,11 +127,12 @@ GA4_SERVICE_ACCOUNT_KEY=...   # service account JSON (single line, or a path the
 SHAREPOINT_DRIVE_ID=...
 ```
 
-`TIER_SYSTEM` selects the tier taxonomy sent to Zoho — `v1` (legacy Key Account /
-High Value / Tier 4..1 / NIL, the current production setting and code default) or
-`v2` (composite Tier 1..5 / Free / Nil). Keep `TIER_SYSTEM=v1` in `.env` until the
-cutover to v2 is signed off. `TEST_MODE` defaults to off; set `TEST_MODE=true` for
-a manual preview run.
+The legacy **v1** tier taxonomy (Key Account / High Value / Tier 4..1 / NIL) has
+been **retired**. Tiers are now always the **v2** composite scheme
+(Tier 1..5 / Free / Nil, Tier 1 = best), with a `Tier_Movement` field, produced in
+`process_accounts` and sent straight to Zoho. The `TIER_SYSTEM` env var is no longer
+read — you can delete it from the Pi `.env`; leaving it set has no effect.
+`TEST_MODE` defaults to off; set `TEST_MODE=true` for a manual preview run.
 
 > `GA4_SERVICE_ACCOUNT_KEY` is read the same way it was on Actions. If the
 > existing Actions secret held the JSON inline, keep that format in `.env`.

@@ -44,7 +44,7 @@ from dateutil.relativedelta import relativedelta
 import calendar
 
 # Import shared modules
-from modules.utils.config import UK_TZ, MIN_TICKETS_FOR_ACTIVE, TIER_PERCENTILES
+from modules.utils.config import UK_TZ, MIN_TICKETS_FOR_ACTIVE
 from modules.utils.data_loader import (
     get_loader, load_accounts, load_booking_data,
     filter_successful_transactions

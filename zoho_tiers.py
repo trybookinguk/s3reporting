@@ -37,48 +37,11 @@ from modules.utils.sharepoint import authenticate_graph
 SHAREPOINT_DRIVE_ID = os.environ.get("SHAREPOINT_DRIVE_ID")
 ZOHO_ORG_ID = os.environ.get("ZOHO_ORG_ID")
 
-# Tier system feature flag. v1 keeps the legacy taxonomy
-# (Key Account / High Value / Tier 4..1 / NIL) produced by process_accounts.
-# v2 swaps Current_Tier/Previous_Tier for the composite calculator's
-# Tier 1..5 / Free / Nil labels and adds Tier_Movement to the upsert payload.
-# All other fields (Rating, Event_Frequency_*, Retention_Priority, …) are
-# unchanged regardless of the flag.
-TIER_SYSTEM = os.environ.get("TIER_SYSTEM", "v1").lower()
-
-
-def _apply_v2_tiers(updates: pd.DataFrame, account_metrics: dict) -> pd.DataFrame:
-    """Overlay v2 composite tiers + Tier_Movement onto the v1 updates frame.
-
-    Joins by Account_Name (which process_accounts sets to the AccountId as a
-    string). Accounts present in the v1 frame but missing from v2 keep their
-    v1 tier values and get an empty Tier_Movement — better than dropping them
-    from the Zoho upsert.
-    """
-    v2_df = calculate_composite_tiers(account_metrics)
-    if v2_df.empty:
-        logger.warning("v2 calculator returned empty result — falling back to v1 tiers.")
-        updates['Tier_Movement'] = ''
-        return updates
-
-    v2_lookup = v2_df.assign(_aid_str=v2_df['AccountId'].astype(int).astype(str))
-    v2_lookup = v2_lookup.set_index('_aid_str')[['Current_Tier', 'Previous_Tier', 'Tier_Movement']]
-
-    aid_str = updates['Account_Name'].astype(str)
-    matched = v2_lookup.reindex(aid_str)
-    matched.index = updates.index
-
-    updates = updates.copy()
-    # Only overwrite where v2 produced a value; preserve v1 otherwise so
-    # accounts the v2 calculator skipped (e.g. zero lifetime tickets) still
-    # get upserted with whatever v1 decided.
-    has_v2 = matched['Current_Tier'].notna()
-    updates.loc[has_v2, 'Current_Tier'] = matched.loc[has_v2, 'Current_Tier']
-    updates.loc[has_v2, 'Previous_Tier'] = matched.loc[has_v2, 'Previous_Tier']
-    updates['Tier_Movement'] = matched['Tier_Movement'].fillna('')
-
-    logger.info("Applied v2 tiers to %d of %d accounts (rest kept v1 fallback).",
-                int(has_v2.sum()), len(updates))
-    return updates
+# The v1 tier taxonomy (Key Account / High Value / Tier 4..1 / NIL) has been
+# retired. process_accounts now emits the v2 composite taxonomy
+# (Tier 1..5 / Free / Nil, Tier 1 = best) plus Tier_Movement directly, so there
+# is no feature flag and no post-hoc overlay — Current_Tier/Previous_Tier are
+# already v2 by the time they reach this module. (TIER_SYSTEM is ignored if set.)
 
 
 def _build_revenue_ranks(v2_df):
@@ -584,16 +547,12 @@ def main(dry_run: bool = False, use_combined: bool = False):
     logger.info("Starting main account processing")
     updates = process_accounts(account_metrics, account_lookup, booking_data_df)
 
-    # Feature-flagged tier system. v1 keeps process_accounts' tier output as-is
-    # and sends no Tier_Movement to Zoho. v2 overlays the composite calculator's
-    # Tier 1..5/Free/Nil labels plus a Tier_Movement column. Non-tier fields
-    # (Rating, Event_Frequency_*, Retention_Priority, …) come from v1 either way.
-    if TIER_SYSTEM == "v2":
-        logger.info("TIER_SYSTEM=v2 — overlaying composite tiers + Tier_Movement")
-        print("\n[TIER_SYSTEM=v2] Overlaying composite tiers + Tier_Movement onto Zoho payload")
-        updates = _apply_v2_tiers(updates, account_metrics)
-    else:
-        logger.info("TIER_SYSTEM=v1 — sending legacy tier taxonomy to Zoho")
+    # process_accounts already produced the v2 composite taxonomy
+    # (Tier 1..5 / Free / Nil) plus a Tier_Movement column for every account, so
+    # there is nothing to overlay here — Current_Tier/Previous_Tier/Tier_Movement
+    # are sent to Zoho as-is.
+    logger.info("Tier taxonomy: v2 composite (Tier 1..5 / Free / Nil) + Tier_Movement")
+    print("\n[Tiers] v2 composite taxonomy (Tier 1..5 / Free / Nil) + Tier_Movement")
 
     # Save results to CSV for audit. Reports land in REPORTS_DIR (./reports by
     # default, /root/reporting/reports on the Pi) — this replaces the GitHub
@@ -629,7 +588,7 @@ def main(dry_run: bool = False, use_combined: bool = False):
     # Summary statistics
     tier_counts = updates['Current_Tier'].value_counts()
     print("\nTier Distribution:")
-    for tier in ['Key Account', 'High Value', 'Tier 4', 'Tier 3', 'Tier 2', 'Tier 1', 'NIL']:
+    for tier in ['Tier 1', 'Tier 2', 'Tier 3', 'Tier 4', 'Tier 5', 'Free', 'Nil']:
         count = tier_counts.get(tier, 0)
         pct = (count / len(updates) * 100) if len(updates) > 0 else 0
         print(f"  {tier}: {count:,} ({pct:.1f}%)")
@@ -662,8 +621,8 @@ def main(dry_run: bool = False, use_combined: bool = False):
     print(f"Annual accounts (current): {annual_count}")
     print(f"Annual accounts (previous): {annual_prev_count}")
     
-    # Show tier filter impact
-    tier_3_plus = ['Key Account', 'High Value', 'Tier 4', 'Tier 3']
+    # Show tier filter impact (v2: Tier 3+ = the top-25% bands Tier 1/2/3)
+    tier_3_plus = ['Tier 1', 'Tier 2', 'Tier 3']
     annual_tier_3_plus = len(updates[
         ((updates['Event_Frequency_Current'] == 'Annual') | 
          (updates['Event_Frequency_Previous'] == 'Annual')) &

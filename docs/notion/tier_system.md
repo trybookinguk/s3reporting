@@ -16,19 +16,28 @@ retention priorities and tier‑movement alerts, and writes them back to Zoho CR
 
 **Two tier systems run side by side — this is the most important point.**
 
-- **v1 (legacy):** Key Account, High Value, then Tier 4 → Tier 1, then NIL.
-  *Higher is better.* An account can qualify on tickets, on current revenue, or
-  on long‑term loyalty + lifetime revenue, and keeps whichever tier is best.
-- **v2 (composite):** Tier 1 → Tier 5, plus Free and Nil. *Tier 1 is best — the
-  reverse of v1.* One weighted score: 55% current revenue, 35% lifetime revenue,
-  10% loyalty. Tier 1 = top 2%, Tier 2 = top 10%, and so on.
+- **v2 (composite) — the only system now:** Tier 1 → Tier 5, plus Free and Nil.
+  *Tier 1 is best.* One weighted score: 55% current revenue, 35% lifetime revenue,
+  10% loyalty. Tier 1 = top 2%, Tier 2 = top 10%, and so on. Accounts with no
+  current paid activity fall to **Nil**.
+- **v1 (legacy) — retired.** The old taxonomy (Key Account, High Value, Tier 4 →
+  Tier 1, NIL; *higher was better*) has been removed from the code. It shared the
+  "Tier N" strings with v2 but with **inverted** meaning, which is what caused the
+  Haslingden / Helen Samuels / Reading School inconsistencies (a v1 "Tier 1" —
+  the *lowest* tier — leaking into a column everyone now reads as v2, where Tier 1
+  is the *best*).
 
-`TIER_SYSTEM` controls which version is written to **Zoho**, but the
-**movement emails always use v2**. So while Zoho shows v1, a "Tier 1" alert to
-Joan/Kathryn means a *top‑2% v2* account, yet the same account in Zoho reads
-"Tier 1" which in v1 is the *lowest* qualifying tier — opposite meanings, a real
-chance of confusion until one system is retired. **Aligning Zoho to v2
-(`TIER_SYSTEM=v2`) removes this mismatch; the long‑term fix is retiring v1.**
+Tiers are now produced once, in `process_accounts`, as v2 and sent straight to
+Zoho alongside `Tier_Movement`. The **movement emails already used v2**, so Zoho
+and the alerts finally agree. The `TIER_SYSTEM` env var is no longer read and can
+be deleted from `.env`.
+
+> **One‑time cutover note.** The first v2 run overwrites each account's Zoho
+> `Current_Tier` with a v2 label. Until an account has been written **twice**, its
+> `Previous_Tier` (and any history field) may still hold the old v1 string, so a
+> bare number comparison like "4 → 3" is cross‑taxonomy and not real movement.
+> Trust the `Tier_Movement` field / movement email (both pure v2), not the raw
+> number delta, during the first cycle.
 
 **Other things worth knowing:**
 
@@ -97,14 +106,14 @@ current‑month file isn't finalised yet).
 
 ## 3. Tier models
 
-Two taxonomies coexist; `TIER_SYSTEM` (env, default `v1`) selects which drives
-`Current_Tier`/`Previous_Tier`.
+One taxonomy drives `Current_Tier`/`Previous_Tier`: **v2 (composite)**. The
+`TIER_SYSTEM` env var is no longer read.
 
-### v1 (legacy) — higher is better
-Labels: **Key Account, High Value, Tier 4, Tier 3, Tier 2, Tier 1, NIL**.
-Percentile cut‑points (`TIER_PERCENTILES`): Key Account ≥99, High Value ≥95,
-Tier 4 ≥75, Tier 3 ≥50, Tier 2 ≥25; qualified but below Tier 2 → `Tier 1`; no
-current activity → `NIL`.
+### v1 (legacy) — retired
+The old taxonomy (**Key Account, High Value, Tier 4…Tier 1, NIL**; *higher was
+better*) and its calculator (`tier_calculator.py`, `TIER_PERCENTILES`,
+`MIN_YEARS_BY_TIER`) have been removed. It is documented here only so historical
+Zoho/snapshot values with those labels are still interpretable.
 
 ### v2 (composite) — Tier 1 is best
 Labels: **Tier 1…Tier 5**, plus off‑scale **Free** and **Nil**.
@@ -140,23 +149,7 @@ booking).
 
 ## 5. Tier calculation
 
-### v1 — `determine_tier_from_percentiles(a_pct, b_pct, c_years, d_pct, e_pct, has_activity)`
-Per‑account inputs (`account_processor.py`): a = current tickets pct, b = current
-revenue pct, c = `years_loyalty` (raw), d = lifetime revenue pct, e = avg
-revenue/year pct, `has_activity` = current tickets ≥ 10. Percentiles are computed
-over accounts with the metric > 0.
-
-Logic: no activity → `NIL`. Otherwise three independent paths, keep the best tier
-reached:
-1. Tickets percentile alone vs `TIER_PERCENTILES`.
-2. Current revenue percentile alone.
-3. Loyalty + lifetime + avg: requires `years_loyalty ≥ MIN_YEARS_BY_TIER[tier]`
-   **and** both lifetime and avg‑revenue percentiles ≥ the tier cut.
-Qualified but sub‑threshold defaults to `Tier 1`. `MIN_YEARS_BY_TIER`: Key 8,
-High 7, T4 5, T3 3, T2 2, T1 1. `Current_Tier` and `Previous_Tier` come from two
-calls (current vs previous windows).
-
-### v2 — `calculate_composite_tiers(account_metrics, vat_rate=1.20)`
+### v2 — `calculate_composite_tiers(account_metrics, vat_rate=1.20)` (the only path)
 A single weighted composite, ranked **only among paid‑activated accounts**
 (≥10 tickets AND revenue>0):
 
@@ -171,14 +164,15 @@ percentile rank: Tier 1 ≤2%, Tier 2 ≤10%, Tier 3 ≤25%, Tier 4 ≤50%, Tier
 v2 also emits `Tier_Movement` (Improved 2+/1, No Change, Dropped 1/2+) and
 composite diagnostics.
 
-### How `TIER_SYSTEM` picks the path
-- `v1` (default): `process_accounts`' tiers are kept as‑is; **no** `Tier_Movement`.
-- `v2`: `_apply_v2_tiers` overlays **only** `Current_Tier`/`Previous_Tier`/
-  `Tier_Movement` where v2 produced a value (v1 is the fallback for skipped
-  accounts). All non‑tier fields (Rating, Event_Frequency_*, Retention_Priority…)
-  always come from v1.
-- The snapshot/movement‑email pipeline (§7) **always** runs v2, regardless of the
-  flag.
+### Where tiers come from (post‑v1‑retirement)
+- `process_accounts` calls `calculate_composite_tiers` once and sets
+  `Current_Tier`/`Previous_Tier`/`Tier_Movement` from it, keyed by AccountId.
+  Accounts the v2 calculator doesn't score (no current paid activity, or zero
+  lifetime tickets) fall to **`Nil`** — no v1 label is ever produced, so the Zoho
+  column is 100% v2 taxonomy.
+- Non‑tier fields (Rating, Event_Frequency_*, Retention_Priority…) are unchanged;
+  `retention_priority.py` already weights the v2 labels (Tier 1 = strongest).
+- The snapshot/movement‑email pipeline (§7) also runs v2, as before.
 
 ---
 
@@ -296,9 +290,8 @@ email; `TEST_MODE` alone still writes state (it only redirects email).
 | Constant | Value |
 |---|---|
 | `S3_BUCKET` | `produk-rdsextracts-438255373632` |
-| `TIER_SYSTEM` (env) | default `v1` (current production); Pi `.env` sets `v1` |
-| `TIER_PERCENTILES` (v1) | Key 99, High 95, T4 75, T3 50, T2 25 |
-| `MIN_YEARS_BY_TIER` | Key 8, High 7, T4 5, T3 3, T2 2, T1 1 |
+| `TIER_SYSTEM` (env) | **retired** — no longer read; tiers are always v2 |
+| `TIER_BANDS` (v2, `tier_calculator_v2.py`) | Tier 1 ≤2%, Tier 2 ≤10%, Tier 3 ≤25%, Tier 4 ≤50%, Tier 5 ≤100% |
 | `MIN_TICKETS_FOR_ACTIVE` | 10 |
 | `YEARS_LOYALTY_CAP` | 5 |
 | v2 weights / VAT / bands | 0.55 / 0.35 / 0.10; VAT 1.20; bands 2/10/25/50/100 % |

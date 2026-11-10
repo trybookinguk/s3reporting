@@ -68,24 +68,10 @@ EVENT_FREQ_CUTOFF_CURRENT = TODAY.replace(day=1) - timedelta(days=365)
 EVENT_FREQ_CUTOFF_PREVIOUS = EVENT_FREQ_CUTOFF_CURRENT - timedelta(days=365)
 
 # === TIER THRESHOLDS ===
-# Percentile thresholds for tier classification
-TIER_PERCENTILES = {
-    "Key Account": 99,  # Top 1%
-    "High Value": 95,  # Top 5%
-    "Tier 4": 75,  # Top 25%
-    "Tier 3": 50,  # Top 50%
-    "Tier 2": 25,  # Top 75%
-}
-
-# Minimum years loyalty for C+D+E path
-MIN_YEARS_BY_TIER = {
-    "Key Account": 8,
-    "High Value": 7,
-    "Tier 4": 5,
-    "Tier 3": 3,
-    "Tier 2": 2,
-    "Tier 1": 1,
-}
+# The legacy v1 tier thresholds (TIER_PERCENTILES / MIN_YEARS_BY_TIER) have been
+# removed along with the v1 calculator. Tiers are now assigned solely by the v2
+# composite calculator (modules/tier_calculator_v2.py: TIER_BANDS). The v2
+# activation knobs MIN_TICKETS_FOR_ACTIVE and YEARS_LOYALTY_CAP are defined below.
 
 # === ACTIVITY THRESHOLDS ===
 MIN_TICKETS_FOR_ACTIVE = 10  # Minimum tickets to be considered active

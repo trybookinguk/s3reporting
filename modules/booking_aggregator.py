@@ -53,6 +53,12 @@ class BookingAggregator:
         self._revenue_current: Dict[Any, float] = {}
         self._tickets_prev: Dict[Any, float] = {}
         self._revenue_prev: Dict[Any, float] = {}
+        # Gross (positive-only) ticket counts per period. Refunds carry negative
+        # TicketQuantity, so the net sums above can go to zero or negative in a
+        # refund-heavy window; these gross sums measure genuine trading activity
+        # and are what the v2 activation qualifier uses (value scoring stays net).
+        self._tickets_current_gross: Dict[Any, float] = {}
+        self._tickets_prev_gross: Dict[Any, float] = {}
         # Date min/max: dict[AccountId] -> Timestamp
         self._first_booking: Dict[Any, Any] = {}
         self._last_booking: Dict[Any, Any] = {}
@@ -141,12 +147,21 @@ class BookingAggregator:
             cg = cur_rows.groupby('AccountId')
             self._add_sums(self._tickets_current, cg['TicketQuantity'].sum())
             self._add_sums(self._revenue_current, cg['Revenue'].sum())
+            # Gross: positive ticket lines only (refunds excluded).
+            cur_pos = cur_rows[cur_rows['TicketQuantity'] > 0]
+            if not cur_pos.empty:
+                self._add_sums(self._tickets_current_gross,
+                               cur_pos.groupby('AccountId')['TicketQuantity'].sum())
 
         prev_rows = chunk[chunk['is_previous']]
         if not prev_rows.empty:
             pg = prev_rows.groupby('AccountId')
             self._add_sums(self._tickets_prev, pg['TicketQuantity'].sum())
             self._add_sums(self._revenue_prev, pg['Revenue'].sum())
+            prev_pos = prev_rows[prev_rows['TicketQuantity'] > 0]
+            if not prev_pos.empty:
+                self._add_sums(self._tickets_prev_gross,
+                               prev_pos.groupby('AccountId')['TicketQuantity'].sum())
 
     def _accumulate_events(self, chunk: pd.DataFrame) -> None:
         """Fold the four event-month sets and event_creation_info per account.
@@ -267,10 +282,12 @@ class BookingAggregator:
         current_agg = pd.DataFrame({
             'tickets_current': pd.Series(self._tickets_current).round(2),
             'revenue_current': pd.Series(self._revenue_current).round(2),
+            'tickets_current_gross': pd.Series(self._tickets_current_gross).round(2),
         })
         previous_agg = pd.DataFrame({
             'tickets_prev': pd.Series(self._tickets_prev).round(2),
             'revenue_prev': pd.Series(self._revenue_prev).round(2),
+            'tickets_prev_gross': pd.Series(self._tickets_prev_gross).round(2),
         })
         years_prev_agg = pd.DataFrame({
             'years_loyalty_prev': pd.Series(
@@ -298,6 +315,7 @@ class BookingAggregator:
             'tickets_lifetime': 0, 'revenue_lifetime': 0.0, 'years_loyalty': 0,
             'tickets_current': 0, 'revenue_current': 0.0,
             'tickets_prev': 0, 'revenue_prev': 0.0,
+            'tickets_current_gross': 0, 'tickets_prev_gross': 0,
             'years_loyalty_prev': 0,
         }
         for col, default in numeric_defaults.items():
@@ -328,7 +346,8 @@ class BookingAggregator:
         # int — the original code forced these casts per row, so we do the
         # same once across the column.
         for int_col in ('tickets_lifetime', 'years_loyalty', 'tickets_current',
-                        'tickets_prev', 'years_loyalty_prev'):
+                        'tickets_prev', 'tickets_current_gross',
+                        'tickets_prev_gross', 'years_loyalty_prev'):
             if int_col in combined.columns:
                 combined[int_col] = combined[int_col].astype(int)
         for float_col in ('revenue_lifetime', 'revenue_current', 'revenue_prev'):

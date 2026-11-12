@@ -75,6 +75,7 @@ def _build_metrics_df(account_metrics: Dict[int, Dict[str, Any]],
     expected_cols = [
         'revenue_lifetime', 'revenue_current', 'revenue_prev',
         'tickets_lifetime', 'tickets_current', 'tickets_prev',
+        'tickets_current_gross', 'tickets_prev_gross',
         'years_loyalty', 'years_loyalty_prev',
     ]
     raw = raw.reindex(columns=expected_cols).fillna(0)
@@ -88,6 +89,14 @@ def _build_metrics_df(account_metrics: Dict[int, Dict[str, Any]],
     tickets_current = pd.to_numeric(raw['tickets_current'], errors='coerce').fillna(0).astype(int)
     tickets_prev = pd.to_numeric(raw['tickets_prev'], errors='coerce').fillna(0).astype(int)
     tickets_lifetime = pd.to_numeric(raw['tickets_lifetime'], errors='coerce').fillna(0).astype(int)
+    # Gross (positive-only) ticket counts — used for the activation qualifier so
+    # a refund-heavy window (net tickets ≤ 0) doesn't knock an actively-trading
+    # account out to Nil. Fall back to the net count when the aggregator didn't
+    # supply a gross column (older cached metrics).
+    tickets_current_gross = pd.to_numeric(raw['tickets_current_gross'], errors='coerce').fillna(0).astype(int)
+    tickets_prev_gross = pd.to_numeric(raw['tickets_prev_gross'], errors='coerce').fillna(0).astype(int)
+    tickets_current_gross = tickets_current_gross.where(tickets_current_gross > 0, tickets_current.clip(lower=0))
+    tickets_prev_gross = tickets_prev_gross.where(tickets_prev_gross > 0, tickets_prev.clip(lower=0))
 
     # Cap years_loyalty so tenure beyond YEARS_LOYALTY_CAP doesn't keep
     # stacking. Accounts at or above the cap tie at the top of the loyalty
@@ -106,10 +115,12 @@ def _build_metrics_df(account_metrics: Dict[int, Dict[str, Any]],
         'revenue_current': (revenue_current / vat_rate).clip(lower=0.0),
         'revenue_lifetime': (revenue_lifetime / vat_rate).clip(lower=0.0),
         'tickets_current': tickets_current.clip(lower=0),
+        'tickets_current_gross': tickets_current_gross,
         'years_loyalty': years_loyalty,
         'revenue_prev': (revenue_prev / vat_rate).clip(lower=0.0),
         'revenue_lifetime_prev': (revenue_lifetime_prev / vat_rate).clip(lower=0.0),
         'tickets_prev': tickets_prev.clip(lower=0),
+        'tickets_prev_gross': tickets_prev_gross,
         'years_loyalty_prev': years_loyalty_prev,
         'tickets_lifetime': tickets_lifetime.clip(lower=0),
     }).reset_index(drop=True)
@@ -249,7 +260,10 @@ def calculate_composite_tiers(account_metrics: Dict[int, Dict[str, Any]],
         return pd.DataFrame()
 
     # --- Determine activation masks (tickets as qualifier only) ---
-    current_activated = df['tickets_current'] >= MIN_TICKETS_FOR_ACTIVE
+    # Use GROSS tickets so refunds can't knock an actively-trading account out to
+    # Nil (e.g. a large cancelled event netting current tickets ≤ 0). Value
+    # scoring below still uses net revenue.
+    current_activated = df['tickets_current_gross'] >= MIN_TICKETS_FOR_ACTIVE
     current_has_revenue = df['revenue_current'] > 0
     # Paid activated: enough tickets AND has revenue — these get scored/tiered
     current_paid_activated = current_activated & current_has_revenue
@@ -268,7 +282,7 @@ def calculate_composite_tiers(account_metrics: Dict[int, Dict[str, Any]],
         'years_loyalty_prev': 'years_loyalty_prev',  # already correct
     }, inplace=True)
 
-    previous_activated = df['tickets_current_prev'] >= MIN_TICKETS_FOR_ACTIVE
+    previous_activated = df['tickets_prev_gross'] >= MIN_TICKETS_FOR_ACTIVE
     previous_has_revenue = df['revenue_lifetime_prev'] > 0
     previous_paid_activated = previous_activated & previous_has_revenue
     previous_free = previous_activated & ~previous_has_revenue

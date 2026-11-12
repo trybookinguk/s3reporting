@@ -151,7 +151,17 @@ booking).
 
 ### v2 — `calculate_composite_tiers(account_metrics, vat_rate=1.20)` (the only path)
 A single weighted composite, ranked **only among paid‑activated accounts**
-(≥10 tickets AND revenue>0):
+(≥10 **gross** tickets AND revenue>0):
+
+> **Gross vs net tickets.** Activation uses *gross* tickets (positive
+> `TicketQuantity` only; `tickets_current_gross` from the aggregator), not the net
+> count. Refunds carry negative `TicketQuantity`, so a large cancelled event can
+> net a window's tickets to ≤ 0 and wrongly drop an actively‑trading account to
+> `Nil` — e.g. Hereford Cathedral School (sold ~3,000 then refunded ~3,033 →
+> net −37) fell Tier 2 → Nil until this was fixed. Value *scoring* still uses net
+> revenue, so a refunded event is correctly worth little. If a cached metrics
+> dict predates the gross columns, the calculator falls back to the net count.
+
 
 ```
 composite = 0.55·revenue_current_pct + 0.35·revenue_lifetime_pct + 0.10·years_loyalty_pct

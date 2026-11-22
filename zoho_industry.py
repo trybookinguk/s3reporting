@@ -32,6 +32,13 @@ logger = logging.getLogger(__name__)
 ACCOUNTS_FILE_MAX_AGE_HOURS = float(os.environ.get("ACCOUNTS_FILE_MAX_AGE_HOURS", "24"))
 ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "henry@trybooking.co.uk")
 
+# Distinct exit code for the stale-upstream-source case, so monitoring can tell
+# "the S3 Accounts export is stale" apart from a genuine job/Zoho crash (which
+# exits 1 on an uncaught error). 75 = EX_TEMPFAIL (sysexits.h): a transient
+# upstream failure that should clear on its own. The job itself still ran and
+# synced the data it had.
+STALE_SOURCE_EXIT_CODE = 75
+
 
 def resolve_accounts_s3_key():
     """Resolve the S3 key for the Accounts CSV the job reads (yesterday's month)."""
@@ -270,11 +277,12 @@ def main():
         success = [r for r in result if r.get("status") == "success"]
         print(f"Successfully synced: {len(success)} of {len(upserts)}")
 
-    # Exit non-zero on a stale source so the cron wrapper / monitoring flags it
-    # loudly instead of the failure being silent.
+    # Exit with the distinct stale-source code so the cron wrapper / monitoring
+    # flags it loudly, but as an upstream-source problem rather than a job crash.
     if freshness["stale"]:
-        print("Exiting non-zero: Accounts export was stale this run.")
-        sys.exit(1)
+        print(f"Exiting {STALE_SOURCE_EXIT_CODE} (stale source): the S3 Accounts "
+              f"export is stale — the sync ran, but the upstream file needs refreshing.")
+        sys.exit(STALE_SOURCE_EXIT_CODE)
 
 if __name__ == "__main__":
     main()

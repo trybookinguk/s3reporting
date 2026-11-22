@@ -122,6 +122,11 @@ def check_job(job, logname, max_age_h, weekday_only=False):
     age_h = (( _now() - fin_ts).total_seconds() / 3600) if fin_ts else None
     age_str = f"{age_h:.1f}h ago" if age_h is not None else "unknown time"
 
+    # Exit 75 (EX_TEMPFAIL) is the distinct "upstream source stale" signal from
+    # zoho_industry — the job ran and synced fine, but its S3 source file is
+    # stale. Flag it clearly as an upstream problem, not a job/Zoho crash.
+    if exit_code == 75:
+        return FAIL, f"upstream source stale — the sync ran OK but the S3 export needs refreshing (exit 75, {age_str})"
     if exit_code not in (0, None):
         return FAIL, f"last run exit {exit_code} ({age_str})"
     if errs:

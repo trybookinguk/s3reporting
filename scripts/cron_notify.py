@@ -42,10 +42,21 @@ def main():
     host = socket.gethostname()
     when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    subject = f"[cron-fail] {args.job} on {host} (exit {args.exit_code})"
+    # Exit 75 (EX_TEMPFAIL) is the distinct "upstream source stale" signal, not a
+    # crash — the job ran and synced, but its S3 source file needs refreshing.
+    is_stale = args.exit_code == 75
+    subject = (f"[cron-stale] {args.job} on {host} — upstream source stale (exit 75)"
+               if is_stale
+               else f"[cron-fail] {args.job} on {host} (exit {args.exit_code})")
+
+    lead = ("<p>A scheduled job reported its <b>upstream data source is stale</b> "
+            "(exit 75). The job itself ran and synced the data it had — this is an "
+            "upstream-export problem to refresh, not a job or Zoho crash.</p>"
+            if is_stale
+            else "<p>A scheduled job exited with a non-zero status.</p>")
 
     html_body = f"""
-    <p>A scheduled job exited with a non-zero status.</p>
+    {lead}
     <table style="border-collapse: collapse;">
       <tr><td><b>Job</b></td><td>{html.escape(args.job)}</td></tr>
       <tr><td><b>Host</b></td><td>{html.escape(host)}</td></tr>

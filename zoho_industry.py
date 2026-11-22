@@ -35,7 +35,7 @@ ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "henry@trybooking.co.uk")
 
 def resolve_accounts_s3_key():
     """Resolve the S3 key for the Accounts CSV the job reads (yesterday's month)."""
-    report_date = pd.Timestamp.utcnow().normalize() - pd.Timedelta(days=1)
+    report_date = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize() - pd.Timedelta(days=1)
     # Fallback if first day of month: use previous month
     if report_date.day == 1:
         report_date -= MonthBegin(1)
@@ -245,9 +245,13 @@ def main():
 
     zoho_accounts = fetch_zoho_accounts(token)
 
-    # Handle deleted accounts using the dedicated module
+    # Handle deleted accounts using the dedicated module. Pass the set of
+    # Account_Names already in Zoho so we only attempt to delete accounts that
+    # actually exist there (the deleted set accumulates ~1000 historically-
+    # deleted accounts, almost all long gone from Zoho — re-searching them each
+    # night wastes Zoho API credits).
     deleted_account_ids, deletion_results = process_deleted_accounts(
-        s3_df, token, delete_from_zoho
+        s3_df, token, delete_from_zoho, existing_zoho_ids=set(zoho_accounts.keys())
     )
 
     # Remove deleted accounts from the dataframe so they won't be upserted

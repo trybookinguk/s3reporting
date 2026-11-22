@@ -80,36 +80,60 @@ def filter_deleted_accounts(df: pd.DataFrame, deleted_account_ids: List[str],
     return filtered_df
 
 
-def process_deleted_accounts(account_df: pd.DataFrame, 
+def process_deleted_accounts(account_df: pd.DataFrame,
                            token: str,
-                           delete_from_zoho_func: callable) -> Tuple[List[str], Optional[dict]]:
+                           delete_from_zoho_func: callable,
+                           existing_zoho_ids: Optional[set] = None) -> Tuple[List[str], Optional[dict]]:
     """
     Process deleted accounts: identify them and optionally delete from Zoho.
-    
+
     Args:
         account_df: DataFrame containing account data
         token: Zoho API token (if None, only identifies but doesn't delete)
         delete_from_zoho_func: Function to call for Zoho deletion
-    
+        existing_zoho_ids: Optional set of Account_Name values (AccountIds as
+            strings) known to exist in Zoho. When provided, only deleted
+            accounts that are actually present in Zoho are sent for deletion,
+            avoiding a wasted search+delete API round-trip (and the resulting
+            "Account not found" noise) for accounts already gone. Pass the keys
+            of the fetched Zoho account map. When None, every deleted account is
+            attempted (legacy behaviour).
+
     Returns:
         Tuple of (deleted_account_ids, deletion_results)
-        deletion_results will be None if no token provided
+        deleted_account_ids is always the FULL list of deleted IDs (so callers
+        can still exclude them from upserts); deletion_results covers only the
+        accounts actually attempted. deletion_results is None if no token.
     """
-    # Identify deleted accounts
+    # Identify deleted accounts (full list — used by callers to filter upserts)
     deleted_account_ids = identify_deleted_accounts(account_df)
-    
+
     if not deleted_account_ids:
         return [], None
-    
+
     print(f"\nFound {len(deleted_account_ids)} deleted accounts")
-    
+
+    # Only attempt to delete accounts that actually exist in Zoho. The deleted
+    # set accumulates every account ever marked deleted, but most are long gone
+    # from Zoho — re-searching them nightly burns Zoho API credits for nothing.
+    if existing_zoho_ids is not None:
+        to_delete = [aid for aid in deleted_account_ids if str(aid) in existing_zoho_ids]
+        skipped = len(deleted_account_ids) - len(to_delete)
+        if skipped:
+            print(f"Skipping {skipped} deleted accounts not present in Zoho "
+                  f"(nothing to delete); {len(to_delete)} present and will be deleted.")
+            logger.info("Delete: %d of %d deleted accounts present in Zoho; skipping %d absent.",
+                        len(to_delete), len(deleted_account_ids), skipped)
+    else:
+        to_delete = deleted_account_ids
+
     # Delete from Zoho if token provided
     deletion_results = None
-    if token and delete_from_zoho_func:
+    if token and delete_from_zoho_func and to_delete:
         try:
-            print(f"Deleting {len(deleted_account_ids)} accounts from Zoho...")
-            deletion_results = delete_from_zoho_func(token, deleted_account_ids)
-            
+            print(f"Deleting {len(to_delete)} accounts from Zoho...")
+            deletion_results = delete_from_zoho_func(token, to_delete)
+
             if deletion_results:
                 print(f"Successfully deleted: {deletion_results.get('successful', 0)} accounts")
                 if deletion_results.get('failed', 0) > 0:
@@ -117,7 +141,9 @@ def process_deleted_accounts(account_df: pd.DataFrame,
         except Exception as e:
             logger.error(f"Failed to delete accounts from Zoho: {str(e)}")
             print(f"ERROR: Failed to delete accounts from Zoho: {str(e)}")
-    
+    elif token and delete_from_zoho_func:
+        print("No deleted accounts present in Zoho — nothing to delete.")
+
     return deleted_account_ids, deletion_results
 
 

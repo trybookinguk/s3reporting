@@ -4,6 +4,7 @@
 #   /volume1/docker/s3reporting          <- this repo (git clone), bind-mounted at /app
 #   /volume1/docker/s3reporting-data     <- persistent cache/warehouse/reports, at /data
 #   /volume1/docker/s3reporting/.env     <- secrets (chmod 600), sets /data paths
+#   /volume1/docker/RiskManagement       <- trybookinguk/RiskManagement (fraud risk tool), at /risk
 #
 # The container stays up (sleep infinity); the daily jobs are triggered by DSM
 # Task Scheduler via `docker exec` (see deploy/synology/README.md).
@@ -20,4 +21,5 @@ services:
     volumes:
       - /volume1/docker/s3reporting:/app          # the repo (git-tracked code)
       - /volume1/docker/s3reporting-data:/data     # persistent cache + warehouses + reports
+      - /volume1/docker/RiskManagement:/risk       # fraud risk tool; imports /app's modules
     working_dir: /app
